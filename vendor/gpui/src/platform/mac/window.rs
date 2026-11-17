@@ -161,6 +161,16 @@ unsafe fn build_classes() {
                     sel!(mouseDragged:),
                     handle_view_event as extern "C" fn(&Object, Sel, id),
                 );
+                // the middle and right buttons' drags (the events map them;
+                // without these selectors AppKit never delivers them)
+                decl.add_method(
+                    sel!(rightMouseDragged:),
+                    handle_view_event as extern "C" fn(&Object, Sel, id),
+                );
+                decl.add_method(
+                    sel!(otherMouseDragged:),
+                    handle_view_event as extern "C" fn(&Object, Sel, id),
+                );
                 decl.add_method(
                     sel!(scrollWheel:),
                     handle_view_event as extern "C" fn(&Object, Sel, id),
@@ -1263,6 +1273,11 @@ impl PlatformWindow for MacWindow {
 
     fn set_app_id(&mut self, _app_id: &str) {}
 
+    fn set_min_size(&self, size: Size<Pixels>) {
+        let window = self.0.lock().native_window;
+        unsafe { window.setContentMinSize_(NSSize { width: size.width.0 as f64, height: size.height.0 as f64 }); }
+    }
+
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {
         let mut this = self.0.as_ref().lock();
 
@@ -1481,6 +1496,15 @@ impl PlatformWindow for MacWindow {
     fn draw(&self, scene: &crate::Scene) {
         let mut this = self.0.lock();
         this.renderer.draw(scene);
+    }
+
+    fn draw_in_transaction(&self, scene: &crate::Scene) {
+        let mut this = self.0.lock();
+        #[cfg(not(feature = "macos-blade"))]
+        this.renderer.set_presents_with_transaction(true);
+        this.renderer.draw(scene);
+        #[cfg(not(feature = "macos-blade"))]
+        this.renderer.set_presents_with_transaction(false);
     }
 
     fn render_to_bgra(&self, scene: &crate::Scene) -> Option<(usize, usize, Vec<u8>)> {

@@ -14,7 +14,7 @@ use crate::settings::display_title;
 use crate::model::BlockKind;
 use crate::search::doc_icon;
 use crate::store::Entry;
-use crate::editor::image::PictureExt;
+use crate::editor::image::picture;
 use crate::theme::{self, Theme};
 use crate::trash::{empty_state, list_header_text, list_line, menu_label, page_header, row_hover};
 use crate::ui::{ROW_RADIUS, TipExt, icon, menu_glyph, menu_row, popover, ui_text};
@@ -56,7 +56,7 @@ const STARRED_COLS: [Col; 4] = [Col::Modified, Col::Created, Col::Visited, Col::
 
 /// Bounded document trees retain formatting without retaining a whole long document.
 type EquationNumbers = HashMap<crate::model::BlockId, u32>;
-struct ThumbContent { blocks: Vec<crate::model::Block>, eqnos: EquationNumbers, cover: Option<crate::model::Cover>, has_subpages: bool }
+struct ThumbContent { blocks: Vec<crate::model::Block>, eqnos: EquationNumbers, has_subpages: bool }
 type Thumb = Rc<ThumbContent>;
 
 fn has_subpage_list(blocks: &[crate::model::Block]) -> bool {
@@ -93,6 +93,8 @@ fn thumb_blocks(blocks: &[crate::model::Block], budget: &mut usize, depth: usize
                 let (iw, ih) = dimensions.map(|(w, h)| (w.max(1) as f32, h.max(1) as f32)).unwrap_or((690., 460.));
                 let w = width.unwrap_or_else(|| height.map(|h| h * iw / ih).unwrap_or(iw)).max(1.);
                 let h = height.unwrap_or(w * ih / iw).max(1.);
+                // No wider than the page: a 1536 px picture would otherwise reserve its full height below a narrower drawing.
+                let (w, h) = if w > 690. { (690., h * 690. / w) } else { (w, h) };
                 if let BlockKind::Image { width, height, .. } = &mut kind { *width = Some(w); *height = Some(h); }
                 kind
             }
@@ -111,12 +113,7 @@ fn thumb_blocks(blocks: &[crate::model::Block], budget: &mut usize, depth: usize
                 crate::model::InlineKind::Equation(_) => unreachable!(),
                 crate::model::InlineKind::File(file) => file.name.clone(),
                 crate::model::InlineKind::Button(button) => button.text.clone(),
-                crate::model::InlineKind::Reminder(reminder) => {
-                    if crate::settings::english() {
-                        let (y, m, d, h, mi) = crate::time::civil(reminder.expire.max(0) as u64 / 1000);
-                        if reminder.whole_day { format!("{y}-{m:02}-{d:02}") } else { format!("{y}-{m:02}-{d:02} {h:02}:{mi:02}") }
-                    } else { reminder.label(" ") }
-                },
+                crate::model::InlineKind::Reminder(reminder) => crate::editor::reminder::reminder_label(reminder, " "),
                 crate::model::InlineKind::DocLink(doc) => display_title(&doc.title).to_string(),
                 crate::model::InlineKind::Other { tag } => tag.clone(),
             }).map(|label| label.chars().take(160).collect::<String>());
@@ -138,6 +135,13 @@ fn thumb_blocks(blocks: &[crate::model::Block], budget: &mut usize, depth: usize
     }
     out
 }
+
+/// Home cards decode pictures at this share of the size they are drawn:
+/// a card is small and glanced at, so a softer picture costs nothing.
+const THUMB: f32 = 0.75;
+
+/// Long edge drawn for a picture `w` wide with this width / height `ratio`.
+fn thumb_long(w: f32, ratio: f32) -> f32 { (if ratio >= 1. { w } else { w / ratio }) * THUMB }
 
 fn thumb_block(b: &crate::model::Block, depth: usize, inherited: Hsla, quote: bool, eqnos: &EquationNumbers) -> AnyElement {
     thumb_block_in(b, depth, inherited, quote, false, 0, eqnos)
@@ -162,7 +166,7 @@ fn thumb_block_in(b: &crate::model::Block, depth: usize, inherited: Hsla, quote:
             let media = div().relative().flex_none().w_full().max_w_full().overflow_hidden().when_some(*width, |d, w| d.w(px(w * s)))
                 .map(|mut d| { d.style().aspect_ratio = Some(ratio); d });
             node = node.child(if let Some(path) = path {
-                media.child(img(path).doc_picture().absolute().inset_0().size_full().min_w_0().min_h_0().rounded(px(bs::RADIUS * s)).object_fit(ObjectFit::Contain)).into_any_element()
+                media.child(picture(&path, thumb_long(width.unwrap_or(690.).min(690.), ratio) * s).absolute().inset_0().size_full().min_w_0().min_h_0().rounded(px(bs::RADIUS * s)).object_fit(ObjectFit::Contain)).into_any_element()
             } else {
                 media.rounded(px(bs::RADIUS * s)).bg(bs::code_surface()).flex().items_center().justify_center().child(icon("image-broken", 24. * s, Theme::text_disabled())).into_any_element()
             });
@@ -246,6 +250,12 @@ fn thumb_block_in(b: &crate::model::Block, depth: usize, inherited: Hsla, quote:
             if b.children.is_empty() { return node.h(px(96. * s)).justify_center().text_center().text_color(Theme::text_caption()).child(crate::settings::text("目录下暂无子页面")).into_any_element(); }
             for child in &b.children { node = node.child(div().py(px(9. * s)).px(px(6. * s)).flex().items_start().gap(px(6. * s)).child(icon("doc", 16. * s, Theme::icon())).child(div().flex_1().min_w_0().font_weight(FontWeight::MEDIUM).child(child.text.text.clone()))); }
             return node.into_any_element();
+        }
+        // a 画板 block: its board fit into the block's box (painters cached by board version)
+        BlockKind::Board(bd) => {
+            let board = bd.clone();
+            return node.h(px(bd.height * s)).rounded(px(8. * s)).border(px(s)).border_color(Theme::line_border()).bg(crate::board::render::canvas_color(bd)).overflow_hidden()
+                .child(canvas(|_, _, _| {}, move |bounds, _, window, cx| crate::board::render::paint_card(&board, bounds, window, cx)).size_full()).into_any_element();
         }
         BlockKind::Raw { tag, .. } => return node.p(px(8. * s)).rounded(px(8. * s)).bg(Theme::bg_overlay()).text_color(Theme::text_caption()).child(crate::localized_format!("<{tag}> 已保留的内容", "<{tag}> Preserved content")).into_any_element(),
         _ => {}
@@ -407,7 +417,7 @@ fn weight3(mut d: Div) -> Div {
 fn entry_icon(e: &Entry) -> AnyElement {
     if e.meta.folder.is_some() { return icon("folder", 22., Theme::icon()).mr(px(13.)).into_any_element(); }
     match &e.icon {
-        _ if e.meta.markdown => crate::search::doc_icon_named("doc-md").mr(px(12.)).into_any_element(),
+        _ if e.meta.named_by_file() => crate::search::doc_icon_named(crate::search::file_glyph(&e.meta)).mr(px(12.)).into_any_element(),
         Some(em) => div().size(px(24.)).mr(px(12.)).flex_none().flex().items_center().justify_center().text_size(px(18.)).child(em.clone()).into_any_element(),
         None => doc_icon().mr(px(12.)).into_any_element(),
     }
@@ -506,16 +516,19 @@ impl Workspace {
         }
         let mut budget = 32;
         let mut eqnos = HashMap::new();
-        let mut cover = None;
-        let mut blocks = self.store.load(&e.id).map(|doc| {
-            cover = doc.cover.clone();
+        let loaded = self.store.load(&e.id).map(|doc| {
             let numbers = crate::editor::equation_numbers(&doc);
             thumb_blocks(&doc.blocks, &mut budget, 0, &numbers, &mut eqnos)
-        }).unwrap_or_default();
+        });
+        let read = loaded.is_ok();
+        let mut blocks = loaded.unwrap_or_default();
         let has_subpages = has_subpage_list(&blocks);
         if has_subpages { subpages(&mut blocks, &children, &mut budget); }
         let stamp = if has_subpages { full_stamp } else { base_stamp };
-        let t: Thumb = Rc::new(ThumbContent { blocks, eqnos, cover, has_subpages });
+        let t: Thumb = Rc::new(ThumbContent { blocks, eqnos, has_subpages });
+        // A failed read (mid-write by another process, still in iCloud) is not
+        // remembered: the card would stay blank until the document changes.
+        if !read { return t; }
         let mut thumbs = self.home.thumbs.borrow_mut();
         // Keep recent previews warm without retaining every document ever visited.
         if thumbs.len() >= 128 && !thumbs.contains_key(&e.id) {
@@ -621,11 +634,12 @@ impl Workspace {
             .when(narrow, |d| d.child(crate::ui::header_icon("home-search", "search").mr(px(4.))
                 .tip(crate::settings::tr("搜索文档", "Search documents"), Some(crate::shortcuts::hint("workspace::FocusSearch", "⌘ + J")))
                 .on_click(cx.listener(|w, _, window, cx| w.open_search(window, cx)))))
+            .child(self.place_button("home-more", None, cx))
             .child(self.import_button("home-import", None, cx))
             .child(
             crate::ui::header_icon("home-new", "plus")
                 .child(self.home.track("create-home"))
-                .when(self.create_menu.is_some(), |d| d.bg(Theme::fill_hover()))
+                .when(self.create_menu.as_ref().is_some_and(|(_, pos)| self.home.anchor("create-home").is_some_and(|b| point(b.left(), b.bottom() + px(4.)) == *pos)), |d| d.bg(Theme::fill_hover()))
                 .tip(crate::settings::tr("新建", "New"), Some(crate::shortcuts::hint("workspace::NewDoc", "⌘ + N")))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|w, ev: &ClickEvent, _, cx| { let pos = w.home.anchor("create-home").map_or(ev.position(), |b| point(b.left(), b.bottom() + px(4.))); w.create_menu = if w.create_menu.is_some() { None } else { Some((None, pos)) }; cx.notify(); })).into_any_element()
@@ -840,7 +854,11 @@ impl Workspace {
         let gap = if mixed { 24. } else { 16. };
         let wide_cols = (((avail + gap) / (200. + gap)).floor() as usize).max(1);
         let n = if wide_cols >= 4 { (((avail + gap) / (240. + gap)).floor() as usize).max(4) } else { (((avail + gap) / (160. + gap)).floor() as usize).clamp(1, 3) };
-        let card_h = ((avail - gap * (n - 1) as f32) / n as f32) * (264. / 236.);
+        // A document card is always 5:6 at its column's width; folders stand
+        // taller by their tab so the pages line up beside them.
+        let col_w = (avail - gap * (n - 1) as f32) / n as f32;
+        let doc_h = col_w * (6. / 5.);
+        let card_h = if mixed { doc_h / (1. - crate::home_folder::TAB) } else { doc_h };
         let rows = entries.len().div_ceil(n);
         let grid = uniform_list("home-grid-area", rows, cx.processor(move |workspace, range: std::ops::Range<usize>, window, cx| {
             range.map(|row| {
@@ -849,9 +867,9 @@ impl Workspace {
                 div().w_full().h(px(card_h + gap)).px(px(24.)).pb(px(gap))
                     .grid().grid_cols(n as u16).gap(px(gap))
                     .children(entries[start..end].iter().map(|e| {
-                        if e.meta.folder.is_some() { workspace.render_folder_card(e, card_h, window, cx) }
+                        if e.meta.folder.is_some() { workspace.render_folder_card(e, col_w, card_h, window, cx) }
                         else if mixed { div().w_full().min_w_0().h(px(card_h)).flex().flex_col().justify_end()
-                            .child(workspace.render_home_card(e, card_h * (1. - crate::home_folder::TAB), cx)).into_any_element() }
+                            .child(workspace.render_home_card(e, doc_h, cx)).into_any_element() }
                         else { workspace.render_home_card(e, card_h, cx) }
                     }))
             }).collect()
@@ -889,6 +907,11 @@ impl Workspace {
                 p = p.child(div().flex_none().flex().items_start().gap(px(6.)).mb(px(8.))
                     .when_some(e.icon.as_ref(), |d, emoji| d.child(div().flex_none().text_size(px(14.)).line_height(px(20.)).child(emoji.clone())))
                     .child(div().min_w_0().text_size(px(14.)).line_height(px(20.)).font_weight(FontWeight::BOLD).child(e.title.clone())));
+                // A 画板: its board, drawn to fit the rest of the card.
+                if e.meta.kind == crate::store::DocKind::Board {
+                    let board = thumb.blocks.iter().find_map(|b| match &b.kind { BlockKind::Board(bd) => Some(bd.clone()), _ => None }).unwrap_or_default();
+                    return p.child(canvas(|_, _, _| {}, move |bounds, _, window, cx| crate::board::render::paint_card(&board, bounds, window, cx)).flex_1().w_full());
+                }
                 for (i, block) in thumb.blocks.iter().enumerate() {
                     let (mt, _) = bs::gap(&block.kind);
                     let prev = if i == 0 { 0. } else { bs::gap(&thumb.blocks[i - 1].kind).1 };
@@ -899,12 +922,12 @@ impl Workspace {
     }
 
     fn render_home_card(&self, e: &Entry, card_h: f32, cx: &mut Context<Self>) -> AnyElement {
+            const RING: f32 = 3.;
             let id = e.id.clone();
             let id2 = e.id.clone();
             let thumb = self.thumb(e);
             let page = self.thumb_page_with(e, &thumb, 18.);
-            let cover = thumb.cover.as_ref().and_then(|c| crate::store::image_path(&c.src));
-            let frame = 4.;
+            let radius = 32.;
             let menu_on = self.row_menu.as_ref().is_some_and(|m| m.id == e.id);
             let check = self.home_check(e);
             let arm = e.id.clone();
@@ -913,7 +936,7 @@ impl Workspace {
             if self.home_dragging(&e.id) {
                 return div().id(SharedString::from(format!("home-card-{}", e.id))).w_full().min_w_0().h(px(card_h)).relative()
                     .child(self.record_home_card(&e.id))
-                    .child(crate::ui::continuous_surface(20., Theme::fill_hover()).size_full())
+                    .child(crate::ui::squircle_surface(radius, Theme::fill_hover()).size_full())
                     .into_any_element();
             }
                 div()
@@ -922,11 +945,11 @@ impl Workspace {
                     .child(self.record_home_card(&e.id))
                     .w_full().min_w_0().h(px(card_h)).relative().group("home-card")
                     .flex_none()
-                    .bg(Theme::bg_overlay()).p(px(frame))
-                    .overflow_hidden()
+                    // A loose sheet on the home page: squircle corners, a 0.5pt
+                    // hairline and the faintest lift; hover darkens the hairline.
                     .cursor_pointer()
-                    .hover(|s| s.bg(Theme::fill_hover_strong()))
-                    .when(menu_on, |d| d.bg(Theme::fill_hover_strong()))
+                    // Inset as the folder card's shadow box is (6 a side, 10 from the top).
+                    .child(div().absolute().left(px(6.)).right(px(6.)).top(px(10.)).bottom_0().rounded(px(radius * 0.6)).shadow(theme::shadow_sheet()))
                     .on_click(cx.listener(move |w, _, window, cx| w.home_click(&id, window, cx)))
                     .when(check.is_none(), |d| d.on_mouse_down(
                         MouseButton::Right,
@@ -935,9 +958,12 @@ impl Workspace {
                             cx.notify();
                         }),
                     ))
-                    .when_some(cover, |d, path| d.child(img(path).doc_picture().absolute().inset_0().size_full().object_fit(ObjectFit::Fill)))
-                    .child(crate::ui::continuous_page(20. - frame).size_full().overflow_hidden().child(page.relative()))
-                    .child(crate::ui::continuous_corner_mask(20., Theme::bg_body()))
+                    .child(crate::ui::squircle_surface(radius, Theme::bg_body()).size_full().overflow_hidden().child(page.relative()))
+                    .child(crate::ui::squircle_outline(radius, 0.5, Theme::line_sheet()))
+                    // Hovered, or its menu open: a soft grey ring around the card.
+                    .child(div().absolute().left(px(-RING)).right(px(-RING)).top(px(-RING)).bottom(px(-RING))
+                        .when(!menu_on, |d| d.opacity(0.).group_hover("home-card", |s| s.opacity(1.)))
+                        .child(crate::ui::squircle_outline(radius + RING, RING, Theme::ring_sheet())))
                     .when_some(check, |d, c| d.child(div().absolute().top(px(12.)).left(px(12.)).child(c)))
                     .when(self.batch.is_none(), |d| d.child(
                         div().absolute().top(px(8.)).right(px(8.))

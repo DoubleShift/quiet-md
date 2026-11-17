@@ -304,9 +304,7 @@ impl Editor {
         self.tables.scrolled = None;
         match d {
             Drag::Resize { table, col, live, .. } if self.core.table_set_width(table, col, live) => {
-                self.changed(window, cx);
-                // Resizing leaves the caret where it was, possibly off screen.
-                self.autoscroll = false;
+                self.changed_preserving_viewport(window, cx);
             }
             Drag::Move { started: true, drop, .. } => {
                 self.toolbar_hidden = false;
@@ -366,7 +364,7 @@ fn move_snapshot(cols: bool, n: usize) -> Div {
         .border_r_1()
         .border_b_1()
         .rounded_br(px(2.))
-        .child(crate::localized_format!("共 {n} {}", "{n} {}", if cols { crate::settings::text("列") } else { crate::settings::text("行") }));
+        .child(if cols { crate::localized_count!(n, "共 {n} 列", "{n} column", "{n} columns") } else { crate::localized_count!(n, "共 {n} 行", "{n} row", "{n} rows") });
     let bar = div().bg(Theme::primary()).rounded_tl(px(2.));
     if cols {
         div()

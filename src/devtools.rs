@@ -36,6 +36,11 @@ pub static RENDER_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 static POINTER: Mutex<(f32, f32)> = Mutex::new((640., 400.));
 static CURSOR_LOG: Mutex<Option<(Instant, std::fs::File)>> = Mutex::new(None);
 static PICK: Mutex<Option<Vec<std::path::PathBuf>>> = Mutex::new(None);
+/// Inside a `bench` step: the window is borrowed, so native NSEvents sent to
+/// the view would be dropped; pointer moves go to `Window::dispatch_event`.
+static BENCHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Where the scripted drag is (`down`, `dragto`, `dragby`).
+static DRAG_AT: Mutex<(f32, f32)> = Mutex::new((0., 0.));
 
 /// The scripted answer to the next open / save dialog, if any.
 /// Files a script is dragging over the window (`filedrag`), as the Finder would.
@@ -59,6 +64,24 @@ fn ease(t: f32) -> f32 {
     if t < 0.5 { 4. * t * t * t } else { 1. - (-2. * t + 2.).powi(3) / 2. }
 }
 
+thread_local! { static CURRENT: std::cell::Cell<Option<(AnyWindowHandle, usize)>> = const { std::cell::Cell::new(None) }; }
+static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Move a scripted window off screen where it still renders (unless `FDL_NOPARK`).
+async fn park(ns_view: usize, cx: &mut AsyncApp) {
+    let _ = ns_view;
+    cx.background_executor().timer(Duration::from_millis(800)).await;
+    #[cfg(target_os = "macos")]
+    if std::env::var_os("FDL_NOPARK").is_none() {
+        for origin in native::park_candidates(ns_view) {
+            native::place(ns_view, origin);
+            cx.background_executor().timer(Duration::from_millis(250)).await;
+            if native::is_visible(ns_view) { return }
+        }
+        eprintln!("devtools: no visible off-screen spot; window may stop rendering");
+    }
+}
+
 pub fn start(window: &mut Window, cx: &mut App) {
     let Ok(path) = std::env::var("FDL_SCRIPT") else { return };
     let Ok(script) = std::fs::read_to_string(&path) else {
@@ -68,28 +91,24 @@ pub fn start(window: &mut Window, cx: &mut App) {
     let handle = window.window_handle();
     #[cfg(target_os = "macos")]
     let Some(ns_view) = ns_view_of(window) else { return };
+    #[cfg(not(target_os = "macos"))]
+    let ns_view = 0usize;
     #[cfg(target_os = "macos")]
     native::no_app_nap();
+    // One script per run: a window opened later (first launch's pages hand
+    // over to the main window) becomes where the rest of it plays.
+    CURRENT.with(|c| c.set(Some((handle, ns_view))));
+    if RUNNING.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        cx.spawn(async move |cx| park(ns_view, cx).await).detach();
+        return;
+    }
     cx.spawn(async move |cx| {
-        cx.background_executor().timer(Duration::from_millis(800)).await;
-        #[cfg(target_os = "macos")]
-        if std::env::var_os("FDL_NOPARK").is_none() {
-            let mut parked = false;
-            for origin in native::park_candidates(ns_view) {
-                native::place(ns_view, origin);
-                cx.background_executor().timer(Duration::from_millis(250)).await;
-                if native::is_visible(ns_view) {
-                    parked = true;
-                    break;
-                }
-            }
-            if !parked {
-                eprintln!("devtools: no visible off-screen spot; window may stop rendering");
-            }
-        }
+        park(ns_view, cx).await;
         let mut recording: Option<std::rc::Rc<std::cell::Cell<bool>>> = None;
         // Only leading whitespace is insignificant: `type ab ` types a trailing space.
         for line in script.lines().map(str::trim_start).filter(|l| !l.trim().is_empty() && !l.starts_with('#')) {
+            let Some((handle, ns_view)) = CURRENT.with(|c| c.get()) else { break };
+            let _ = ns_view;
             let (cmd, rest) = line.split_once(' ').unwrap_or((line, ""));
             if cmd == "wait" {
                 // Draw invalidated frames ourselves: the display link stops
@@ -121,10 +140,16 @@ pub fn start(window: &mut Window, cx: &mut App) {
                 let (scmd, srest) = step.split_once(' ').unwrap_or((step, ""));
                 let mut samples = vec![];
                 for _ in 0..n.parse().unwrap_or(20) {
+                    // the step, then (its effects and observers through, as
+                    // after a real event) the frame
+                    let t0 = Instant::now();
                     let _ = handle.update(cx, |_, window, cx| {
-                        let t0 = Instant::now();
+                        BENCHING.store(true, std::sync::atomic::Ordering::Relaxed);
                         run(scmd, srest, window, cx);
-                        let t1 = Instant::now();
+                        BENCHING.store(false, std::sync::atomic::Ordering::Relaxed);
+                    });
+                    let t1 = Instant::now();
+                    let _ = handle.update(cx, |_, window, cx| {
                         RENDER_NS.store(0, std::sync::atomic::Ordering::Relaxed);
                         window.draw(cx).clear();
                         let render = RENDER_NS.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6;
@@ -251,9 +276,18 @@ pub fn start(window: &mut Window, cx: &mut App) {
                 let drop = cmd == "filedrop";
                 cx.update(|cx| {
                     let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    // an open 画板 takes the drop itself (its canvas `on_drop`)
+                    let board = handle.update(cx, |ws, _, cx| ws.editor.as_ref().and_then(|e| e.read(cx).board_view())).ok().flatten();
+                    if let (Some(b), Some(p), true) = (board.as_ref(), paths.as_ref(), drop) {
+                        FILE_DRAG.lock().unwrap().take();
+                        let p = p.clone();
+                        handle.update(cx, |_, window, cx| b.update(cx, |me, cx| { me.pointer = at; crate::board::tools::image::drop_files(me, p, window, cx) })).unwrap();
+                        return;
+                    }
                     handle.update(cx, |ws, window, cx| match paths {
-                        Some(p) if drop => { FILE_DRAG.lock().unwrap().take(); ws.file_drag_at(at, p.clone(), cx); ws.file_drop_paths(p, window, cx); }
-                        Some(p) => ws.file_drag_at(at, p, cx),
+                        // Over the sidebar the tree takes it; otherwise the page.
+                        Some(p) if drop => { FILE_DRAG.lock().unwrap().take(); if ws.sidebar_drop_at(at, false, cx) { ws.sidebar_files_dropped(p, cx); } else { ws.file_drag_at(at, p.clone(), cx); ws.file_drop_paths(p, window, cx); } }
+                        Some(p) => { if !ws.sidebar_drop_at(at, false, cx) { ws.file_drag_at(at, p, cx); } }
                         None => cx.notify(),
                     }).unwrap();
                 }).unwrap();
@@ -299,6 +333,9 @@ mod native {
     pub const RIGHT_DOWN: u64 = 3;
     pub const RIGHT_UP: u64 = 4;
     pub const LEFT_DRAGGED: u64 = 6;
+    pub const OTHER_DOWN: u64 = 25;
+    pub const OTHER_UP: u64 = 26;
+    pub const OTHER_DRAGGED: u64 = 27;
 
     /// Places scripted windows almost entirely past a screen edge that has no
     /// neighbouring display, so they neither cover the user's windows nor get
@@ -492,6 +529,14 @@ mod native {
                 eventNumber: 0isize
                 clickCount: clicks
                 pressure: 1.0f32];
+            // the middle button: `mouseEventWithType` leaves the button
+            // number 0 (left); set it on the CGEvent and rebuild the NSEvent
+            let ev: *mut Object = if matches!(kind, OTHER_DOWN | OTHER_UP | OTHER_DRAGGED) {
+                unsafe extern "C" { fn CGEventSetIntegerValueField(event: *mut std::ffi::c_void, field: u32, value: i64); }
+                let cg: *mut std::ffi::c_void = msg_send![ev, CGEvent];
+                CGEventSetIntegerValueField(cg, 3, 2); // kCGMouseEventButtonNumber
+                msg_send![class!(NSEvent), eventWithCGEvent: cg]
+            } else { ev };
             // Deliver straight to the view: going through `-[NSWindow sendEvent:]`
             // would require the window to be key, i.e. steal focus from the user.
             match kind {
@@ -500,6 +545,9 @@ mod native {
                 RIGHT_DOWN => msg_send![view, rightMouseDown: ev],
                 RIGHT_UP => msg_send![view, rightMouseUp: ev],
                 LEFT_DRAGGED => msg_send![view, mouseDragged: ev],
+                OTHER_DOWN => msg_send![view, otherMouseDown: ev],
+                OTHER_UP => msg_send![view, otherMouseUp: ev],
+                OTHER_DRAGGED => msg_send![view, otherMouseDragged: ev],
                 _ => msg_send![view, mouseMoved: ev],
             }
         }
@@ -546,14 +594,25 @@ fn mouse_step(view: usize, cmd: &str, n: &[f32]) -> bool {
         // optional third number is the click count ("down x y 2": a double
         // click's second press, with frames in between).
         "down" if n.len() >= 2 => {
+            *DRAG_AT.lock().unwrap() = (n[0], n[1]);
             send(view, MOVED, n[0], n[1], 0);
             send(view, LEFT_DOWN, n[0], n[1], n.get(2).map_or(1, |c| *c as i64));
         }
-        "dragto" if n.len() >= 2 => send(view, LEFT_DRAGGED, n[0], n[1], 1),
+        "dragto" if n.len() >= 2 => { *DRAG_AT.lock().unwrap() = (n[0], n[1]); send(view, LEFT_DRAGGED, n[0], n[1], 1) }
+        // `dragby dx dy`: one drag step from the last `down` / `dragto` /
+        // `dragby` point (so `bench 30 dragby 3 0` times a moving drag).
+        "dragby" if n.len() >= 2 => {
+            let (x, y) = { let mut d = DRAG_AT.lock().unwrap(); d.0 += n[0]; d.1 += n[1]; *d };
+            send(view, LEFT_DRAGGED, x, y, 1)
+        }
         // `place x y`: the window's top-left at screen point (x, y) of the main
         // display, floating (for desktop shots; see tools/harness/README.md).
         "place" if n.len() >= 2 => place_top_left(view, n[0] as f64, n[1] as f64),
         "up" if n.len() >= 2 => send(view, LEFT_UP, n[0], n[1], n.get(2).map_or(1, |c| *c as i64)),
+        // the middle button (the wheel pressed): `mdown`, `mdragto`, `mup`
+        "mdown" if n.len() >= 2 => { send(view, MOVED, n[0], n[1], 0); send(view, OTHER_DOWN, n[0], n[1], 1) }
+        "mdragto" if n.len() >= 2 => send(view, OTHER_DRAGGED, n[0], n[1], 1),
+        "mup" if n.len() >= 2 => send(view, OTHER_UP, n[0], n[1], 1),
         _ => return false,
     }
     true
@@ -561,8 +620,21 @@ fn mouse_step(view: usize, cmd: &str, n: &[f32]) -> bool {
 
 fn run(cmd: &str, rest: &str, window: &mut Window, cx: &mut App) {
     match cmd {
+        "move" | "dragto" | "dragby" if BENCHING.load(std::sync::atomic::Ordering::Relaxed) => {
+            let n = nums(rest);
+            if n.len() >= 2 {
+                let (x, y) = match cmd {
+                    "move" => (n[0], n[1]),
+                    "dragto" => { *DRAG_AT.lock().unwrap() = (n[0], n[1]); (n[0], n[1]) }
+                    _ => { let mut d = DRAG_AT.lock().unwrap(); d.0 += n[0]; d.1 += n[1]; *d }
+                };
+                let pressed_button = (cmd != "move").then_some(MouseButton::Left);
+                window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position: point(px(x), px(y)), pressed_button, modifiers: Modifiers::default() }), cx);
+            }
+        }
         // Synthesized right-button NSEvents report buttonNumber 0, so GPUI would
         // read them as left clicks; feed the right click to GPUI directly.
+        "forget-uploads" => eprintln!("devtools: forgot {} uploads", crate::editor::image::forget_uploads(window, cx)),
         "rclick" => {
             let n = nums(rest);
             if n.len() >= 2 {
@@ -681,9 +753,15 @@ fn frame(window: &mut Window, cx: &mut App) -> anyhow::Result<(usize, usize, Vec
 #[cfg(target_os = "macos")]
 fn capture(window: &mut Window, cx: &mut App, path: &str) -> anyhow::Result<()> {
     let (w, h, mut px) = frame(window, cx)?;
+    // The offscreen frame has no system glass or desktop behind the clear
+    // sidebar: lay it on the window colour full screen uses, not on black.
+    let bg = Rgba::from(crate::theme::ca(crate::theme::craft::WINDOW, 1.));
+    let bg = [bg.r, bg.g, bg.b].map(|c| c * 255.);
     for p in px.as_chunks_mut::<4>().0 {
         // BGRA (little-endian premultiplied first) → opaque RGBA.
         p.swap(0, 2);
+        let rest = 1. - p[3] as f32 / 255.;
+        for i in 0..3 { p[i] = (p[i] as f32 + bg[i] * rest).round().min(255.) as u8; }
         p[3] = 255;
     }
     image::save_buffer(path, &px, w as u32, h as u32, image::ColorType::Rgba8)?;

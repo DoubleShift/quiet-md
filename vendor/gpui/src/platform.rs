@@ -8,7 +8,7 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod mac;
 #[cfg(target_os = "macos")]
-pub use mac::check_fallback_glyphs;
+pub use mac::{check_fallback_glyphs, test_text_system};
 
 #[cfg(any(
     all(
@@ -485,6 +485,8 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn is_hovered(&self) -> bool;
     fn set_title(&mut self, title: &str);
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance);
+    /// Change the smallest content size the user can resize the window to.
+    fn set_min_size(&self, _size: Size<Pixels>) {}
     fn minimize(&self);
     fn zoom(&self);
     fn toggle_fullscreen(&self);
@@ -500,6 +502,9 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn on_close(&self, callback: Box<dyn FnOnce()>);
     fn on_appearance_changed(&self, callback: Box<dyn FnMut()>);
     fn draw(&self, scene: &Scene);
+    /// Draws `scene` and shows it in the same Core Animation transaction as
+    /// native view changes made during this frame (macOS); elsewhere `draw`.
+    fn draw_in_transaction(&self, scene: &Scene) { self.draw(scene) }
     /// Renders `scene` offscreen as BGRA (width, height, pixels), if supported.
     fn render_to_bgra(&self, _scene: &Scene) -> Option<(usize, usize, Vec<u8>)> {
         None
@@ -595,6 +600,9 @@ pub(crate) trait PlatformTextSystem: Send + Sync {
         raster_bounds: Bounds<DevicePixels>,
     ) -> Result<(Size<DevicePixels>, Vec<u8>)>;
     fn layout_line(&self, text: &str, font_size: Pixels, runs: &[FontRun]) -> LineLayout;
+    /// quiet.md: a glyph's outline in font units, y up (macOS only; None
+    /// elsewhere and for bitmap glyphs).
+    fn glyph_outline(&self, _font_id: FontId, _glyph_id: GlyphId) -> Option<Vec<crate::GlyphOutlineCmd>> { None }
 }
 
 pub(crate) struct NoopTextSystem;
@@ -772,6 +780,8 @@ pub(crate) trait PlatformAtlas: Send + Sync {
         build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
     ) -> Result<Option<AtlasTile>>;
     fn remove(&self, key: &AtlasKey);
+    /// quiet.md: writes `bytes` over `key`'s tile (same size), for `Window::paint_pixels`.
+    fn update(&self, key: &AtlasKey, bytes: &[u8]);
 }
 
 struct AtlasTextureList<T> {

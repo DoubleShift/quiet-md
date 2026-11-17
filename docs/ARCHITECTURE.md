@@ -1,18 +1,19 @@
 # 架构
 
-Quiet.md 是一个单进程 GPUI 应用（Rust，约 4 万行）。一篇文档在内存里是一棵 block 树（`model.rs`），在磁盘上是一份 DocxXML 文件（`docxml.rs`）。编辑器把这棵树画成一个虚拟化列表。
+Quiet.md 是一个单进程 GPUI 应用（Rust，约 9 万行，其中画板约 2.6 万行）。一篇文档在内存里是一棵 block 树（`model.rs`），在磁盘上是一份 DocxXML 文件（`docxml.rs`）。编辑器把这棵树画成一个虚拟化列表。
 
 仓库是一个 Cargo workspace，分两个 crate：
 
-- **`crates/core`（`fdl_core`，约 1 万行）**：文档引擎。包括模型、DocxXML、编辑内核和撤销、磁盘上的文档库、Markdown / HTML 导入和 Markdown 导出。它不依赖 GPUI，可以单独编译和测试（`cargo test -p fdl_core`），fuzzer 也在这里。
+- **`crates/core`（`fdl_core`，约 3.6 万行，其中画板 2 万行）**：文档引擎。包括模型、DocxXML、编辑内核和撤销、磁盘上的文档库、Markdown / HTML 导入和 Markdown 导出，以及画板的模型和算法。它不依赖 GPUI，可以单独编译和测试（`cargo test -p fdl_core`），fuzzer 也在这里。
 - **根 crate（`quiet_md`）**：GPUI 应用，即窗口、视图、渲染、菜单和浮层。`main.rs` 把 `fdl_core` 的模块重新导出到 crate 根，`editor/mod.rs` 重新导出 `editor::core` 和 `editor::table_ops`，所以应用里仍然写 `crate::model`、`super::core`。
 
 依赖只能从应用指向 core。core 里的模块只引用 core 里的模块。
 
 ```
 main.rs ─ 窗口
+  ├─ onboarding.rs  首次启动的引导页；选定文档库后，同一个窗口换成 Workspace
   └─ app.rs  Workspace（窗口根视图）
-       ├─ store.rs        文档库：docs/*.xml + index.json（见 FORMAT.md）           [core]
+       ├─ store.rs        文档库：真实文件夹 + .quiet/index.json（见 FORMAT.md）           [core]
        ├─ sidebar / home / search / trash / tree / docmenu / docinfo / modes
        └─ editor::Editor（view.rs）   打开的那篇文档
             └─ editor::Core（core.rs） 文档 + 选区 + 撤销栈                        [core]
@@ -35,10 +36,17 @@ main.rs ─ 窗口
 
 1. 视图收到事件，调用 `core.checkpoint(kind)`。它记一个撤销快照，把 `generation` 加一，并置 `dirty`。连续输入（同一 block、相邻两次间隔不到 700ms）合成一步。
 2. 调用 Core 的操作方法修改 `core.doc` / `core.sel`。
-3. 调用 `Editor::changed()`：
-   - 先 `core.reveal_caret()`：如果选区（或块选区）两端被折叠藏起来了，就展开把它藏起来的标题或列表项；
-   - 有改动时发 `EditorEvent::Changed`，同时刷新查找结果、斜杠菜单和 @ 面板。
+3. 按滚动意图通知编辑器：
+   - 输入、导航等以光标为目标的操作调用 `Editor::changed()`，先 `core.reveal_caret()` 展开隐藏选区的标题或列表项，并请求滚动到光标；
+   - 点击任务框、调整列宽等独立目标操作调用 `changed_preserving_viewport()`，保留光标/选区和视口。折叠若把光标移到了标题，仍用 `changed()` 显示迁移后的光标；
+   - 两条路径有改动时都发 `EditorEvent::Changed`，同时刷新查找结果、斜杠菜单和 @ 面板。
 4. `Workspace` 收到 `Changed` 后调用 `schedule_save`，500ms 后 `flush()` 写盘。写盘失败时改动保持未保存，顶栏显示错误，切换文档、新建、退出前会询问。保存失败对话框支持重试、重新载入磁盘内容、另存恢复副本；重新载入同时重置编辑器及同文档窗口的状态。退出检查所有窗口，处理单个冲突后重新检查，仍有冲突时不会退出。系统退出阶段仍保存失败的正文存入本地应用数据目录的 `quiet-md/recovery/<文档库标识>/`，下次打开同一文档库时恢复为新文档，不覆盖磁盘原版。
+
+写入成功后 `Store::save_now` 还会用内存里的旧正文在 `history/<id>/` 存一份版本快照：5 分钟节流、每篇文档 1–30 份、全库 200 MiB 上限。快照写入失败只记警告，不影响正文保存。恢复某个版本时先强制给当前正文留一份快照，再走正常的 `save`。
+
+版本历史的界面沿用 Google Docs / 飞书那一套：抽屉在右、正文就地变成所选快照的只读预览、改动是可关掉的高亮层。为此 `Workspace` 多一个 `preview: Option<Preview>`，它持有进入预览前那份完整的 `Core`（文档、光标、选区、撤销栈），返回时整体放回去。预览期间 `flush`、`schedule_save`、`sync_document` 全部短路：编辑器里装的是历史正文，写盘或同步给兄弟窗口都会把它当成当前文档。
+
+差异分两层：`changes.rs` 按块做 LCS，回答「这一版哪些块是新加的、哪些被改写」，用来给正文上色；`diff.rs` 按行做 LCS，只用来算抽屉每行的 `+N 行 −M 行`。规则见 FORMAT.md。
 
 Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机编辑后检查：
 
@@ -100,9 +108,19 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 | `lang.rs` | 代码语言表 |
 | `palette.rs` | 文字色、背景色、高亮块色板（RGBA，不依赖 GPUI；`theme.rs` 转成 GPUI 颜色） |
 | `time.rs` | 日期换算、本地时区、当前时间 |
+| `whiteboard.rs` | 画板 block（`BlockKind::Board`）与独立 `.excalidraw` 文件的读写、SVG、搜索文字 |
+| `board/` 模型 | 按 Excalidraw 源码移植（docs/design/whiteboard-excalidraw.md）：`types` `new_element` `mutate` `scene` `fractional_index` `app_state` `consts` `random` `color` `utils`；读写 `restore` `json` `encode` `clipboard` `transform` |
+| `board/` 几何 | `math` `bounds` `collision` `deconstruct` `shape` `hachure` `freehand` `handles` `size_helpers` `viewport` |
+| `board/` 编辑算法 | `drag` `resize` `selection` `groups` `zindex` `duplicate` `align` `snapping` `lasso` `eraser` `frame` `crop` `image` `sticky` `flowchart` |
+| `board/` 线条与文字 | `linear` `binding` `elbow` `heading` `arrow_text`；`text` `text_wrapping` `text_measure` `text_edit` `list_marker` |
+| `board/` 撤销与 action | `history`（store + delta + history）；`actions.rs` + `actions/`（上游每个 action 一个函数） |
+| `board/` 输出 | `display`（显示列表，各后端共用）、`export_svg` |
 | `editor/core.rs` | 编辑内核 |
 | `editor/table_ops.rs` | 表格操作和单元格选区（`CellSel`） |
 | `editor/fuzz_tests.rs` | 随机编辑 fuzzer |
+| `versions.rs` | 正文版本快照：目录即索引、节流、配额、回收站联动 |
+| `diff.rs` | 版本间的按行 LCS 差异（无第三方依赖） |
+| `changes.rs` | 版本间的块级 LCS：哪些块是新加的、哪些被改写，用来给快照上色 |
 
 应用顶层（`src/`）：
 
@@ -122,6 +140,11 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 | `highlight.rs` | 代码高亮 |
 | `assets.rs` | 编进二进制的图标、字体、封面图库 |
 | `devtools.rs` | 脚本驱动，只在 `--features devtools` 构建里编入（见 tools/harness/README.md） |
+| `history.rs` | 版本历史抽屉：按天分组的列表、正文就地只读预览、显示改动、命名版本、恢复 / 另存 / 删除 |
+| `board/` 视图 | 画板 `BoardView`（打开时取代文档占满笔记区）（`mod.rs`：场景、store、提交循环）、指针分发 `canvas.rs`、快捷键 `keys.rs`、action 执行与剪贴板 `run.rs` / `action.rs`、文字编辑框 `text_editor.rs`、分区改名 `frame_name.rs`；文档里的缩略图和进出在 `editor/board.rs` |
+| `board/tools/` | 工具状态机：`selection`（拖动、手柄、框选）`shape` `linear` `freedraw` `text` `eraser` `lasso` `image` `crop` `flowchart` |
+| `board/` 渲染 | GPUI 后端 `render.rs` + `render_geom.rs`（CPU 裁剪与图片重采样）、macOS 的 vello_cpu 后端 `render_vello.rs`、交互层 `overlay.rs`（选框、手柄、吸附线） |
+| `board/chrome/` | 工具栏、属性面板、色板、右键菜单、缩放控件、快捷键帮助 |
 
 编辑器（`src/editor/`）：
 
@@ -142,7 +165,9 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 
 ## 界面语言
 
-界面支持简体中文与英文，偏好保存在 `Preferences::english`。静态文案使用 `settings::text` / `label` 的统一映射，成对文案使用 `settings::tr`，带参数的文案使用 `localized_format!`。菜单表保留稳定的原始标签，在显示时翻译；搜索同时匹配英文标签与原有关键词。输入框保留原始 placeholder，在渲染时翻译，切换语言时刷新所有窗口。
+界面支持简体中文、英文、日文、韩文、西班牙文、法文与阿拉伯文（`settings::Lang`），偏好保存在 `Preferences::language`；旧文件没有这个字段时由 `Preferences::english` 决定，`english` 仍然写出，让旧版本把其他语言显示成英文。静态文案使用 `settings::text` / `label` 的统一映射，成对文案使用 `settings::tr`，带参数的文案使用 `localized_format!`。菜单表保留稳定的原始标签，在显示时翻译；搜索同时匹配英文标签与原有关键词。输入框保留原始 placeholder，在渲染时翻译，切换语言时刷新所有窗口。阿拉伯文目前只翻译文案，界面仍按从左到右排布，没有做 RTL 镜像。
+
+中文原文是翻译键：日文、韩文、西班牙文、法文、阿拉伯文分别在 `src/l10n/ja.rs`、`ko.rs`、`es.rs`、`fr.rs`、`ar.rs` 里按中文查表，`tr`、`text` / `label` 和 `localized_format!` 都先查它，表里没有的显示英文，所以新增中文文案不需要同时写这些语言。`localized_format!` 的译文模板从格式化好的中文里读回参数再填入（`l10n::refill`），调用处不用改。不经过宏、要指定语言的地方（日期提醒的测试）用 `settings::localized`。`settings::english()` 的意思是“不是中文”。`python3 tools/l10n/keys.py --missing ja`（或 `ko`、`es`、`fr`、`ar`）列出该语言表还缺的键；`l10n` 的测试检查表里的键都还在源码中、模板占位符都来自中文原文。
 
 用户标题、正文、附件名和已保存的按钮文字不作为翻译键；只有空标题等界面默认值随语言变化。Core 的存储诊断在应用层用已知模板翻译，保留路径、文档 ID 和系统错误原文，文档引擎不依赖界面语言。语言回归检查覆盖界面翻译键、菜单表、日期提醒，以及用户内容和诊断参数的保留。
 

@@ -1,6 +1,6 @@
 [package]
 name = "quiet_md"
-version = "0.1.10"
+version = "0.1.12"
 edition = "2024"
 description = "A fast, local-first rich text notes app for macOS and Windows, drawn with GPUI and compatible with Feishu DocxXML"
 license = "MIT"
@@ -38,9 +38,20 @@ regex = "1"
 html5ever = "0.27"
 markup5ever_rcdom = "0.3"
 base64 = "0.22"
+# the board's 复制为 PNG rasterizes its SVG (the same resvg GPUI draws SVGs with)
+resvg = { version = "0.45", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
+# the board's Xiaolai font is stored deflated (src/board/fonts.rs)
+miniz_oxide = "0.9"
 minisign-verify = "0.3.0"
 log = "0.4"
 sys-locale = "0.3.2"
+jpeg-decoder = { version = "0.3", default-features = false }
+png = "0.18"
+icu_plurals = "2.4.0"
+icu_locale_core = "2.4.0"
+# 画板's CPU renderer above a scene size (src/board/render_vello.rs), on every
+# platform; its frames are shown with GPUI's `Window::paint_pixels`.
+vello_cpu = { version = "=0.3.0", default-features = false, features = ["std", "u8_pipeline", "multithreading"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24"
@@ -61,6 +72,20 @@ windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gd
 gpui = { path = "vendor/gpui" }
 taffy = { path = "vendor/taffy" }
 xattr = { path = "vendor/xattr" }
+
+# Shipped packages (scripts/release.sh and the other packaging scripts) build
+# with `--profile dist` into target/dist: whole-program LTO and no symbol table,
+# a third smaller than `release`. `release` stays the quick everyday build that
+# tests, the harness and the preview use. Line tables go to a separate file
+# (quiet_md.dSYM, .pdb, .dwp) that release.sh keeps beside the package, so
+# the raw addresses a panic logs can still be resolved (src/logging.rs).
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+debug = "line-tables-only"
+split-debuginfo = "packed"
 
 # `objc`'s msg_send! checks `feature = "cargo-clippy"`, which rustc no longer
 # knows about.
