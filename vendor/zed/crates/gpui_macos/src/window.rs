@@ -4088,7 +4088,9 @@ unsafe fn remove_layer_background(layer: *mut AnyObject) {
 
         let class_name: *mut AnyObject = msg_send![layer, className];
         if msg_send![class_name, isEqualToString: ns_string("CAChameleonLayer")] {
-            // Remove the desktop tinting effect.
+            // Remove the desktop tinting effect. quiet.md: zero opacity, not hidden: AppKit
+            // unhides the layer when it resamples the desktop, so hiding it made the tint flicker.
+            let _: () = msg_send![layer, setOpacity: 0f32];
             let _: () = msg_send![layer, setHidden: Bool::YES];
             return;
         }
