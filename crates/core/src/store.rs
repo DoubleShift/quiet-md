@@ -1661,19 +1661,7 @@ impl Store {
             }
             new_rel.insert(id.clone(), to.clone());
         }
-        // Documents whose links may change: the moved ones (links out of
-        // them are relative to where they are) and those mentioning one.
-        let affected: HashSet<&str> = new_rel.keys().map(String::as_str).collect();
-        let mut docs = vec![];
-        for (k, m) in &self.index {
-            if m.folder.is_some() || m.local() || m.named_by_file() { continue; }
-            let mentions = self.parsed.get(k).is_none_or(|p| p.2.links.iter().any(|l| affected.contains(l.target.as_str())));
-            if !affected.contains(k.as_str()) && !mentions { continue; }
-            let Ok(text) = crate::vfs::read_to_string(self.path(k)) else { continue };
-            if !text.contains("type=\"doc\"") { continue; }
-            let Ok(doc) = self.parse_doc(k, &text) else { continue };
-            docs.push((k.clone(), text, doc));
-        }
+        let docs = self.linking(&new_rel.keys().map(String::as_str).collect());
         let mut done: Vec<(PathBuf, PathBuf)> = vec![];
         for (id, to) in moves {
             let from = self.abs(&self.index[id].rel);
@@ -1697,6 +1685,29 @@ impl Store {
         self.foreign = std::mem::take(&mut self.foreign).into_iter()
             .map(|(k, a)| (dirs.iter().find_map(|(p, to)| k.strip_prefix(p.as_str()).map(|rest| format!("{to}/{rest}"))).unwrap_or(k), a)).collect();
         derive_tree(&mut self.index);
+        self.relink(docs);
+        self.save_index()
+    }
+
+    /// Documents whose links may change when `affected` move: the moved ones
+    /// (links out of them are relative to where they are) and those
+    /// mentioning one, read while the paths are still the old ones.
+    fn linking(&self, affected: &HashSet<&str>) -> Vec<(String, String, Document)> {
+        let mut docs = vec![];
+        for (k, m) in &self.index {
+            if m.folder.is_some() || m.local() || m.named_by_file() { continue; }
+            let mentions = self.parsed.get(k).is_none_or(|p| p.2.links.iter().any(|l| affected.contains(l.target.as_str())));
+            if !affected.contains(k.as_str()) && !mentions { continue; }
+            let Ok(text) = crate::vfs::read_to_string(self.path(k)) else { continue };
+            if !text.contains("type=\"doc\"") { continue; }
+            let Ok(doc) = self.parse_doc(k, &text) else { continue };
+            docs.push((k.clone(), text, doc));
+        }
+        docs
+    }
+
+    /// Write `linking`'s documents back with their links to the new paths.
+    fn relink(&mut self, docs: Vec<(String, String, Document)>) {
         for (k, text, doc) in docs {
             let out = self.serialize_doc(&k, &doc, None);
             if out == text { continue; }
@@ -1708,7 +1719,6 @@ impl Store {
                 Err(e) => self.warnings.push(format!("未能更新文档中的链接（{}）：{e}", self.index[&k].rel)),
             }
         }
-        self.save_index()
     }
 
     /// A title change renames the file (and keeps the links to it); outside
@@ -2749,9 +2759,13 @@ impl Store {
         let stem = stem_of(base_name(&m.rel)).to_string();
         let name = self.free_name(&dir, &stem, Some(DocKind::Doc.ext(markdown)), None);
         anyhow::ensure!(base_name(&dir) != stem || stem_of(&name) == stem, "文件夹里已有同名文件：{stem}.{}", DocKind::Doc.ext(markdown));
+        // Mentions of it name its file: they follow it to the new one.
+        let mut docs = self.linking(&HashSet::from([id]));
+        docs.retain(|(k, ..)| k != id);
         // The old file, under an id of its own, for the 回收站.
         let old = uuid::Uuid::new_v4().to_string();
-        self.index.insert(old.clone(), m.clone());
+        // Its 收藏 and 置顶 stay with the converted page, not with a copy restored later.
+        self.index.insert(old.clone(), Meta { pinned: false, starred: 0, ..m.clone() });
         let e = self.index.get_mut(id).unwrap();
         e.rel = join_rel(&dir, &name);
         e.modified = now();
@@ -2763,6 +2777,7 @@ impl Store {
             return Err(e);
         }
         self.loaded.borrow_mut().remove(id);
+        self.relink(docs);
         let limit = self.settings().history_limit();
         if let Err(e) = crate::versions::snapshot(&self.history_base(), id, if m.markdown { "md" } else { "xml" }, &text, crate::time::now_ms(), limit, true) {
             self.warnings.push(format!("保存版本历史失败：{e}"));
@@ -3143,8 +3158,13 @@ mod tests {
         d.blocks = vec![crate::model::Block::text("正文 one")];
         let id = s.create_from_in(&d, Some(&work)).unwrap();
         s.set_starred(&id, true).unwrap();
+        let mention = s.create_from(&linking("乙", &[(&id, "周报")])).unwrap();
+        s.list();
         s.convert(&id, true).unwrap();
         assert!(lib.0.join("工作/周报.md").fs_is_file() && !lib.0.join("工作/周报.xml").fs_exists());
+        // Mentions of it follow it to the new file.
+        assert!(crate::vfs::read_to_string(s.abs("乙.xml")).unwrap().contains("href=\"工作/周报.md\""));
+        assert!(s.list().into_iter().find(|e| e.id == mention).unwrap().links.iter().any(|l| l.target == id));
         assert_eq!(crate::vfs::read_to_string(lib.0.join("工作/周报.md")).unwrap(), "正文 one\n");
         let e = s.list().into_iter().find(|e| e.id == id).unwrap();
         assert!(e.meta.markdown && e.meta.starred > 0);
