@@ -1114,4 +1114,7 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("其他语言和符号（{}）", "Autres écritures et symboles ({})"),
     ("本文标题", "Titres de ce document"),
     ("找不到这个标题", "Titre introuvable"),
+    ("区分大小写", "Respecter la casse"),
+    ("全词匹配", "Mot entier"),
+    ("只搜标题", "Titres uniquement"),
 ];

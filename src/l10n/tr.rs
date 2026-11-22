@@ -1082,4 +1082,7 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("其他语言和符号（{}）", "Diğer yazılar ve simgeler ({})"),
     ("本文标题", "Bu belgedeki başlıklar"),
     ("找不到这个标题", "Başlık bulunamadı"),
+    ("区分大小写", "Büyük/küçük harf duyarlı"),
+    ("全词匹配", "Tam sözcük"),
+    ("只搜标题", "Yalnızca başlıklar"),
 ];

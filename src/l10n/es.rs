@@ -1029,4 +1029,7 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("其他语言和符号（{}）", "Otras escrituras y símbolos ({})"),
     ("本文标题", "Encabezados de este documento"),
     ("找不到这个标题", "No se encuentra el encabezado"),
+    ("区分大小写", "Coincidir mayúsculas y minúsculas"),
+    ("全词匹配", "Solo palabras completas"),
+    ("只搜标题", "Solo títulos"),
 ];
