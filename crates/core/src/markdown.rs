@@ -911,9 +911,108 @@ fn inline(t: &RichText, files: &mut impl FnMut(&FileBlock) -> Option<String>) ->
     out.replace('\n', "<br>")
 }
 
+/// What a document holds that a Markdown file of it (`write_file`, read back
+/// by `parse_file`) does not: 转换为 Markdown lists these before going ahead.
+/// Measured on what the two actually do (see the test), leaving aside what
+/// is not the writer's formatting: fold state, column widths (fitted to the
+/// text on reading), empty paragraphs and whitespace.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum Loss { IconCover, Colors, Underline, LineBreaks, Align, Indent, HeadingNumbers, DeepHeadings, CodeOptions, Callout, Grid, Table, ImageSize, Files, Objects, Board, DataTable, Countdown, SubPages, Unknown,
+    /// The other way: a Markdown file's front matter, which a document has no place for.
+    FrontMatter }
+
+pub fn losses(doc: &Document) -> Vec<Loss> {
+    let mut out = std::collections::BTreeSet::new();
+    if doc.icon.is_some() || doc.cover.is_some() { out.insert(Loss::IconCover); }
+    lost_in(&doc.blocks, false, &mut out);
+    out.into_iter().collect()
+}
+
+fn lost_in(bs: &[Block], cell: bool, out: &mut std::collections::BTreeSet<Loss>) {
+    for b in bs {
+        let mut add = |l| { out.insert(l); };
+        if b.bg.is_some() { add(Loss::Colors); }
+        // An image reads back centred; table cells take their column's alignment.
+        let plain_align = if matches!(b.kind, BlockKind::Image { .. }) { Align::Center } else { Align::Left };
+        if !cell && b.align != plain_align { add(Loss::Align); }
+        match &b.kind {
+            BlockKind::Text if !b.children.is_empty() => add(Loss::Indent),
+            BlockKind::Heading { level, seq_auto } => {
+                if *seq_auto { add(Loss::HeadingNumbers); }
+                if *level > 6 { add(Loss::DeepHeadings); }
+                if !b.children.is_empty() { add(Loss::Indent); }
+            }
+            BlockKind::Code { caption, wrap, .. } if caption.is_some() || *wrap => add(Loss::CodeOptions),
+            BlockKind::Callout { .. } => add(Loss::Callout),
+            BlockKind::Grid | BlockKind::Column { .. } => add(Loss::Grid),
+            BlockKind::Table(t) => {
+                let rich = |c: &TableCell| c.colspan > 1 || c.rowspan > 1 || c.bg.is_some() || c.valign.is_some()
+                    || c.blocks.iter().filter(|b| !b.text.text.trim().is_empty() || !matches!(b.kind, BlockKind::Text)).count() > 1
+                    || c.blocks.iter().any(|b| !matches!(b.kind, BlockKind::Text) || !b.children.is_empty());
+                if t.header_rows != 1 || t.header_col || t.rows.iter().flatten().any(rich) { add(Loss::Table); }
+                for c in t.rows.iter().flatten() { lost_in(&c.blocks, true, out); }
+            }
+            BlockKind::Image { width, height, crop, .. } if width.is_some() || height.is_some() || crop.is_some() => add(Loss::ImageSize),
+            BlockKind::File(_) => add(Loss::Files),
+            BlockKind::Board(_) => add(Loss::Board),
+            BlockKind::DataTable(_) => add(Loss::DataTable),
+            BlockKind::Countdown(_) => add(Loss::Countdown),
+            BlockKind::SubPageList => add(Loss::SubPages),
+            BlockKind::Raw { .. } => add(Loss::Unknown),
+            _ => {}
+        }
+        if !matches!(b.kind, BlockKind::Code { .. }) {
+            if b.text.text.contains('\n') { out.insert(Loss::LineBreaks); }
+            for (_, m) in b.text.spans() {
+                if m.text_color.is_some() || m.bg_color.is_some() { out.insert(Loss::Colors); }
+                if m.underline { out.insert(Loss::Underline); }
+                match m.inline.as_ref().map(|i| &i.kind) {
+                    None | Some(InlineKind::Equation(_)) => {}
+                    Some(InlineKind::File(_)) => { out.insert(Loss::Files); }
+                    Some(_) => { out.insert(Loss::Objects); }
+                }
+            }
+        }
+        lost_in(&b.children, cell, out);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `losses` names something exactly when a Markdown file of the block
+    /// reads back as something else (fold state, column widths, empty
+    /// paragraphs and spacing aside), for every block in the fixture and
+    /// for the inline objects and plain blocks it lacks.
+    #[test]
+    fn losses_are_what_markdown_drops() {
+        let fixture = crate::vfs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/all-blocks.xml")).unwrap();
+        let extra = "<title>t</title>\n<table>\n  <thead>\n    <tr><th><p>A</p></th><th><p>B</p></th></tr>\n  </thead>\n  <tbody>\n    <tr><td><p>1 <b>x</b></p></td><td><p>2 <latex>y</latex></p></td></tr>\n  </tbody>\n</table>\n\
+            <img src=\"https://x/y.png\" caption=\"c\"/>\n<img src=\"https://x/y.png\" align=\"left\"/>\n<img src=\"https://x/y.png\" width=\"20\"/>\n<p>a <a href=\"https://q.com\">q</a> <latex>a\\b</latex> <code>c</code></p>\n<p>a<u>u</u></p>\n<p><span text-color=\"red\">r</span></p>\n\
+            <p><source path=\".assets/a.pdf\" name=\"a.pdf\"/></p>\n<figure><source path=\".assets/a.pdf\" name=\"a.pdf\"/></figure>\n<p>x<time date=\"1700000000000\"/></p>\n<p>x<cite type=\"user\" user-id=\"ou_1\"/></p>\n<p>x<button action=\"OpenLink\" href=\"https://a.b\">去</button></p>\n\
+            <pre lang=\"go\" wrap=\"true\"><code>x</code></pre>\n<blockquote>\n  <p>q<span background-color=\"light-yellow\">h</span></p>\n</blockquote>\n<ul>\n  <li>a\n    <p>b\n      <p>c</p>\n    </p>\n  </li>\n</ul>\n<countdown duration=\"60\" start-time=\"0\"/>\n<sub-page-list/>\n<p>纯文本 <b>粗</b> <em>斜</em> <del>删</del></p>\n";
+        let blocks: Vec<Block> = [fixture.as_str(), extra].iter().flat_map(|x| crate::docxml::parse(x).unwrap().blocks).collect();
+        let norm = |d: &Document| {
+            let mut x = crate::docxml::serialize(d);
+            for (re, to) in [(r"<p>[ \t]+", "<p>"), (r"[ \t]+</p>", "</p>"), (r"(?m)^\s*<p></p>\n", ""), (r" href=", " src="), (r#" folded="true""#, ""), (r"<colgroup>.*?</colgroup>\n\s*", "")] {
+                x = regex::Regex::new(re).unwrap().replace_all(&x, to).into_owned();
+            }
+            x
+        };
+        let mut seen = std::collections::BTreeSet::new();
+        for b in blocks {
+            let d = Document { title: RichText::plain("t"), icon: None, cover: None, blocks: vec![b] };
+            let back = parse_file(&write_file(&d, "", None), "t", None);
+            let lost = losses(&d);
+            assert_eq!(norm(&d) != norm(&back), !lost.is_empty(), "{lost:?}\n{}\nread back as\n{}", norm(&d), norm(&back));
+            seen.extend(lost);
+        }
+        // Every kind of loss is met above, except the document's icon and cover.
+        assert_eq!(seen.len(), Loss::Unknown as usize, "{seen:?}");
+        let doc = crate::docxml::parse(&fixture).unwrap();
+        assert!(losses(&doc).contains(&Loss::IconCover));
+    }
 
     #[test]
     fn inline_attachments_export_links_and_copies_including_tables() {
