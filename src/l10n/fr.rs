@@ -1112,4 +1112,6 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("部分中文", "Chinois partiel"),
     ("下载后可预览", "Aperçu après téléchargement"),
     ("其他语言和符号（{}）", "Autres écritures et symboles ({})"),
+    ("本文标题", "Titres de ce document"),
+    ("找不到这个标题", "Titre introuvable"),
 ];

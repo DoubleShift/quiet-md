@@ -1080,4 +1080,6 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("部分中文", "Kısmi Çince"),
     ("下载后可预览", "İndirdikten sonra önizleme"),
     ("其他语言和符号（{}）", "Diğer yazılar ve simgeler ({})"),
+    ("本文标题", "Bu belgedeki başlıklar"),
+    ("找不到这个标题", "Başlık bulunamadı"),
 ];
