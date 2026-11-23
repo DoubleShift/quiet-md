@@ -48,7 +48,8 @@ shadcn Neutral 主题的语义色，浅色、深色各一套，用 `theme::dark(
 | `popover` / `card` | #ffffff | #262626 | 菜单、弹窗 |
 | `primary` | #171717 | #e5e5e5 | 主按钮、勾选的复选框、开着的开关 |
 | `muted` | #f5f5f5 | #262626 | 选中的行、列、格子 |
-| `accent` | #f5f5f5 | #404040 | 悬停的菜单项 |
+| `accent` | #f5f5f5 | #404040 | 亮着的菜单项、在用的文字按钮 |
+| `accent_hover` | #f5f5f5 | 白 6% | 悬停的文字按钮（比 `accent` 低一档，深色下和「在用」分得开） |
 | `border` | #e5e5e5 | 白 10% | 表格线、分隔线 |
 | `input` | #e5e5e5 | 白 15% | 输入框、复选框的边 |
 | `ring` | #a1a1a1 | #737373 | 焦点环、选区框 |
@@ -125,7 +126,7 @@ shadcn 的表头、标签、按钮是 500。GPUI 用系统字体时，500 和 40
 |---|---|---|
 | `primary_btn` | Button default | `primary` 底，悬停 `primary/80`，36 高、圆角 8 |
 | `plain_btn` | Button outline | `border` 细边加 `xs`；深色 `input` 边、`input/30` 底 |
-| `ghost_btn` / `icon_btn` / `tool_btn` | Button ghost | 无底，悬停 `accent`；工具栏 28 高 |
+| `ghost_btn` / `icon_btn` / `tool_btn` | Button ghost | 无底，悬停 `accent_hover`，在用 `accent`；工具栏 28 高 |
 | `danger_btn` | Button destructive | `destructive` 的浅底和字 |
 | `field_box` / `input_box` | Input | `input` 细边，36 / 32 高，圆角 8；输入中是 `ring` 边加 3pt 的 `ring/50` 光晕 |
 | `area_box` | Textarea | 圆角 8，内边距 10 |

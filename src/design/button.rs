@@ -19,7 +19,8 @@ pub enum ButtonVariant {
     Outline,
     /// `secondary`, a shade deeper under the pointer.
     Secondary,
-    /// Text only; `accent` under the pointer (on a popover too, where `muted` would not show).
+    /// Text only; `accent` when on (on a popover too, where `muted` would not show), `accent_hover`
+    /// under the pointer.
     Ghost,
     /// `destructive` text on `destructive/10`.
     Destructive,
@@ -105,8 +106,10 @@ impl RenderOnce for Button {
                     .bg(if selected { color::muted() } else if dark { color::field() } else { color::background() }).shadow(shadow::xs())
                     .when(!disabled, |d| d.hover(|s| s.bg(if dark { color::field_hover() } else { color::muted() }))),
                 ButtonVariant::Secondary => d.bg(color::secondary()).when(!disabled, |d| d.hover(|s| s.bg(color::secondary_hover()))),
-                // on, like shadcn's `Toggle` (`data-[state=on]:bg-accent`): `muted` would vanish on a dark popover
-                ButtonVariant::Ghost => d.when(selected, |d| d.bg(color::accent())).when(!disabled, |d| d.hover(|s| s.bg(color::accent()))),
+                // on, like shadcn's `Toggle` (`data-[state=on]:bg-accent`): `muted` would vanish on a dark popover;
+                // under the pointer a step lighter (`accent_hover`), so the two tell apart in the dark
+                ButtonVariant::Ghost => d.when(selected, |d| d.bg(color::accent()))
+                    .when(!disabled, |d| d.hover(move |s| s.bg(if selected { color::accent() } else { color::accent_hover() }))),
                 ButtonVariant::Destructive => d.bg(color::destructive_soft()).when(!disabled, |d| d.hover(|s| s.bg(color::destructive_hover()))),
             };
             d.when_some(icon_l, |d, n| d.child(icon(&n, sz.icon(), glyph)))

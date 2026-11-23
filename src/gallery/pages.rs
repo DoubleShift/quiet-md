@@ -82,7 +82,9 @@ pub fn buttons(g: &mut Gallery, _w: &mut Window, cx: &mut Cx) -> Div {
             .child(item("带下拉", Button::outline("bdd").label("排序").icon_end("chevron-down").on_click(says(cx, "排序")))));
     let still = row()
         .child(item("悬停（主要 / 描边 / 文字 / 图标）", div().flex().gap(px(8.)).child(Button::primary("bh0").label("确定").bg(color::primary_hover()))
-            .child(Button::outline("bh1").label("取消").bg(color::muted())).child(Button::ghost("bh2").icon("plus").label("添加").bg(color::accent())).child(Button::ghost("bh3").icon("ellipsis").bg(color::accent()))))
+            .child(Button::outline("bh1").label("取消").bg(color::muted())).child(Button::ghost("bh2").icon("plus").label("添加").bg(color::accent_hover())).child(Button::ghost("bh3").icon("ellipsis").bg(color::accent_hover()))))
+        .child(item("文字按钮 · 悬停 / 在用", div().flex().gap(px(8.)).child(Button::ghost("bh4").icon("view-settings").label("字段配置").bg(color::accent_hover()))
+            .child(Button::ghost("bh5").icon("view-settings").label("字段配置").selected(true))))
         .child(item("不可用", div().flex().gap(px(8.)).child(Button::primary("bx0").label("确定").disabled(true)).child(Button::outline("bx1").label("取消").disabled(true))))
         .child(item("工具按钮 · 在用", tool_btn("s-t", "sort-down", 2)));
     two(live, still)

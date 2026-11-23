@@ -100,8 +100,11 @@ pub mod color {
     pub fn muted_foreground() -> Hsla { pick(N500, N400) }
     /// Placeholders: shadcn's `muted-foreground`.
     pub fn placeholder() -> Hsla { muted_foreground() }
-    /// Under the pointer.
+    /// Under the pointer; a ghost button that is on.
     pub fn accent() -> Hsla { pick(N100, N700) }
+    /// A ghost button under the pointer, a step under `accent` so on and hovered tell apart in the
+    /// dark (white 6%, ours: on a #262626 popover `accent` is #404040 for both); `accent` in the light.
+    pub fn accent_hover() -> Hsla { if dark() { alpha(hex(N0), 0.06) } else { accent() } }
     pub fn accent_foreground() -> Hsla { pick(N900, N50) }
     /// oklch(0.577 0.245 27.325) / oklch(0.704 0.191 22.216).
     pub fn destructive() -> Hsla { pick(0xe7000b, 0xff6467) }
