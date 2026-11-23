@@ -330,18 +330,22 @@ impl Workspace {
         out
     }
 
-    /// 为当前窗口选择合适页宽: 默认 / 较宽 / 全宽 cards.
+    /// 为当前窗口选择合适页宽: 默认 / 较宽 / 全宽 cards. The panel takes its width from its
+    /// contents (the caption, or three cards each as wide as its longest label) so no
+    /// language wraps; the cards share it equally.
     fn width_panel(&self, current: PageWidth, cx: &mut Context<Self>) -> Popover {
-        // A choice card: `ring` round the picked one, `muted` under the pointer.
+        use crate::design::{color, geo};
+        // A choice card: `primary` edge round the picked one, `accent` under the pointer.
         let card = |id: &'static str, label: &'static str, w: PageWidth, line: f32| {
-            use crate::design::{color, geo};
             let on = w == current;
             let line_color = if on { color::foreground() } else { color::muted_foreground() };
             div()
                 .id(id)
-                .w(px(56.))
+                .flex_1()
+                .min_w(px(64.))
                 .h(px(66.))
-                .p(px(4.))
+                .px(px(8.))
+                .pt(px(4.))
                 .flex()
                 .flex_col()
                 .items_center()
@@ -367,6 +371,7 @@ impl Workspace {
                 .child(
                     div()
                         .mt(px(6.))
+                        .whitespace_nowrap()
                         .text_size(px(geo().text_xs))
                         .line_height(px(18.))
                         .text_color(if on { color::foreground() } else { color::muted_foreground() })
@@ -376,25 +381,24 @@ impl Workspace {
         };
         Popover::new("dm-width-panel")
             .relative()
-            .w(px(238.))
-            .h(px(136.))
+            .min_w(px(238.))
+            .p(px(16.))
+            .flex()
+            .flex_col()
+            .gap(px(12.))
             .child(
                 div()
-                    .absolute()
-                    .left(px(19.))
-                    .top(px(14.))
-                    .text_size(px(crate::design::geo().text_xs))
+                    .whitespace_nowrap()
+                    .text_size(px(geo().text_xs))
                     .line_height(px(18.))
-                    .text_color(crate::design::color::muted_foreground())
+                    .text_color(color::muted_foreground())
                     .child(crate::settings::text("为当前窗口选择合适页宽")),
             )
             .child(
                 div()
-                    .absolute()
-                    .left(px(19.))
-                    .top(px(47.))
+                    .w_full()
                     .flex()
-                    .gap(px(16.))
+                    .gap(px(12.))
                     .child(card("pw-standard", crate::settings::text("默认"), PageWidth::Standard, 20.))
                     .child(card("pw-wide", crate::settings::text("较宽"), PageWidth::Wide, 28.))
                     .child(card("pw-full", crate::settings::text("全宽"), PageWidth::Full, 38.)),
