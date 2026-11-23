@@ -150,7 +150,7 @@ pub mod chip {
     pub const ORANGE: Chip = Chip(0xffd6a7, 0x9f2d00, 0x441306, 0.6, 0xff6900);
     pub const ROSE: Chip = Chip(0xffccd3, 0xa50036, 0x4d0218, 0.6, 0xff2056);
     pub const PINK: Chip = Chip(0xfccee8, 0xa3004c, 0x510424, 0.6, 0xfb64b6);
-    pub const PURPLE: Chip = Chip(0xf3e8ff, 0x9810fa, 0x59168b, 0.5, 0xdab2ff);
+    pub const PURPLE: Chip = Chip(0xe9d4ff, 0x6e11b0, 0x3c0366, 0.6, 0xc27aff);
     pub const CYAN: Chip = Chip(0xa2f4fd, 0x005f78, 0x053345, 0.6, 0x00d3f2);
     pub const SKY: Chip = Chip(0xb8e6fe, 0x00598a, 0x052f4a, 0.6, 0x00bcff);
     pub const ALL: [&Chip; 9] = [&BLUE, &LIME, &YELLOW, &ORANGE, &ROSE, &PINK, &PURPLE, &CYAN, &SKY];
