@@ -59,7 +59,8 @@
 | `Badge` | `Badge::new(s)`（灰）、`Badge::chip(s, i)`（第 i 种选项色，9 为灰）、`Badge::colored(s, (底, 字))` | — | `.closable()`（末尾 ×） | `Styled` |
 | `Kbd` | `Kbd::new(s)` | — | — | — |
 | `KbdGroup` | `KbdGroup::new(strokes)`（每一下按键是一组键名，如 `shortcuts::strokes(key)`） | — | — | — |
-| `Dialog` | `Dialog::new(id)` | — | `.title(s)`、`.description(s)`、`.footer(el)`；`.child()` 是正文；`.closable(on_close)`（右上角 ×） | 同 `Button` |
+| `Dialog` | `Dialog::new(id)` | — | `.title(s)`、`.description(s)`、`.footer(el)`；`.child()` 是正文；`.closable(on_close)`（右上角 ×）；`.keys(&DialogFocus, esc, enter)`（接管键盘：Esc 取消，↩ 执行默认按钮） | 同 `Button` |
+| `DialogFocus` | `DialogFocus::new(cx)`，存在持有对话框状态的视图里 | — | 每次绘制时 `.sync(open, window, cx)`：打开时把焦点从原来的地方（多半是编辑器）拿到对话框，关上时还回去 | — |
 | `scrim()` | 函数，返回铺满父元素、居中的遮罩 `Div` | — | — | — |
 | `Card` | `Card::new(id)` | — | `.child()`（默认一列） | 同 `Button`，另有 `ParentElement` |
 | `Item` | `Item::new(title)` | — | `.description(Option<s>)`；`.child()` 是右边的控件 | `Styled`、`ParentElement` |
@@ -99,6 +100,10 @@
 - 指针在不可用的行上时谁都不亮。不在任何 `Popover` 里的 `MenuItem`（对话框里嵌的列表）照旧：悬停或 `selected` 就亮。
 - 调用方不用改：原来写 `.selected(true)` 的地方照写。
 
+### 对话框的键盘
+
+编辑器有焦点时，GPUI 先派发编辑器自己的 Esc、↩ 绑定，窗口上的按键处理轮不到。所以对话框打开时用 `DialogFocus` 把焦点移到对话框上（key context `Dialog`），背后的编辑器收不到按键（shadcn 的焦点圈定）；关上时还给原来的焦点（如果期间别的地方拿走了焦点，就不还）。
+
 ### 用法约定
 
 - 组件是 GPUI 的 `RenderOnce` 结构体。调用方照常链式调用 `.w()`、`.on_click()`、`.tip()`、`.when()`；渲染时组件把自己的样式垫在下面，调用方写的尺寸、颜色优先。
@@ -111,6 +116,7 @@
 ### 和设计系统文档的出入
 
 - 删掉了对比用的 affectUI 风格（`Look::Affect`、`QUIET_MD_LOOK`）：每个 token 和组件不再按风格分支。组件库面板的「浅深对照」用 `theme::with_dark` 把同一页按浅色、深色并排画。
+- 2026-11-23 打磨：新增 token `color::accent_hover`（ghost 按钮悬停，深色白 6%）；`Dialog::closable`、`Dialog::keys`、`DialogFocus`；组件库面板自己的外壳（左侧导航、顶部浅色 / 深色 / 浅深对照、点击提示）换成 `Button::ghost`、`Segmented`、`Toast`。
 - 新增 token：`button_sm_h`、`dialog_r`（R+4）、`dialog_pad` / `dialog_gap`（24，Vega 的 `p-6 gap-6`）、`shadow::sm()`（选中的分段）、`shadow::dialog()`、`color::secondary_hover`、`destructive_hover`、`disabled`、`overlay`、`background`；2026-11-22 全应用替换时又加了 `card_r`（R+4）、`toast_r` / `toast_px` / `toast_py`（Sonner：`rounded-lg`、p-4 左右、上下 12）、`tip_r` / `tip_px` / `tip_py`（tooltip：`rounded-md`、px-3 py-1.5）。
 - `MenuItem` 的文字统一用 `foreground`、图标 `muted-foreground`；危险项文字和图标都是 `destructive`，悬停 `destructive/10`。
 
@@ -131,4 +137,4 @@
 - **侧栏的「更新」药丸**：带下载进度的波浪填充。
 - **没有对应组件、各只有一两处的**：提醒和倒计时的小日历、表情格子、封面面板和查找框顶部带下划线的页签、引用列表的页签、颜色色块、尺寸选择器格子、倒计时的两张选项卡片。
 - **列表行**（侧栏树、主页列表、回收站、搜索结果、设置导航、版本历史行）：按约定保持列表行的样子，只把颜色换成 token。
-- **Esc 关不掉确认框**（原有问题，不是这次引入的）：编辑器有焦点时 GPUI 先派发编辑器的 Esc 绑定，`app.rs` 里 `capture_key_down` 的「Esc 取消确认框」轮不到。
+- **对话框的键盘**：确认框、导出 Markdown、文档信息已用 `DialogFocus`（Esc、↩ 不再落到编辑器上）。没套的：移动到（打开时焦点就在它的搜索框里，Esc 由搜索框收）、搜索（同样有自己的输入框）、强制更新（窗口在 capture 阶段吞掉所有按键）、倒计时（编辑器里，已有自己的 `CountdownDialog` 焦点）、数据表记录详情（有自己的头部和关闭逻辑，没动）。

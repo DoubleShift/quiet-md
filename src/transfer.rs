@@ -625,7 +625,11 @@ impl Workspace {
                     }
                 }))
         };
+        let ws = cx.entity().downgrade();
+        let ws2 = ws.clone();
         let dialog = Dialog::new("export-md")
+            .keys(&self.dialog_focus, move |_, cx| { let _ = ws.update(cx, |w, cx| { w.export_md = None; cx.notify(); }); },
+                Some(move |window: &mut Window, cx: &mut App| { let _ = ws2.update(cx, |w, cx| w.export_markdown(window, cx)); }))
             .relative()
             .w(px(720.))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

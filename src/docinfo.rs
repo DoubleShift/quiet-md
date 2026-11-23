@@ -137,7 +137,9 @@ impl Workspace {
             w.doc_info = None;
             cx.notify();
         });
+        let ws = cx.entity().downgrade();
         let modal = crate::design::Dialog::new("doc-info")
+            .keys(&self.dialog_focus, move |_, cx| { let _ = ws.update(cx, |w, cx| { w.doc_info = None; cx.notify(); }); }, None::<fn(&mut Window, &mut App)>)
             .w(px(840.))
             .h(px(562.))
             .p_0()

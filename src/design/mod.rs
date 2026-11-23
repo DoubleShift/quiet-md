@@ -34,7 +34,7 @@ pub use card::{Card, Item, Separator, Toast, ToastTone};
 #[allow(unused_imports)]
 pub use control::{Checkbox, Radio, Segment, Segmented, Switch};
 #[allow(unused_imports)]
-pub use dialog::{Dialog, scrim};
+pub use dialog::{Dialog, DialogFocus, scrim};
 #[allow(unused_imports)]
 pub use field::{Field, FieldSize, Label, Textarea};
 #[allow(unused_imports)]
