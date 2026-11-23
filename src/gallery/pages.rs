@@ -247,13 +247,24 @@ pub fn menus(g: &mut Gallery, w: &mut Window, cx: &mut Cx) -> Div {
         .child(item("「…」菜单", drop(g, ("more", 0), Button::ghost("more-b").icon("ellipsis"), more, cx)));
     let mut dropl = Popover::new("g-dl").menu().w(px(160.));
     for (i, s) in OPS.iter().enumerate() { dropl = dropl.child(list_row(("sdl", i)).selected(i == 4).child(div().flex_1().text_color(color::foreground()).child(s.to_string())).when(i == 2, |d| d.child(icon("check", 14., color::foreground())))); }
-    let doc_still = Popover::new("s-doc").menu().w(px(220.))
-        .child(MenuItem::new("sd1").icon("page-width").label("页面宽度").submenu(true).selected(true))
-        .child(MenuItem::new("sd2").icon("search").label("查找和替换").shortcut("⌘F"))
+    // a submenu that stays open: its row lit while the pointer is in it or on no row, out on a sibling
+    let sub_k = ("sub", 0);
+    let sub_open = g.is(sub_k);
+    let mut sub = Popover::new("s-sub").menu().w(px(160.));
+    for (i, s) in ["标准", "较宽", "全宽"].into_iter().enumerate() {
+        sub = sub.child(MenuItem::new(("sw", i)).label(s).checked(g.at(("width", 0)) == i).on_click(tap(cx, move |g, _, cx| { g.pick.insert(("width", 0), i); g.on.remove(&("sub", 0)); g.say(format!("页面宽度：{s}"), cx); })));
+    }
+    let doc_live = Popover::new("s-doc").menu().w(px(220.))
+        .child(MenuItem::new("sd1").icon("page-width").label("页面宽度").submenu(true).selected(sub_open)
+            .on_hover(cx.listener(move |g, on: &bool, _, cx| if *on && !g.is(sub_k) { g.on.insert(sub_k); cx.notify(); }))
+            .on_click(tap(cx, move |g, _, _| g.flip(sub_k)))
+            .when(sub_open, |d| d.child(div().absolute().left_full().top(px(-crate::design::menu::PAD)).child(deferred(anchored().snap_to_window_with_margin(px(8.)).child(div().pl(px(4.)).child(sub))).with_priority(1)))))
+        .child(MenuItem::new("sd2").icon("search").label("查找和替换").shortcut("⌘F").on_click(says(cx, "查找和替换")))
+        .child(MenuItem::new("sd5").icon("copy").label("创建副本").shortcut("⌘D").on_click(says(cx, "创建副本")))
         .child(MenuItem::new("sd7").icon("info").label("文档信息").disabled(true))
-        .child(MenuItem::new("sd8").icon("bin").label("删除").destructive(true));
-    let still = row().child(item("子菜单展开（第一项高亮）", doc_still)).child(item("字段菜单 · 第二项悬停", field_menu("sfm", Some(1), cx))).child(item("下拉选择 · 第五项悬停", dropl));
-    div().flex().flex_col().gap(px(32.)).child(group("可操作 · 应用", app)).child(group("可操作 · 数据表", table)).child(group("状态对照", still))
+        .child(MenuItem::new("sd8").icon("bin").label("删除").destructive(true).on_click(says(cx, "删除")));
+    let still = row().child(item("子菜单开着（悬停「页面宽度」打开，点一下收起）：指针在子菜单里或不在任何行上时父行亮着，移到兄弟行上父行熄灭", doc_live).max_w(px(300.))).child(item("字段菜单 · 第二项悬停", field_menu("sfm", Some(1), cx))).child(item("下拉选择 · 第五项悬停", dropl));
+    div().flex().flex_col().gap(px(32.)).child(group("可操作 · 应用", app)).child(group("可操作 · 数据表", table)).child(group("子菜单和状态对照", still))
 }
 
 // ---- 对话框 ----

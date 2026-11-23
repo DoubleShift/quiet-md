@@ -46,7 +46,7 @@
 |---|---|---|---|---|
 | `Button` | `Button::new(id, ButtonVariant)`，或 `primary / outline / secondary / ghost / destructive(id)` | `ButtonVariant::{Primary, Outline, Secondary, Ghost, Destructive}`；`.sized(ButtonSize::{Default 36, Sm 32, Tool 28, Xs 24})`（`ghost` 默认 `Tool`）；`.variant(v)` 换掉别处建好的按钮的变体 | `.label(s)`、`.icon(name)`（只有图标时是方形按钮）、`.icon_end(name)`、`.selected(bool)`（在用：`muted` 底；ghost 用 `accent`，同 shadcn 的 Toggle，深色弹窗上 `muted` 看不出）、`.disabled(bool)`（整体 50%）；`.child()` 加在图标和文字前面（要自定颜色的图标、记位置的 canvas） | `Styled`、`InteractiveElement`、`StatefulInteractiveElement`（`.on_click`）、`TipExt`（`.tip`）、`ParentElement` |
 | `Popover` | `Popover::new(id)` | `.menu()`（一列菜单项，上下 `PAD`）、`.padded()`（表单弹窗：内边距 16、间距 16） | 子元素随意（`ParentElement`） | 同上，另有 `.on_mouse_down_out` 等 |
-| `MenuItem` | `MenuItem::new(id)` | — | `.label(s)`、`.icon(name)`、`.leading(el)`、`.description(s)`（两行）、`.shortcut(s)`、`.checked(bool)`（单选标记，关时留位）、`.submenu(bool)`、`.inset()`、`.selected(bool)`（键盘或子菜单展开时的高亮）、`.destructive(bool)`、`.disabled(bool)`；`.child()` 加在文字后面 | 同 `Button` |
+| `MenuItem` | `MenuItem::new(id)` | — | `.label(s)`、`.icon(name)`、`.leading(el)`、`.description(s)`（两行）、`.shortcut(s)`、`.checked(bool)`（单选标记，关时留位）、`.submenu(bool)`、`.inset()`、`.selected(bool)`（键盘或子菜单展开时的高亮；同一菜单里只亮一行，见下面「菜单的高亮」）、`.destructive(bool)`、`.disabled(bool)`；`.child()` 加在文字后面 | 同 `Button` |
 | `MenuLabel` | `MenuLabel::new(s)` | — | — | `Styled` |
 | `MenuSeparator` | `MenuSeparator::new()` | — | — | — |
 | `Field` | `Field::new(id)`；`Field::select(id)`（带箭头）；`Field::select_value(id, s)`（小号、显示一个值） | `.sized(FieldSize::{Default 36, Sm 32})` | `.focused(bool)`（输入中 / 选择框展开，`.open()` 同义）、`.disabled(bool)`；`.child()` 放输入控件（`crate::input::TextField` 实体）或文字 | 同 `Button` |
@@ -88,6 +88,16 @@
 | `icon_btn(..).size(px(24.))` 这类写法 | 改成 `.sized(ButtonSize::Xs)`：`.size()` 是 GPUI 设宽高的方法 |
 | 其余（`primary_btn`、`plain_btn`、`ghost_btn`、`tool_btn`、`close_btn`、`menu_item`、`menu_row`、`list_row`、`menu_rule`、`menu_title`、`checkbox`、`switch`、`seg_track`、`segment`、`pick_box`、`select_box`、`field_label`、`panel_title`、`tag`、`link_chip`） | 名字和参数不变，返回值从 `Div` / `Stateful<Div>` 变成对应的 design 组件。链式调用照旧可用 |
 | `design::Look`、`with_look`、`set_look`、`affect()`、`color::text()` / `strong()` / `surface()` / `border_strong()` / `check_edge()`、`shadow::card()` | 随 affectUI 风格一起删掉；`text` 和 `strong` 改用 `color::foreground()` |
+
+### 菜单的高亮
+
+对齐 Radix：同一个菜单里任何时候最多亮一行。
+
+- `Popover` 就是一个菜单：它里面的 `MenuItem`（不算更里层的 `Popover` 里的）在 prepaint 时登记自己的位置和 `selected`，`Popover` 在 paint 前定出亮哪一行，行只在被选中时画 `accent` 底。状态按 `Popover` 的 id 存在 GPUI 的元素状态里，菜单关掉就丢掉。
+- 悬停和 `selected`（键盘、或子菜单开着）谁后变谁说了算：指针移到一行上、或在一行上移动，指针说了算；`selected` 换了一行，键盘说了算。指针离开所有行时回到 `selected` 的那一行。
+- 所以子菜单开着时，父行（`selected`）在指针移进子菜单（另一个 `Popover`）或不在任何行上时亮着；指针移到同一菜单的别的行上，父行就熄灭。
+- 指针在不可用的行上时谁都不亮。不在任何 `Popover` 里的 `MenuItem`（对话框里嵌的列表）照旧：悬停或 `selected` 就亮。
+- 调用方不用改：原来写 `.selected(true)` 的地方照写。
 
 ### 用法约定
 
