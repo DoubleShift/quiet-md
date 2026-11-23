@@ -3,7 +3,7 @@
 # No GPUI, no async runtime, so it builds and tests on its own.
 [package]
 name = "quiet_agent"
-version = "0.1.14"
+version.workspace = true
 edition = "2024"
 description = "Codex app-server client for Quiet.md's assistant"
 license = "MIT"
