@@ -1088,4 +1088,5 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("部分中文", "Kısmi Çince"),
     ("下载后可预览", "İndirdikten sonra önizleme"),
     ("其他语言和符号（{}）", "Diğer yazılar ve simgeler ({})"),
+    ("切换深色 / 浅色", "Karanlık modu aç / kapat"),
 ];

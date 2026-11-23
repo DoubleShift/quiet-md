@@ -1120,4 +1120,5 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("部分中文", "Chinois partiel"),
     ("下载后可预览", "Aperçu après téléchargement"),
     ("其他语言和符号（{}）", "Autres écritures et symboles ({})"),
+    ("切换深色 / 浅色", "Basculer le mode sombre"),
 ];

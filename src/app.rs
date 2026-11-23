@@ -25,7 +25,7 @@ const SAVE_DELAY: Duration = Duration::from_millis(500);
 const SAVE_MAX_DELAY: Duration = Duration::from_secs(2);
 
 actions!(workspace, [NewDoc, OpenFile, OpenFolder, ImportDoc, ImportFolder, ToggleSidebar, FocusSearch, FindInDoc, ReplaceInDoc, OpenSettings, OpenAbout, CheckForUpdates, GoHome, CloseWindow, Quit,
-    ReplayOnboarding, HideApp, HideOthers, ShowAll, Minimize, Zoom, ToggleFullScreen]);
+    ReplayOnboarding, HideApp, HideOthers, ShowAll, Minimize, Zoom, ToggleFullScreen, ToggleDarkMode]);
 
 /// The menu bar, in the interface language.
 pub fn set_menus(cx: &mut App) {
@@ -82,6 +82,16 @@ pub fn set_menus(cx: &mut App) {
             },
             disabled: false,
         },
+        // 显示 (View). Its name per language, not through `tr`: the key 显示 is the verb
+        // "show" in the tables (Mostrar, Afficher…); these are the system's View menus.
+        Menu {
+            name: {
+                use crate::settings::Lang as L;
+                match crate::settings::lang() { L::Zh => "显示", L::ZhTw => "顯示", L::En => "View", L::Ja => "表示", L::Ko => "보기", L::Fr => "Présentation", L::Es => "Visualización", L::Ar => "عرض", L::Tr => "Görüntü" }.into()
+            },
+            items: vec![MenuItem::action(tr("切换深色 / 浅色", "Toggle Dark Mode"), ToggleDarkMode)],
+            disabled: false,
+        },
         Menu {
             name: tr("窗口", "Window").into(),
             items: vec![
@@ -125,12 +135,17 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-h", HideApp, None),
         KeyBinding::new("cmd-m", Minimize, None),
         KeyBinding::new("ctrl-cmd-f", ToggleFullScreen, None),
+        // ⌥⌘D is the system's Dock hiding; ⌃⌘D is free in the app (Cocoa's 查询 doesn't reach GPUI)
+        KeyBinding::new("ctrl-cmd-d", ToggleDarkMode, None),
     ]);
     // Windows: F11 for full screen, and Ctrl+H for 查找和替换 as in Office
     // and Notepad (written cmd-h: `shortcuts::pc_binding` maps cmd to
     // ctrl and drops a literal ctrl-h, Cocoa's backspace).
     #[cfg(not(target_os = "macos"))]
     cx.bind_keys([KeyBinding::new("f11", ToggleFullScreen, None), KeyBinding::new("cmd-h", ReplaceInDoc, None)]);
+    // Ctrl+Shift+D there (written cmd-shift-d, mapped by `pc_binding`): Ctrl+Alt reads as AltGr on Windows (#290).
+    #[cfg(not(target_os = "macos"))]
+    cx.bind_keys([KeyBinding::new("cmd-shift-d", ToggleDarkMode, None)]);
     cx.on_action(|_: &HideApp, cx| cx.hide());
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
@@ -146,6 +161,14 @@ pub fn bind_keys(cx: &mut App) {
         }
     });
     cx.on_action(|_: &Quit, cx| cx.defer(quit));
+    // 切换深色 / 浅色: the other of the two, kept as the 外观 preference; under 跟随系统
+    // the look is the system's, so this is the opposite of the system's. After the
+    // key's dispatch, which borrows the window.
+    cx.on_action(|_: &ToggleDarkMode, cx| cx.defer(|cx| {
+        let Some(h) = cx.windows().into_iter().find_map(|w| w.downcast::<Workspace>()) else { return };
+        let to = if crate::theme::dark() { "light" } else { "dark" };
+        let _ = h.update(cx, |ws, _, cx| ws.set_pref(|p| p.appearance = to.into(), cx));
+    }));
     crate::modes::bind_keys(cx);
 }
 
