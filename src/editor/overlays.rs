@@ -15,7 +15,6 @@ use gpui::{prelude::FluentBuilder, *};
 
 const SLASH_W: f32 = 247.;
 const SLASH_MAX_H: f32 = 351.;
-const SCROLLBAR_GUTTER: f32 = 15.;
 const MENU_W: f32 = 247.;
 /// Text toolbar: padding 8, T▾ 44, sep, ≡▾ 44, sep, six 24px
 /// marks, A▾ 44 (gap 8), a full-height divider 12px either side, 更多 24.
@@ -419,7 +418,7 @@ impl Editor {
         let grid_basic = self.slash_grid();
         let mut list = div()
             .id("slash-list")
-            .w(px(SLASH_W - SCROLLBAR_GUTTER))
+            .w(px(SLASH_W))
             .max_h(px(SLASH_MAX_H))
             .overflow_y_scroll()
             .track_scroll(&self.slash_scroll)
@@ -528,8 +527,9 @@ impl Editor {
                 div().flex_none().h(px(ROW_H)).px(px(PAD + 8.)).flex().items_center().text_color(color::muted_foreground()).child(crate::settings::text("未能找到相关结果")),
             );
         }
-        // An always-visible 8px thumb, rgba(31,35,41,.3), 3px in
-        // from the right border and 2px from the top/bottom.
+        // shadcn's ScrollArea: only when the list overflows, over the rows
+        // (no room kept for it): a 10pt bar with 1pt padding, its thumb
+        // `border`, rounded.
         let view_h = content_h.min(SLASH_MAX_H);
         let vh = f32::from(window.viewport_size().height);
         let (pos, corner) = if let Some(p) = beside {
@@ -543,11 +543,11 @@ impl Editor {
             (anchor_bottom, Anchor::TopLeft)
         };
         let thumb = (content_h > view_h).then(|| {
-            let track = view_h - 4.;
+            let track = view_h - 2.;
             let h = (track * view_h / content_h).max(20.);
             let off = -f32::from(self.slash_scroll.offset().y);
-            let top = 2. + (track - h) * (off / (content_h - view_h)).clamp(0., 1.);
-            div().absolute().right(px(3.)).top(px(top)).w(px(8.)).h(px(h)).rounded_full().bg(Theme::scrollbar_thumb())
+            let top = 1. + (track - h) * (off / (content_h - view_h)).clamp(0., 1.);
+            div().absolute().right(px(1.)).top(px(top)).w(px(8.)).h(px(h)).rounded_full().bg(color::border())
         });
         let el = Popover::new("slash-menu")
             .relative()
@@ -558,8 +558,8 @@ impl Editor {
             .children(thumb);
         out.push(at(self.rel(pos), corner, el));
         let (kind, row_top) = picker_at?;
-        // The picker hangs off the list's right edge (over the scrollbar
-        // gutter), centred on its row and kept inside the window.
+        // The picker hangs off the menu's right edge, centred on its row
+        // and kept inside the window.
         let (picker, ph) = if kind == menus::SlashKind::Button {
             (self.button_type_menu(cx).into_any_element(), super::button::TYPE_MENU_H)
         } else {
@@ -568,7 +568,7 @@ impl Editor {
         let menu_top = if corner == Anchor::TopLeft { pos.y } else { pos.y - px(view_h) };
         let off = -f32::from(self.slash_scroll.offset().y);
         let top = (f32::from(menu_top) + row_top - off + ROW_H / 2. - ph / 2.).min(vh - 8. - ph).max(8.);
-        let left = pos.x + px(SLASH_W - SCROLLBAR_GUTTER);
+        let left = pos.x + px(SLASH_W);
         out.push(at(self.rel(point(left, px(top))), Anchor::TopLeft, picker));
         Some(())
     }
