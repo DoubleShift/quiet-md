@@ -61,6 +61,7 @@ pub struct Button {
     variant: ButtonVariant,
     size: ButtonSize,
     icon: Option<SharedString>,
+    editor: bool,
     icon_end: Option<SharedString>,
     label: Option<SharedString>,
     selected: bool,
@@ -70,7 +71,7 @@ element!(Button, parent);
 
 impl Button {
     pub fn new(id: impl Into<ElementId>, variant: ButtonVariant) -> Self {
-        Button { base: div().id(id), variant, size: ButtonSize::Default, icon: None, icon_end: None, label: None, selected: false, disabled: false }
+        Button { base: div().id(id), variant, size: ButtonSize::Default, icon: None, editor: false, icon_end: None, label: None, selected: false, disabled: false }
     }
     pub fn primary(id: impl Into<ElementId>) -> Self { Self::new(id, ButtonVariant::Primary) }
     pub fn outline(id: impl Into<ElementId>) -> Self { Self::new(id, ButtonVariant::Outline) }
@@ -86,7 +87,9 @@ impl Button {
     pub fn label(mut self, s: impl Into<SharedString>) -> Self { self.label = Some(s.into()); self }
     /// A glyph before the label; alone, the button is square.
     pub fn icon(mut self, name: impl Into<SharedString>) -> Self { let n = name.into(); if !n.is_empty() { self.icon = Some(n) } self }
-    /// A glyph after the label (a chevron).
+    /// The editor's glyph of that name before the label (its set draws the marks and block types).
+    pub fn editor_icon(mut self, name: impl Into<SharedString>) -> Self { self.editor = true; self.icon(name) }
+    /// A glyph after the label (a chevron); with `icon` and no label, a menu's trigger (not square).
     pub fn icon_end(mut self, name: impl Into<SharedString>) -> Self { self.icon_end = Some(name.into()); self }
     /// Pressed or in use (a toolbar tool with a filter on, a menu's trigger while it is open:
     /// `aria-expanded` / `aria-pressed`): `muted` (one step up on a raised surface in the dark).
@@ -100,7 +103,7 @@ impl RenderOnce for Button {
         let (g, dark, v, sz) = (geo(), crate::theme::dark(), self.variant, self.size);
         // the press nudge moves a relative box; one the caller placed absolutely keeps still
         let placed = self.base.style().position == Some(Position::Absolute) || self.base.style().inset.top.is_some();
-        let square = self.label.is_none();
+        let square = self.label.is_none() && self.icon_end.is_none();
         // the glyph takes the text's colour (`[&_svg]` inherits `currentColor`)
         let fg = match v {
             ButtonVariant::Primary => color::primary_foreground(),
@@ -110,10 +113,9 @@ impl RenderOnce for Button {
         };
         // `rounded-md`; `rounded-[min(var(--radius-md),8px)]` at xs and `…10px` at sm: 8 either way at R = 10
         let r = g.button_r.min(if sz == ButtonSize::Xs { 8. } else { 10. });
-        let (icon_l, icon_r, label_s, disabled, selected) = (self.icon, self.icon_end, self.label, self.disabled, self.selected);
+        let (icon_l, icon_r, label_s, disabled, selected, editor) = (self.icon, self.icon_end, self.label, self.disabled, self.selected, self.editor);
         // a ghost's fills: `muted` (`muted/50` under the pointer in the dark); on a raised surface in the dark, a step up
-        let (ghost_hover, ghost_on) = if dark && super::base::raised() { (color::accent_hover(), color::accent()) }
-            else { (if dark { color::muted_half() } else { color::muted() }, color::muted()) };
+        let (ghost_hover, ghost_on) = super::toolbar::ghost_fills(false);
         under(self.base, |d| {
             let d = d.flex_none().h(px(sz.h())).flex().items_center().justify_center().gap(px(sz.gap())).rounded(px(r))
                 .text_size(px(if sz == ButtonSize::Xs { g.text_xs } else { g.text })).text_color(fg).whitespace_nowrap()
@@ -133,7 +135,7 @@ impl RenderOnce for Button {
             };
             // `active:translate-y-px`, not on a menu's trigger (`aria-haspopup`): those come `selected` while open
             let d = d.when(!disabled && !selected && !placed, |d| d.relative().active(|s| s.top(px(1.))));
-            d.when_some(icon_l, |d, n| d.child(icon(&n, sz.icon(), fg)))
+            d.when_some(icon_l, |d, n| d.child(if editor { crate::editor_ui::icon(&n, sz.icon(), fg) } else { icon(&n, sz.icon(), fg) }))
                 .when_some(label_s, |d, s| d.child(label(s)))
                 .when_some(icon_r, |d, n| d.child(icon(&n, sz.icon(), fg)))
         })

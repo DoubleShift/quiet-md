@@ -21,6 +21,7 @@ pub mod control;
 pub mod dialog;
 pub mod field;
 pub mod menu;
+pub mod toolbar;
 
 // The library's surface, whether or not every piece has a caller yet.
 #[allow(unused_imports)]
@@ -39,6 +40,7 @@ pub use dialog::{Dialog, DialogFocus, scrim};
 pub use field::{Field, FieldSize, Label, Textarea};
 #[allow(unused_imports)]
 pub use menu::{MenuItem, MenuLabel, MenuSeparator, Popover};
+pub use toolbar::{ButtonGroup, ButtonGroupSeparator, Toggle, ToggleSize, Toolbar};
 
 use crate::theme::{dark, rgbaf};
 use gpui::{BoxShadow, Hsla, point, px, rgb};
