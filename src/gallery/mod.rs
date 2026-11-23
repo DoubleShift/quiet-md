@@ -10,7 +10,7 @@
 
 mod pages;
 
-use crate::design::{Popover, color, icon};
+use crate::design::{Button, ButtonSize, Segment, Segmented, Toast, ToastTone, color, icon};
 use crate::input::{TextField, TextFieldEvent};
 use crate::table::style::*;
 use gpui::prelude::FluentBuilder;
@@ -218,24 +218,22 @@ impl Render for Gallery {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // the inputs' colours follow the theme
         for e in self.inputs.all() { e.update(cx, |t, _| { t.color = color::foreground(); t.placeholder_color = color::placeholder(); }); }
-        use crate::theme::Theme as T;
         let dark = crate::theme::dark();
         fn refresh(window: &mut Window, cx: &mut App) { crate::themes::touch(); window.refresh(); cx.refresh_windows(); }
-        let chrome = |id: &'static str, s: &str, on: bool| div().id(id).h(px(28.)).px(px(10.)).flex().items_center().rounded(px(6.)).cursor_pointer().text_size(px(13.))
-            .text_color(T::text()).when(on, |d| d.bg(T::fill_pressed())).hover(|s| s.bg(T::fill_hover())).child(s.to_string());
-        let bar = div().flex_none().h(px(52.)).pl(px(84.)).pr(px(16.)).flex().items_center().justify_between().border_b_1().border_color(T::line_divider())
+        let look = if self.pair { 2 } else if dark { 1 } else { 0 };
+        let seg = |id: &'static str, s: &'static str, i: usize| Segment::new(id, s).selected(look == i);
+        let bar = div().flex_none().h(px(52.)).pl(px(84.)).pr(px(16.)).flex().items_center().justify_between().border_b_1().border_color(color::border())
             .child(div().flex().items_baseline().gap(px(10.))
-                .child(div().text_size(px(15.)).text_color(T::text()).child("组件库"))
-                .child(div().text_size(px(12.)).text_color(T::text_caption()).child(format!("点了 {} 次", self.clicks))))
-            .child(div().flex().items_center().gap(px(4.))
-                .child(chrome("light", "浅色", !dark && !self.pair).on_click(cx.listener(|g, _, window, cx| { g.pair = false; crate::theme::set_dark(false); refresh(window, cx); })))
-                .child(chrome("dark", "深色", dark && !self.pair).on_click(cx.listener(|g, _, window, cx| { g.pair = false; crate::theme::set_dark(true); refresh(window, cx); })))
-                .child(chrome("pair", "浅深对照", self.pair).on_click(cx.listener(|g, _, window, cx| { g.pair = true; refresh(window, cx); }))));
-        let mut nav = div().id("nav").w(px(200.)).flex_none().h_full().overflow_y_scroll().py(px(12.)).px(px(8.)).flex().flex_col().gap(px(2.)).border_r_1().border_color(T::line_divider());
+                .child(div().text_size(px(15.)).text_color(color::foreground()).child("组件库"))
+                .child(div().text_size(px(12.)).text_color(color::muted_foreground()).child(format!("点了 {} 次", self.clicks))))
+            .child(Segmented::new()
+                .child(seg("light", "浅色", 0).on_click(cx.listener(|g, _, window, cx| { g.pair = false; crate::theme::set_dark(false); refresh(window, cx); })))
+                .child(seg("dark", "深色", 1).on_click(cx.listener(|g, _, window, cx| { g.pair = false; crate::theme::set_dark(true); refresh(window, cx); })))
+                .child(seg("pair", "浅深对照", 2).on_click(cx.listener(|g, _, window, cx| { g.pair = true; refresh(window, cx); }))));
+        let mut nav = div().id("nav").w(px(200.)).flex_none().h_full().overflow_y_scroll().py(px(12.)).px(px(8.)).flex().flex_col().gap(px(2.)).border_r_1().border_color(color::border());
         for (i, (name, _, _)) in PAGES.iter().enumerate() {
-            nav = nav.child(div().id(("page", i)).h(px(32.)).px(px(10.)).flex().items_center().rounded(px(6.)).cursor_pointer().text_size(px(13.)).text_color(T::text())
-                .when(i == self.page, |d| d.bg(T::fill_pressed())).hover(|s| s.bg(T::fill_hover()))
-                .on_click(cx.listener(move |g, _, _, cx| { g.page = i; g.open = None; cx.notify(); })).child(name.to_string()));
+            nav = nav.child(Button::ghost(("page", i)).sized(ButtonSize::Sm).w_full().justify_start().label(*name).selected(i == self.page)
+                .on_click(cx.listener(move |g, _, _, cx| { g.page = i; g.open = None; cx.notify(); })));
         }
         let (name, note, page) = PAGES[self.page];
         let body = if self.pair {
@@ -253,12 +251,11 @@ impl Render for Gallery {
         } else { div().px(px(32.)).flex().child(page(self, window, cx).flex_1().min_w_0()) };
         let content = div().id("content").flex_1().min_w_0().h_full().overflow_y_scroll().child(div().pt(px(24.)).pb(px(80.)).flex().flex_col().gap(px(24.))
             .child(div().px(px(32.)).flex().flex_col().gap(px(4.))
-                .child(div().text_size(px(20.)).text_color(T::text()).child(name))
-                .child(div().text_size(px(13.)).text_color(T::text_caption()).child(note)))
+                .child(div().text_size(px(20.)).text_color(color::foreground()).child(name))
+                .child(div().text_size(px(13.)).text_color(color::muted_foreground()).child(note)))
             .child(body));
-        let toast = self.toast.as_ref().map(|(s, _)| div().absolute().bottom(px(24.)).left_0().right_0().flex().justify_center()
-            .child(Popover::new("toast").h(px(36.)).px(px(14.)).flex().flex_row().items_center().gap(px(8.)).text_size(px(text_sm())).child(icon("check", 14., color::foreground())).child(s.clone())));
-        div().track_focus(&self.focus).key_context("Gallery").relative().size_full().flex().flex_col().bg(T::bg_body()).font_family(crate::theme::ui_family()).text_color(T::text())
+        let toast = self.toast.as_ref().map(|(s, _)| div().absolute().bottom(px(24.)).left_0().right_0().flex().justify_center().child(Toast::new(ToastTone::Success, s.clone())));
+        div().track_focus(&self.focus).key_context("Gallery").relative().size_full().flex().flex_col().bg(color::background()).font_family(crate::theme::ui_family()).text_color(color::foreground())
             .on_key_down(cx.listener(|g, e: &KeyDownEvent, _, cx| if e.keystroke.key == "escape" { g.open = None; g.dialog = None; cx.notify(); }))
             .child(bar)
             .child(div().flex_1().min_h_0().flex().child(nav).child(content))

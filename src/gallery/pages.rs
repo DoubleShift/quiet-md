@@ -2,7 +2,7 @@
 //! The 数据表's pieces are laid out as the table lays them out, with made-up rows.
 
 use super::*;
-use crate::design::{Badge, Button, ButtonSize, Card, Dialog, Field, Item, Kbd, Label, MenuItem, MenuLabel, MenuSeparator, Radio, Segment, Segmented, Separator, Switch, Textarea, Toast, ToastTone, geo};
+use crate::design::{Badge, Button, ButtonSize, Card, Dialog, Field, Popover, Item, Kbd, Label, MenuItem, MenuLabel, MenuSeparator, Radio, Segment, Segmented, Separator, Switch, Textarea, Toast, ToastTone, geo};
 
 type Cx<'a> = Context<'a, Gallery>;
 
