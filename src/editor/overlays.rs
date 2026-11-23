@@ -31,13 +31,13 @@ const CALLOUT_PANEL_W: f32 = 230.;
 /// Size picker: 24px cells 6 apart in 12px insets, inside a 1px box with 12px
 /// margins, capped at `max-width: 312px` (cells then shrink).
 fn picker_width(cols: usize) -> f32 {
-    (24. + 2. + 24. + cols as f32 * 24. + (cols - 1) as f32 * 6.).min(312.)
+    (12. + cols as f32 * 24. + (cols - 1) as f32 * 6. + 12.).min(312.)
 }
 
-/// Header 12 + 20 + 12, grid box (1 + 12 + rows + 12 + 1), 12 below.
+/// Header 12 + 20 + 12, the grid (no box round it), 12 below.
 fn picker_height(kind: menus::SlashKind) -> f32 {
     let rows = if kind == menus::SlashKind::Table { 9. * 24. + 8. * 6. } else { 80. };
-    44. + 1. + 12. + rows + 12. + 1. + 12.
+    44. + rows + 12.
 }
 
 /// Place `el` at `rel` (content-column coordinates), above everything else.
@@ -412,7 +412,7 @@ impl Editor {
                 let p = point(r.left() + px(MENU_W), r.bottom() + px(4. + self.block_menu_add_y(*block)));
                 (p, p, *selected, Some(p))
             }
-            _ => return None,
+            _ => { self.slash_bar.set(None); return None }
         };
         let results = self.slash_results();
         let grid_basic = self.slash_grid();
@@ -527,9 +527,6 @@ impl Editor {
                 div().flex_none().h(px(ROW_H)).px(px(PAD + 8.)).flex().items_center().text_color(color::muted_foreground()).child(crate::settings::text("未能找到相关结果")),
             );
         }
-        // shadcn's ScrollArea: only when the list overflows, over the rows
-        // (no room kept for it): a 10pt bar with 1pt padding, its thumb
-        // `border`, rounded.
         let view_h = content_h.min(SLASH_MAX_H);
         let vh = f32::from(window.viewport_size().height);
         let (pos, corner) = if let Some(p) = beside {
@@ -542,12 +539,24 @@ impl Editor {
             // The menu hangs right off the line box, no gap.
             (anchor_bottom, Anchor::TopLeft)
         };
-        let thumb = (content_h > view_h).then(|| {
-            let track = view_h - 2.;
-            let h = (track * view_h / content_h).max(20.);
-            let off = -f32::from(self.slash_scroll.offset().y);
-            let top = 1. + (track - h) * (off / (content_h - view_h)).clamp(0., 1.);
-            div().absolute().right(px(1.)).top(px(top)).w(px(8.)).h(px(h)).rounded_full().bg(color::border())
+        // An overlay scrollbar, as macOS draws one (and the page's): a 4pt thumb with no
+        // track, 3pt in from the edge and clear of the rounded corners, over the rows
+        // rather than in a gutter. It shows when the menu opens and while the list
+        // scrolls (pointer or keyboard), then fades out.
+        let off = -f32::from(self.slash_scroll.offset().y);
+        let now = std::time::Instant::now();
+        let since = match self.slash_bar.get() {
+            Some((t, o)) if (o - off).abs() < 0.5 => now.duration_since(t).as_secs_f32(),
+            _ => { self.slash_bar.set(Some((now, off))); 0. }
+        };
+        let fade = 1. - ((since - 0.8) / 0.3).clamp(0., 1.);
+        if fade > 0. { window.request_animation_frame(); }
+        let thumb = (content_h > view_h && fade > 0.).then(|| {
+            let inset = crate::design::geo().menu_r;
+            let track = view_h - 2. * inset;
+            let h = (track * view_h / content_h).max(24.);
+            let top = inset + (track - h) * (off / (content_h - view_h)).clamp(0., 1.);
+            div().absolute().right(px(3.)).top(px(top)).w(px(4.)).h(px(h)).rounded_full().bg(crate::design::alpha(color::foreground(), 0.22 * fade))
         });
         let el = Popover::new("slash-menu")
             .relative()
@@ -558,8 +567,8 @@ impl Editor {
             .children(thumb);
         out.push(at(self.rel(pos), corner, el));
         let (kind, row_top) = picker_at?;
-        // The picker hangs off the menu's right edge, centred on its row
-        // and kept inside the window.
+        // The picker hangs 4pt off the menu's right edge (as submenus do), centred on its row and
+        // kept inside the window.
         let (picker, ph) = if kind == menus::SlashKind::Button {
             (self.button_type_menu(cx).into_any_element(), super::button::TYPE_MENU_H)
         } else {
@@ -568,7 +577,7 @@ impl Editor {
         let menu_top = if corner == Anchor::TopLeft { pos.y } else { pos.y - px(view_h) };
         let off = -f32::from(self.slash_scroll.offset().y);
         let top = (f32::from(menu_top) + row_top - off + ROW_H / 2. - ph / 2.).min(vh - 8. - ph).max(8.);
-        let left = pos.x + px(SLASH_W);
+        let left = pos.x + px(SLASH_W + 4.);
         out.push(at(self.rel(point(left, px(top))), Anchor::TopLeft, picker));
         Some(())
     }
@@ -586,10 +595,6 @@ impl Editor {
             .id("size-grid")
             .mx(px(12.))
             .mb(px(12.))
-            .border_1()
-            .border_color(Theme::line_border())
-            .rounded(px(2.))
-            .overflow_hidden()
             .cursor_pointer()
             .on_hover(cx.listener(|e, hovered: &bool, _, cx| {
                 if !*hovered && e.size_pick != (0, 0) {
@@ -605,7 +610,7 @@ impl Editor {
                 }
             }));
         for i in 0..rows {
-            let mut line = div().flex().h(px(cell_h)).mt(px(if i == 0 { 12. } else { 6. })).when(i + 1 == rows, |d| d.mb(px(12.)));
+            let mut line = div().flex().h(px(cell_h)).when(i > 0, |d| d.mt(px(6.)));
             for j in 0..cols {
                 let (ri, cj) = (i + 1, j + 1);
                 let (bg, border) = if ri <= def.0 && cj <= def.1 {
@@ -620,8 +625,7 @@ impl Editor {
                         .id(("size-cell", i * cols + j))
                         .flex_1()
                         .h(px(cell_h))
-                        .when(j == 0, |d| d.ml(px(12.)))
-                        .mr(px(if j + 1 == cols { 12. } else { 6. }))
+                        .when(j + 1 < cols, |d| d.mr(px(6.)))
                         .bg(bg)
                         .border_2()
                         .border_color(border)

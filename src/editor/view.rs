@@ -135,6 +135,8 @@ pub struct Editor {
     pub(super) code_rows: HashMap<BlockId, Vec<usize>>,
     /// Slash / "+" menu list (keyboard selection is kept in view).
     pub slash_scroll: ScrollHandle,
+    /// The slash menu's scrollbar: when the list last scrolled (or opened) and the offset then.
+    pub slash_bar: Cell<Option<(std::time::Instant, f32)>>,
     /// Sideways scroll of each unwrapped code block, and its scrollbar.
     pub code_hscroll: RefCell<HashMap<BlockId, (ScrollHandle, Rc<super::scrollbar::Scrollbar>)>>,
     pub mention_scroll: ScrollHandle,
@@ -402,6 +404,7 @@ impl Editor {
             frame: Default::default(),
             code_rows: HashMap::new(),
             slash_scroll: ScrollHandle::new(),
+            slash_bar: Cell::new(None),
             code_hscroll: Default::default(),
             mention_scroll: ScrollHandle::new(),
             links: Default::default(),
