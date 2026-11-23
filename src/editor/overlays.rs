@@ -122,9 +122,11 @@ fn row_off(id: impl Into<ElementId>, icon_name: &str, label: impl Into<SharedStr
 /// grids. They sit on a popover, whose ground hides ghost's `muted`
 /// pressed fill in the dark, so a pressed or keyboard-picked tool takes
 /// `accent`, the pointer's fill.
+/// A toolbar / grid icon button (shadcn's Toggle): the glyph takes the text colour,
+/// `foreground`, on or off (as the icons were before the move, #191919); on is the fill.
 fn tool(id: impl Into<ElementId>, ic: &str, on: bool) -> Button {
     Button::ghost(id).sized(ButtonSize::Xs).selected(on).when(on, |d| d.bg(color::accent()))
-        .child(icon(ic, 18., if on { color::foreground() } else { color::muted_foreground() }))
+        .child(icon(ic, 18., color::foreground()))
 }
 
 /// Color-panel swatch: 26 outer with a 2px ring (blue when selected), 22 inner.
