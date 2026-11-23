@@ -131,12 +131,13 @@ fn row_off(id: impl Into<ElementId>, icon_name: &str, label: impl Into<SharedStr
 }
 
 /// A 24pt tool with an 18pt editor glyph: the menus' icon grids (the
-/// toolbars use design::toolbar). They sit on a popover, whose ground hides ghost's `muted`
-/// pressed fill in the dark, so a pressed or keyboard-picked tool takes
-/// `accent`, the pointer's fill.
+/// toolbars use design::toolbar). The glyph is `foreground` (shadcn's
+/// ghost and Toggle glyphs take the text's colour); on shows only in the
+/// fill: they sit on a popover, whose ground hides ghost's `muted` pressed
+/// fill in the dark, so a pressed or keyboard-picked tool takes `accent`.
 fn tool(id: impl Into<ElementId>, ic: &str, on: bool) -> Button {
     Button::ghost(id).sized(ButtonSize::Xs).selected(on).when(on, |d| d.bg(color::accent()))
-        .child(icon(ic, 18., if on { color::foreground() } else { color::muted_foreground() }))
+        .child(icon(ic, 18., color::foreground()))
 }
 
 /// Color-panel swatch: 26 outer with a 2px ring (blue when selected), 22 inner.
