@@ -542,15 +542,25 @@ impl Editor {
         // An overlay scrollbar, as macOS draws one (and the page's): a 4pt thumb with no
         // track, 3pt in from the edge and clear of the rounded corners, over the rows
         // rather than in a gutter. It shows when the menu opens and while the list
-        // scrolls (pointer or keyboard), then fades out.
+        // scrolls (pointer or keyboard), and goes a second after the last move: one
+        // timer redraws then, rather than animating a fade frame by frame.
+        const SHOWN: std::time::Duration = std::time::Duration::from_millis(1000);
         let off = -f32::from(self.slash_scroll.offset().y);
         let now = std::time::Instant::now();
-        let since = match self.slash_bar.get() {
-            Some((t, o)) if (o - off).abs() < 0.5 => now.duration_since(t).as_secs_f32(),
-            _ => { self.slash_bar.set(Some((now, off))); 0. }
+        let shown = match self.slash_bar.get() {
+            Some((t, o)) if (o - off).abs() < 0.5 => now.duration_since(t) < SHOWN,
+            _ => {
+                self.slash_bar.set(Some((now, off)));
+                if content_h > content_h.min(SLASH_MAX_H) {
+                    cx.spawn(async move |e, cx| {
+                        cx.background_executor().timer(SHOWN).await;
+                        let _ = e.update(cx, |_, cx| cx.notify());
+                    }).detach();
+                }
+                true
+            }
         };
-        let fade = 1. - ((since - 0.8) / 0.3).clamp(0., 1.);
-        if fade > 0. { window.request_animation_frame(); }
+        let fade = if shown { 1. } else { 0. };
         let thumb = (content_h > view_h && fade > 0.).then(|| {
             let inset = crate::design::geo().menu_r;
             let track = view_h - 2. * inset;
