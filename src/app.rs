@@ -1469,7 +1469,7 @@ impl Workspace {
     /// either side of it: the title (and, with the sidebar hidden, the
     /// traffic lights and 展开侧栏) on the left, … 导入 + on the right. Below a
     /// usable width it is None and the caller shows a search icon instead.
-    pub(crate) fn header_search(&self, window: &Window, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+    pub(crate) fn header_search(&self, window: &Window, cx: &mut Context<Self>) -> Option<crate::design::Field> {
         let main = f32::from(window.viewport_size().width) - if self.sidebar_open { self.sidebar_w(window) } else { 0. };
         let title = crate::settings::label(crate::settings::text("主页"));
         let title_w = f32::from(window.text_system().shape_line(title.clone().into(), px(17.), &[window.text_style().highlight(HighlightStyle { font_weight: Some(FontWeight::SEMIBOLD), ..Default::default() }).to_run(title.len())], None).width);
@@ -1481,13 +1481,12 @@ impl Workspace {
         let half = (main / 2. - left).min(main / 2. - right);
         let width = (main - 320.).min(2. * half).min(360.);
         if width < 120. { return None }
-        Some(div().id("header-search").absolute().left(px((main - width) / 2.)).top(px(8.))
-            .w(px(width)).h(px(32.)).no_drag().flex().items_center().gap(px(8.)).px(px(10.))
-            .rounded(px(9.)).bg(Theme::fill_hover())
-            .cursor_pointer().hover(|s| s.bg(Theme::fill_hover_strong()))
-            .child(icon("search", 15., Theme::icon()))
-            .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(Theme::text_caption()).child(crate::settings::tr("搜索文档…", "Search documents…")))
-            .when(width >= 200., |d| d.child(div().flex_none().text_size(px(11.)).text_color(Theme::text_placeholder()).child(crate::shortcuts::hint("workspace::FocusSearch", "⌘ + J").replace(" + ", " "))))
+        // A field that opens the search panel rather than taking text itself.
+        Some(crate::design::Field::new("header-search").sized(crate::design::FieldSize::Sm).absolute().left(px((main - width) / 2.)).top(px(8.))
+            .w(px(width)).no_drag().gap(px(8.)).cursor_pointer()
+            .child(crate::design::icon("search", 16., crate::design::color::muted_foreground()))
+            .child(div().flex_1().min_w_0().truncate().text_color(crate::design::color::placeholder()).child(crate::settings::tr("搜索文档…", "Search documents…")))
+            .when(width >= 200., |d| d.child(crate::design::Kbd::new(crate::shortcuts::hint("workspace::FocusSearch", "⌘ + J").replace(" + ", " "))))
             .tip(crate::settings::tr("搜索文档", "Search documents"), Some(crate::shortcuts::hint("workspace::FocusSearch", "⌘ + J")))
             .on_click(cx.listener(|w, _, window, cx| w.open_search(window, cx))))
     }
@@ -1510,7 +1509,7 @@ impl Workspace {
         };
         // Independent icon controls, with equal top and right insets.
         let seg = crate::ui::header_icon;
-        let divider = || div().flex_none().w(px(1.)).h(px(18.)).bg(Theme::line_divider());
+        let divider = || crate::design::Separator::new().vertical().h(px(18.));
         // Breadcrumbs: the parent pages, each linking to itself, with the
         // middle ones folded into "…" when the chain is long.
         let chain: Vec<(String, String, Option<String>)> = self
@@ -1627,32 +1626,19 @@ impl Workspace {
             .title_bar()
             .when(!self.sidebar_open, |d| {
                 d.child(
-                    div()
-                        .id("open-sidebar")
+                    crate::design::Button::ghost("open-sidebar")
                         .no_drag()
-                        .flex_none()
                         .ml(px(4.))
-                        .size(px(28.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(8.))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(Theme::fill_hover_strong()))
+                        .icon("panel-left-open")
                         .tip(crate::settings::tr("展开侧栏", "Show sidebar"), Some(crate::shortcuts::hint("workspace::ToggleSidebar", "⌘ + ]")))
-                        .child(icon("panel-left-open", 17., Theme::icon()))
                         .on_click(cx.listener(|w, _, _, cx| {
                             w.sidebar_open = true;
                             cx.notify();
                         })),
                 )
                 .child(
-                    div().id("header-home").no_drag().flex_none().ml(px(4.)).size(px(28.))
-                        .flex().items_center().justify_center().rounded(px(8.)).cursor_pointer()
-                        .hover(|s| s.bg(Theme::fill_hover_strong()))
-                        .active(|s| s.bg(Theme::fill_pressed()))
+                    crate::design::Button::ghost("header-home").no_drag().ml(px(4.)).icon("home")
                         .tip(crate::settings::text("返回主页"), None)
-                        .child(icon("home", 18., Theme::icon()))
                         .on_click(cx.listener(|w, _, _, cx| w.show_view(View::Home, cx))),
                 )
                 .child(div().mx(px(12.)).child(divider()))
@@ -1707,7 +1693,7 @@ impl Workspace {
                             // from this button's right edge.
                             seg("doc-more", "ellipsis")
                                 .relative()
-                                .when(self.doc_menu, |d| d.bg(Theme::fill_hover()))
+                                .selected(self.doc_menu)
                                 .when(!self.doc_menu, |d| d.tip(crate::settings::tr("更多", "More"), None))
                                 .child(canvas(move |b, _, _| record_more.set(Some(b)), |_, _, _, _| {}).absolute().inset_0())
                                 // Toggle on mouse-down from the render-time state: the menu's outside-press

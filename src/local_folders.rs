@@ -7,8 +7,7 @@
 use crate::app::{RowMenu, View, Workspace};
 use crate::settings::tr;
 use crate::store::Entry;
-use crate::theme::Theme;
-use crate::ui::{ToastKind, icon, popover};
+use crate::ui::ToastKind;
 use gpui::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -183,12 +182,12 @@ impl Workspace {
     pub(crate) fn mounted_row_menu(&self, m: RowMenu, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let Some(e) = self.entries.iter().find(|e| e.id == m.id) else { return vec![] };
         let (folder, root) = (e.meta.folder.is_some(), e.meta.parent.is_none());
-        let row = |id: &'static str, glyph: &'static str, label: &'static str| crate::ui::menu_row(id, SharedString::from(id)).child(icon(glyph, 16., Theme::icon())).child(label);
-        let divider = || div().mx(px(8.)).my(px(5.)).h(px(1.)).bg(Theme::line_border());
+        let row = |id: &'static str, glyph: &'static str, label: &'static str| crate::design::MenuItem::new(id).icon(glyph).label(label);
+        let divider = crate::design::MenuSeparator::new;
         let pos = if m.pos.x < px(0.) { point(-m.pos.x, m.pos.y + px(22.)) } else { m.pos };
         let id = m.id.clone();
         let ids = || (id.clone(), id.clone());
-        let mut menu = popover().id("mounted-row-menu").occlude().w(px(210.)).py(px(crate::ui::MENU_PAD_Y))
+        let mut menu = crate::design::Popover::new("mounted-row-menu").menu().w(px(210.))
             .on_mouse_down_out(cx.listener(|w, _, _, cx| { w.row_menu = None; cx.notify(); }));
         if folder {
             let (a, b) = ids();

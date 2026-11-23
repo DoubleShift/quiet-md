@@ -5,8 +5,9 @@ use super::core::{EditKind, Pos, Selection, TITLE};
 use super::view::Editor;
 use crate::input::TextField;
 use crate::model::*;
-use crate::feishu_theme::{self as theme, Theme, craft};
-use crate::editor_ui::{ROW_RADIUS, TipExt, TipSide, icon, popover};
+use crate::feishu_theme::Theme;
+use crate::editor_ui::{TipExt, TipSide};
+use crate::design::{Button, ButtonSize, ButtonVariant, Field, FieldSize, Popover};
 use gpui::{prelude::FluentBuilder, *};
 use regex::Regex;
 use std::ops::Range;
@@ -358,19 +359,13 @@ impl Editor {
                     cx.notify();
                 }))
         };
-        // The input: 30 tall, radius 9, white, hairline; accent while focused.
-        let input = |field: &Entity<TextField>, suffix: Option<String>, toggle: Option<AnyElement>| {
+        // The input: a small field.
+        let input = |id: &'static str, field: &Entity<TextField>, suffix: Option<String>, toggle: Option<AnyElement>| {
             let focused = field.read(cx).is_focused(window);
-            div()
-                .h(px(30.))
-                .px(px(10.))
-                .flex()
-                .items_center()
+            Field::new(id)
+                .sized(FieldSize::Sm)
+                .focused(focused)
                 .gap(px(8.))
-                .rounded(px(9.))
-                .bg(crate::theme::raised(Theme::bg_body()))
-                .border_1()
-                .border_color(if focused { Theme::primary() } else { Theme::line_border() })
                 .child(field.clone())
                 .children(suffix.map(|s| {
                     let color = if invalid { Theme::danger() } else { Theme::text_caption() };
@@ -379,59 +374,21 @@ impl Editor {
                 .children(toggle)
         };
         // `.*`: regular expressions, accent-filled while on.
-        let regex_toggle = div()
-            .id("find-regex")
-            .flex_none()
+        let regex_toggle = Button::ghost("find-regex")
+            .sized(ButtonSize::Xs)
+            .selected(regex)
             .mr(px(-6.))
-            .size(px(22.))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(ROW_RADIUS))
-            .cursor_pointer()
-            .text_size(px(13.))
+            .w(px(24.))
             .font_weight(FontWeight::SEMIBOLD)
-            .text_color(if regex { Theme::primary() } else { Theme::text_caption() })
-            .when(regex, |d| d.bg(Theme::fill_active()))
-            .when(!regex, |d| d.hover(|s| s.bg(Theme::fill_hover_strong())))
-            .child(".*")
+            .label(".*")
             .tip_label(crate::settings::text("正则表达式").into(), TipSide::Above)
             .on_click(cx.listener(|e, _, window, cx| e.toggle_regex(window, cx)))
             .into_any_element();
         let label = |s: &'static str| div().text_size(px(13.)).line_height(px(20.)).text_color(Theme::text()).child(s);
         let enabled = n > 0;
-        // Primary: the accent, white semibold; secondary: a white
-        // button (hairline, 1px drop). Both 30 tall, radius 9.
+        // Primary or outline, small; disabled with nothing found.
         let button = |id: &'static str, text: &'static str, primary: bool| {
-            let (bg, border, color) = match (primary, enabled) {
-                (true, true) => (Theme::primary(), Theme::primary(), gpui::white()),
-                (true, false) => (theme::ca(craft::B500, 0.4), gpui::transparent_black(), gpui::white()),
-                (false, true) => (crate::theme::raised(Theme::bg_body()), Theme::button_border(), Theme::text()),
-                (false, false) => (crate::theme::raised(Theme::bg_body()), Theme::button_border(), Theme::text_disabled()),
-            };
-            div()
-                .id(id)
-                .flex_none()
-                .w(px(BTN_W))
-                .h(px(30.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(9.))
-                .border_1()
-                .border_color(border)
-                .bg(bg)
-                .shadow(theme::shadow_button())
-                .text_size(px(13.))
-                .when(primary, |d| d.font_weight(FontWeight::SEMIBOLD))
-                .text_color(color)
-                .when(enabled, |d| {
-                    d.cursor_pointer().hover(move |s| {
-                        if primary { s.bg(theme::c(craft::B600)).border_color(theme::c(craft::B600)) } else { s.bg(theme::c(craft::N100)) }
-                    })
-                })
-                .when(!enabled, |d| d.cursor(CursorStyle::OperationNotAllowed))
-                .child(text)
+            Button::new(id, if primary { ButtonVariant::Primary } else { ButtonVariant::Outline }).sized(ButtonSize::Sm).w(px(BTN_W)).disabled(!enabled).label(text)
         };
         let prev = button("find-prev", crate::settings::text("上一处"), false)
             .tip_label("Shift + Enter".into(), TipSide::Above)
@@ -450,7 +407,7 @@ impl Editor {
                     .flex()
                     .flex_col()
                     .when(replace, |d| d.child(label(crate::settings::text("查找"))))
-                    .child(div().when(replace, |d| d.mt(px(6.))).child(input(&self.find_field, Some(counter), Some(regex_toggle)))),
+                    .child(div().when(replace, |d| d.mt(px(6.))).child(input("find-field", &self.find_field, Some(counter), Some(regex_toggle)))),
             )
             .when(replace, |d| {
                 d.child(
@@ -459,7 +416,7 @@ impl Editor {
                         .flex()
                         .flex_col()
                         .child(label(crate::settings::text("替换为")))
-                        .child(div().mt(px(6.)).child(input(&self.replace_field, None, None))),
+                        .child(div().mt(px(6.)).child(input("replace-field", &self.replace_field, None, None))),
                 )
             })
             .child(
@@ -481,16 +438,12 @@ impl Editor {
                     .child(prev)
                     .child(next),
             );
-        // The popover: the light menu material, hairline, radius 12, and
-        // the deeper drop of a second-level panel.
-        let el = popover()
-            .id("find-box")
-            .occlude()
+        // The popover.
+        let el = Popover::new("find-box")
             .absolute()
             .top(px(8.))
             .right(px(16.))
             .w(px(BOX_W))
-            .shadow(theme::shadow_panel())
             .cursor(CursorStyle::Arrow)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
@@ -505,20 +458,12 @@ impl Editor {
                     .child(tab("find-tab", crate::settings::text("查找"), !replace, false))
                     .child(tab("replace-tab", crate::settings::text("替换"), replace, true))
                     .child(
-                        div()
-                            .id("find-close")
+                        Button::ghost("find-close")
+                            .sized(ButtonSize::Xs)
+                            .icon("x")
                             .absolute()
                             .top(px(10.))
                             .right(px(10.))
-                            .size(px(24.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(ROW_RADIUS))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(Theme::fill_hover_strong()))
-                            .active(|s| s.bg(Theme::fill_pressed()))
-                            .child(icon("x", 16., Theme::icon()))
                             .on_click(cx.listener(|e, _, window, cx| e.close_find(window, cx))),
                     ),
             )

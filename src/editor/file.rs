@@ -11,7 +11,8 @@ use crate::store::image_path;
 use crate::model::*;
 use crate::store::Store;
 use crate::editor_theme::{self as theme, Theme, craft};
-use crate::editor_ui::{ROW_RADIUS, TipExt, icon, popover};
+use crate::editor_ui::{ROW_RADIUS, TipExt, icon};
+use crate::design::{Button, ButtonSize, Popover, Separator, color};
 use super::image::picture;
 use gpui::{prelude::FluentBuilder, *};
 use std::cell::RefCell;
@@ -306,6 +307,10 @@ fn open_listener(p: Option<PathBuf>, cx: &mut Context<Editor>) -> impl Fn(&Mouse
     })
 }
 
+/// A floating toolbar's icon button.
+fn tool_btn(id: impl Into<ElementId>) -> Button { Button::ghost(id).sized(ButtonSize::Xs) }
+
+/// The audio player's buttons (in the page).
 fn shell_btn(id: impl Into<ElementId>) -> Stateful<Div> {
     div()
         .id(id)
@@ -769,14 +774,14 @@ impl Editor {
                 f(e, id, window, cx);
             })
         };
-        let sep = || div().w(px(1.)).h(px(18.)).bg(Theme::line_divider());
+        let sep = || Separator::new().vertical().h(px(18.));
         let mut bar = div().h(px(40.)).px(px(8.)).flex().items_center().gap(px(8.));
-        let mut w = 16. + 2.;
+        let mut w = 16.;
         let mut n = 0;
         if preview.is_some_and(|k| k != Kind::Audio) {
             let p = path.clone();
             bar = bar.child(
-                shell_btn("ftb-full").tip_above(crate::settings::text("全屏"), None).child(icon("maximize", 18., Theme::icon())).on_mouse_down(
+                tool_btn("ftb-full").tip_above(crate::settings::text("全屏"), None).child(icon("maximize", 16., color::muted_foreground())).on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |e, _, window, cx| {
                         cx.stop_propagation();
@@ -789,7 +794,7 @@ impl Editor {
             n += 1;
         }
         bar = bar
-            .child(shell_btn("ftb-download").tip_above(crate::settings::text("下载"), None).child(icon("download", 18., Theme::icon())).on_mouse_down(
+            .child(tool_btn("ftb-download").tip_above(crate::settings::text("下载"), None).child(icon("download", 16., color::muted_foreground())).on_mouse_down(
                 MouseButton::Left,
                 act(|e, id, _, cx| {
                     if let Some(BlockKind::File(f)) = e.core.kind_of(id).cloned() {
@@ -798,7 +803,7 @@ impl Editor {
                 }),
             ))
             .child(sep())
-            .child(shell_btn("ftb-text").tip_above(crate::settings::text("文本视图"), None).child(icon("view-text", 18., Theme::icon())).on_mouse_down(
+            .child(tool_btn("ftb-text").tip_above(crate::settings::text("文本视图"), None).child(icon("view-text", 16., color::muted_foreground())).on_mouse_down(
                 MouseButton::Left,
                 act(|e, id, window, cx| {
                     e.core.file_to_inline(id);
@@ -815,10 +820,10 @@ impl Editor {
         for &(key, ic, tip, v) in views {
             let on = view == v || preview.is_none();
             bar = bar.child(
-                shell_btn(key)
-                    .when(on, |d| d.bg(Theme::fill_turninto_active()))
+                tool_btn(key)
+                    .selected(on)
                     .tip_above(tip, None)
-                    .child(icon(ic, 18., if on { Theme::primary() } else { Theme::icon() }))
+                    .child(icon(ic, 16., if on { color::foreground() } else { color::muted_foreground() }))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |e, _, window, cx| {
@@ -837,9 +842,7 @@ impl Editor {
         let h = 42.;
         let above = f32::from(rect.top()) - 8. - h;
         let y = if above >= f32::from(viewport.top()) { above } else { f32::from(rect.bottom()) + 8. };
-        let el = popover()
-            .id("file-toolbar")
-            .occlude()
+        let el = Popover::new("file-toolbar")
             .on_mouse_down(MouseButton::Left, |_, window, cx| {
                 cx.stop_propagation();
                 window.prevent_default();
@@ -854,16 +857,16 @@ impl Editor {
         let r = self.probed(Probe::Button(p))?;
         let preview = previewable(&f.name);
         let n = if preview { 4 } else { 3 };
-        let w = 2. + 16. + n as f32 * 24. + 1. + n as f32 * 8.;
+        let w = 16. + n as f32 * 24. + 1. + n as f32 * 8.;
         let file = f.clone();
-        let sep = div().w(px(1.)).h(px(18.)).bg(Theme::line_divider());
+        let sep = Separator::new().vertical().h(px(18.));
         let mut bar = div()
             .h(px(40.))
             .px(px(8.))
             .flex()
             .items_center()
             .gap(px(8.))
-            .child(shell_btn("fcard-download").tip_above(crate::settings::text("下载"), None).child(icon("download", 18., Theme::icon())).on_mouse_down(
+            .child(tool_btn("fcard-download").tip_above(crate::settings::text("下载"), None).child(icon("download", 16., color::muted_foreground())).on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |e, _, window, cx| {
                     cx.stop_propagation();
@@ -873,14 +876,14 @@ impl Editor {
                 }),
             ))
             .child(sep)
-            .child(shell_btn("fcard-text").bg(Theme::fill_turninto_active()).tip_above(crate::settings::text("文本视图"), None).child(icon("view-text", 18., Theme::primary())));
+            .child(tool_btn("fcard-text").selected(true).tip_above(crate::settings::text("文本视图"), None).child(icon("view-text", 16., color::foreground())));
         let views: &[(&'static str, &'static str, &'static str, FileView)] = if preview {
             &[("fcard-card", "view-card", "卡片视图", FileView::Card), ("fcard-preview", "view-preview", "预览视图", FileView::Preview)]
         } else {
             &[("fcard-card", "view-card", "卡片视图", FileView::Card)]
         };
         for &(key, ic, tip, v) in views {
-            bar = bar.child(shell_btn(key).tip_above(tip, None).child(icon(ic, 18., Theme::icon())).on_mouse_down(
+            bar = bar.child(tool_btn(key).tip_above(tip, None).child(icon(ic, 16., color::muted_foreground())).on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |e, _, window, cx| {
                     cx.stop_propagation();
@@ -893,9 +896,7 @@ impl Editor {
                 }),
             ));
         }
-        let el = popover()
-            .id("file-card-pop")
-            .occlude()
+        let el = Popover::new("file-card-pop")
             .on_hover(cx.listener(|e, h: &bool, _, cx| {
                 e.btn.card_over = *h;
                 e.sync_button_card(cx);

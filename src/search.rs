@@ -1,13 +1,13 @@
 //! 搜索 dialog: a 540-wide white dialog with the input row, 最近浏览 / hit
 //! rows and a gray footer. Locally there is one owner and no sessions or
 //! spaces, so each row's extra line is just 所有者 + the opened / modified
-//! times. Radius 16, quiet row fills, monochrome page glyphs.
+//! times. The design's `Dialog` shell, quiet row fills, monochrome page glyphs.
 
 use crate::app::Workspace;
 use crate::settings::display_title;
 use crate::store::Entry;
+use crate::design::{Button, ButtonSize, Dialog, Separator, scrim};
 use crate::theme::{self, Theme};
-use crate::trash::scrim;
 use crate::ui::{ROW_RADIUS, format_visit, icon, ui_runs, ui_text};
 use gpui::{prelude::FluentBuilder, *};
 use std::collections::HashMap;
@@ -288,21 +288,6 @@ pub(crate) fn doc_icon_named(name: &str) -> Div {
         .child(icon(name, 18., Theme::icon()))
 }
 
-/// The 24px square buttons at the right of the input row.
-fn input_button(id: &'static str, glyph: &'static str, size: f32, color: Hsla) -> Stateful<Div> {
-    div()
-        .id(id)
-        .flex_none()
-        .size(px(24.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(ROW_RADIUS))
-        .cursor_pointer()
-        .hover(|s| s.bg(Theme::fill_hover()))
-        .child(icon(glyph, size, color))
-}
-
 /// One `·`-separated part of a row's extra line.
 fn extra_segment(glyph: Option<&'static str>, text: String) -> Div {
     div()
@@ -529,7 +514,7 @@ impl Workspace {
             )
             .child(div().flex_1().min_w_0().pl(px(2.)).flex().child(self.search.clone()))
             .when(has_text, |d| {
-                d.child(input_button("search-clear", "search-clear", 18., Theme::text_disabled()).ml(px(8.)).on_click(cx.listener(
+                d.child(Button::ghost("search-clear").icon("search-clear").sized(ButtonSize::Xs).ml(px(8.)).on_click(cx.listener(
                     |w, _, window, cx| {
                         w.search.update(cx, |s, cx| s.set_text("", cx));
                         window.focus(&w.search.focus_handle(cx), cx);
@@ -615,7 +600,7 @@ impl Workspace {
             .flex()
             .items_center()
             // GPUI clips children to the dialog's rect, not its rounded corners.
-            .rounded_b(px(16.))
+            .rounded_b(px(crate::design::geo().dialog_r))
             .border_t_1()
             .border_color(Theme::line_divider())
             .bg(Theme::bg_overlay())
@@ -626,34 +611,23 @@ impl Workspace {
             .overflow_hidden()
             .child(ui_text(crate::settings::tr("支持 ↑↓ 键选择、Enter 键打开", "Use ↑↓ to select, Enter to open")));
 
-        let modal = div()
-            .id("search-dialog")
-            .occlude()
+        // The dialog's shell only: the input row, list and footer run edge to edge.
+        let modal = Dialog::new("search-dialog")
             .w(px(540.))
             .h(px(dialog_h))
-            .flex()
-            .flex_col()
-            .rounded(px(16.))
-            .bg(crate::theme::raised(Theme::bg_body()))
-            .shadow(theme::shadow_dialog())
+            .p_0()
+            .gap_0()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(input)
-            .child(div().flex_none().h(px(1.)).bg(Theme::line_divider()))
+            .child(Separator::new())
             // The thumb sits in the list's right padding, over no row.
             .child(div().flex_1().min_h_0().relative().flex().flex_col().child(list).child(self.home.search_scrollbar.render(&self.search_scroll)))
             .child(footer);
 
         Some(
             deferred(
-                div()
+                scrim()
                     .id("search-mask")
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .bg(scrim())
                     .on_mouse_down(MouseButton::Left, cx.listener(|w, _, window, cx| w.close_search(window, cx)))
                     .child(modal),
             )
