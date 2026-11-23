@@ -143,6 +143,7 @@ impl Workspace {
             .p_0()
             .gap_0()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .closable(close)
             .child(
                 div()
                     .flex_none()
@@ -153,8 +154,7 @@ impl Workspace {
                     .justify_between()
                     .border_b_1()
                     .border_color(crate::design::color::border())
-                    .child(div().text_size(px(16.)).line_height(px(20.)).child(crate::settings::tr("文档信息", "Document information")))
-                    .child(crate::design::Button::ghost("doc-info-close").sized(crate::design::ButtonSize::Xs).icon("x").on_click(close)),
+                    .child(div().text_size(px(16.)).line_height(px(20.)).child(crate::settings::tr("文档信息", "Document information"))),
             )
             .child(
                 div()

@@ -59,7 +59,7 @@
 | `Badge` | `Badge::new(s)`（灰）、`Badge::chip(s, i)`（第 i 种选项色，9 为灰）、`Badge::colored(s, (底, 字))` | — | `.closable()`（末尾 ×） | `Styled` |
 | `Kbd` | `Kbd::new(s)` | — | — | — |
 | `KbdGroup` | `KbdGroup::new(strokes)`（每一下按键是一组键名，如 `shortcuts::strokes(key)`） | — | — | — |
-| `Dialog` | `Dialog::new(id)` | — | `.title(s)`、`.description(s)`、`.footer(el)`；`.child()` 是正文 | 同 `Button` |
+| `Dialog` | `Dialog::new(id)` | — | `.title(s)`、`.description(s)`、`.footer(el)`；`.child()` 是正文；`.closable(on_close)`（右上角 ×） | 同 `Button` |
 | `scrim()` | 函数，返回铺满父元素、居中的遮罩 `Div` | — | — | — |
 | `Card` | `Card::new(id)` | — | `.child()`（默认一列） | 同 `Button`，另有 `ParentElement` |
 | `Item` | `Item::new(title)` | — | `.description(Option<s>)`；`.child()` 是右边的控件 | `Styled`、`ParentElement` |

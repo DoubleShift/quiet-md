@@ -720,12 +720,6 @@ impl Editor {
                     .child(Button::primary("cd-ok").sized(ButtonSize::Sm).ml(px(8.)).label(crate::settings::text("确定")).on_click(cx.listener(|e, _, window, cx| e.confirm_countdown(window, cx)))),
             );
 
-        let close = Button::ghost("cd-close")
-            .icon("x")
-            .absolute()
-            .top(px(20.))
-            .right(px(20.))
-            .on_click(cx.listener(|e, _, window, cx| e.close_countdown(window, cx)));
         // The dialog: its title, the two options, the footer.
         let dialog = design::Dialog::new("cd-dialog")
             .relative()
@@ -741,7 +735,7 @@ impl Editor {
                 cx.notify();
             }))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(close)
+            .closable(cx.listener(|e, _, window, cx| e.close_countdown(window, cx)))
             .child(div().child(duration).child(stamp_opt))
             .footer(footer);
         let layer = div()

@@ -8,7 +8,7 @@ use crate::editor::view::SubPage;
 use crate::input::{TextField, TextFieldEvent};
 use crate::store::Entry;
 use crate::theme::{self, Theme};
-use crate::design::{Button, ButtonSize, Dialog, Field, FieldSize, Separator, scrim};
+use crate::design::{Button, Dialog, Field, FieldSize, Separator, scrim};
 use crate::ui::{ROW_RADIUS, icon, ui_text};
 use gpui::{prelude::FluentBuilder, *};
 use std::collections::{HashMap, HashSet};
@@ -364,7 +364,7 @@ impl Workspace {
             .w(px(828.))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .title(crate::settings::text("从 我的文档 移动到"))
-            .child(Button::ghost("move-close").sized(ButtonSize::Xs).icon("x").absolute().top(px(20.)).right(px(20.)).on_click(cx.listener(|w, _, window, cx| w.close_move(window, cx))))
+            .closable(cx.listener(|w, _, window, cx| w.close_move(window, cx)))
             .child(
                 div()
                     .h(px(512.))

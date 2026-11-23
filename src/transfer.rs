@@ -8,7 +8,7 @@ use crate::app::Workspace;
 use crate::settings::display_title;
 use crate::model::{Block, BlockKind, Document, RichText};
 use crate::printing::{self, Job};
-use crate::design::{Button, ButtonSize, Dialog, scrim};
+use crate::design::{Button, Dialog, scrim};
 use crate::ui::{TipExt, ToastKind};
 use gpui::{prelude::FluentBuilder, *};
 use std::path::{Path, PathBuf};
@@ -630,10 +630,10 @@ impl Workspace {
             .w(px(720.))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .title(crate::settings::text("导出 Markdown 设置"))
-            .child(Button::ghost("export-md-close").sized(ButtonSize::Xs).icon("x").absolute().top(px(20.)).right(px(20.)).on_click(cx.listener(|w, _, _, cx| {
+            .closable(cx.listener(|w, _, _, cx| {
                 w.export_md = None;
                 cx.notify();
-            })))
+            }))
             .child(
                 div()
                     .flex()
