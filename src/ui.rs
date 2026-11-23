@@ -109,7 +109,8 @@ pub enum TipSide {
     Right,
 }
 
-const TIP_GAP: f32 = 8.;
+/// Radix's offset with shadcn's 10pt arrow (`size-2.5`, sticking out 5).
+const TIP_GAP: f32 = 10.;
 const TIP_ARROW: f32 = 5.;
 const TIP_PAD: f32 = 2. * crate::design::G.tip_py;
 const TIP_LINE: f32 = 16.;
@@ -314,7 +315,8 @@ impl TipExt for Stateful<Div> {
         let bounds = Rc::new(std::cell::Cell::new(None::<Bounds<Pixels>>));
         let record = bounds.clone();
         let label = SharedString::from(label);
-        self.child(canvas(move |b, _, _| record.set(Some(b)), |_, _, _, _| {}).absolute().inset_0()).tooltip(move |window, cx| {
+        // shadcn's TooltipProvider: `delayDuration = 0`
+        self.child(canvas(move |b, _, _| record.set(Some(b)), |_, _, _, _| {}).absolute().inset_0()).tooltip_show_delay(std::time::Duration::ZERO).tooltip(move |window, cx| {
             let origin = window.mouse_position() + point(px(1.), px(1.));
             let (label, anchor) = (label.clone(), bounds.get());
             cx.new(|_| Tooltip { label, anchor, origin, side }).into()

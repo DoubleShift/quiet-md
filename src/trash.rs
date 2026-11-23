@@ -466,10 +466,9 @@ impl Workspace {
         let ok = if danger { Button::destructive("confirm-ok") } else { Button::primary("confirm-ok") }.label(action);
         let ws = cx.entity().downgrade();
         let ws2 = ws.clone();
-        let dialog = Dialog::new("confirm-dialog")
+        let dialog = Dialog::alert("confirm-dialog")
             .keys(&self.dialog_focus, move |_, cx| { let _ = ws.update(cx, |w, cx| { w.confirm = None; w.after_save = None; cx.notify(); }); },
                 Some(move |window: &mut Window, cx: &mut App| { let _ = ws2.update(cx, |w, cx| w.confirm_ok(window, cx)); }))
-            .w(px(if matches!(c, Confirm::SaveFailed | Confirm::Migrate(_) | Confirm::SwitchLibrary(_)) { 520. } else { 400. }))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .title(title)
             .description(body)

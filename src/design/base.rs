@@ -38,11 +38,40 @@ pub(crate) use element;
 /// Glyphs the editor's icon set has and the shell's doesn't.
 const EDITOR_ICONS: &[&str] = &["calendar", "columns-2", "table", "layout-grid", "grip-vertical", "maximize", "undo", "redo", "download", "upload", "link", "paperclip",
     "user", "trash-2", "list-tree", "history", "row-add", "column-add", "type", "image", "move", "wrap-text", "replace", "caret-down", "caret-up", "triangle-down",
-    "triangle-right", "square-plus", "unlink", "todo", "circle-help", "view-card", "timer", "one-to-one", "swatch-none", "fit-page"];
+    "triangle-right", "square-plus", "unlink", "todo", "circle-help", "view-card", "timer", "one-to-one", "swatch-none", "fit-page", "circle-check", "octagon-x"];
 
 /// An icon from either set: the editor's `editor-icons/` for the names above and any the shell's
 /// `icons/` lacks, else the shell's.
 pub fn icon(name: &str, size: f32, color: Hsla) -> Svg {
     let editor = EDITOR_ICONS.contains(&name) || crate::assets::get(&format!("icons/{name}.svg")).is_none();
     if editor { crate::editor_ui::icon(name, size, color) } else { crate::ui::icon(name, size, color) }
+}
+
+thread_local! {
+    /// Raised surfaces (a popover, a dialog, a card) being laid out around the current element.
+    static RAISED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether the component being drawn sits on a raised surface: in the dark look that surface is
+/// `muted` itself (#262626), so what shadcn fills with `muted` there steps up (`color::accent`).
+pub(crate) fn raised() -> bool { RAISED.with(|r| r.get()) > 0 }
+
+/// A raised surface's content: components laid out inside it know (`raised`).
+pub(crate) struct Raised(pub AnyElement);
+impl Element for Raised {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+    fn id(&self) -> Option<ElementId> { None }
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> { None }
+    fn request_layout(&mut self, _: Option<&GlobalElementId>, _: Option<&InspectorElementId>, window: &mut Window, cx: &mut App) -> (LayoutId, ()) {
+        (in_raised(|| self.0.request_layout(window, cx)), ())
+    }
+    fn prepaint(&mut self, _: Option<&GlobalElementId>, _: Option<&InspectorElementId>, _: Bounds<Pixels>, _: &mut (), window: &mut Window, cx: &mut App) { self.0.prepaint(window, cx); }
+    fn paint(&mut self, _: Option<&GlobalElementId>, _: Option<&InspectorElementId>, _: Bounds<Pixels>, _: &mut (), _: &mut (), window: &mut Window, cx: &mut App) { self.0.paint(window, cx) }
+}
+pub(crate) fn in_raised<R>(f: impl FnOnce() -> R) -> R {
+    RAISED.with(|r| r.set(r.get() + 1));
+    let out = f();
+    RAISED.with(|r| r.set(r.get() - 1));
+    out
 }

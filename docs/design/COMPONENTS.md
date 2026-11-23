@@ -30,13 +30,13 @@
 |---|---|---|
 | `mod.rs` | token：`color`、`chip`、`geo()`（`G`）、`shadow`、`R`、`text`、`radius` | 主题变量、Vega 尺寸 |
 | `base.rs` | `under()`（组件样式垫在调用方样式下面）、`element!` 宏、`icon()` | — |
-| `button.rs` | `Button` + `ButtonVariant`（Primary / Outline / Secondary / Ghost / Destructive）+ `ButtonSize`（Default 36 / Sm 32 / Tool 28 / Xs 24）；`icon`、`icon_end`、`label`、`selected`、`disabled`、`variant` | Button |
+| `button.rs` | `Button` + `ButtonVariant`（Primary / Outline / Secondary / Ghost / Destructive / Link）+ `ButtonSize`（Lg 40 / Default 36 / Sm 32 / Tool 28 / Xs 24）；`icon`、`icon_end`、`label`、`selected`、`disabled`、`variant` | Button |
 | `card.rs` | `Card`、`Item`、`Separator`、`Toast` + `ToastTone` | Card、Item、Separator、Sonner |
 | `menu.rs` | `Popover`（`.menu()`、`.padded()`）、`MenuItem`、`MenuLabel`、`MenuSeparator`；常量 `menu::PAD`、`ROW_H`、`SEP_H`、`LABEL_H` 给算子菜单位置用 | DropdownMenu、Popover |
 | `field.rs` | `Field`（`Field::select`、`Field::select_value`，`FieldSize`）、`Textarea`、`Label` | Input、SelectTrigger、Textarea、Label |
 | `control.rs` | `Checkbox`（含半选）、`Radio`、`Switch`、`Segmented` + `Segment`（可带图标） | Checkbox、RadioGroupItem、Switch、Tabs |
-| `badge.rs` | `Badge`（`chip(i)`、`colored`、`closable`）、`Kbd`、`KbdGroup` | Badge、Kbd、KbdGroup |
-| `dialog.rs` | `Dialog`（`title`、`description`、`footer`）、`scrim()` | Dialog |
+| `badge.rs` | `Badge`（`new` / `primary` / `outline` / `destructive`、`chip(i)`、`colored`、`closable`）、`Kbd`、`KbdGroup` | Badge、Kbd、KbdGroup |
+| `dialog.rs` | `Dialog`（`title`、`description`、`footer`、`closable`、`keys`；`Dialog::alert`）、`DialogFocus`、`scrim()` | Dialog、AlertDialog |
 
 ### 公开 API
 
@@ -44,28 +44,28 @@
 
 | 组件 | 构造 | 变体 / 尺寸 | 状态和插槽 | 可挂的处理 |
 |---|---|---|---|---|
-| `Button` | `Button::new(id, ButtonVariant)`，或 `primary / outline / secondary / ghost / destructive(id)` | `ButtonVariant::{Primary, Outline, Secondary, Ghost, Destructive}`；`.sized(ButtonSize::{Default 36, Sm 32, Tool 28, Xs 24})`（`ghost` 默认 `Tool`）；`.variant(v)` 换掉别处建好的按钮的变体 | `.label(s)`、`.icon(name)`（只有图标时是方形按钮）、`.icon_end(name)`、`.selected(bool)`（在用：`muted` 底；ghost 用 `accent`，同 shadcn 的 Toggle，深色弹窗上 `muted` 看不出；ghost 悬停用低一档的 `accent_hover`，深色下是白 6%，和在用分得开）、`.disabled(bool)`（整体 50%）；`.child()` 加在图标和文字前面（要自定颜色的图标、记位置的 canvas） | `Styled`、`InteractiveElement`、`StatefulInteractiveElement`（`.on_click`）、`TipExt`（`.tip`）、`ParentElement` |
+| `Button` | `Button::new(id, ButtonVariant)`，或 `primary / outline / secondary / ghost / destructive / link(id)` | `ButtonVariant::{Primary, Outline, Secondary, Ghost, Destructive, Link}`；`.sized(ButtonSize::{Lg 40, Default 36, Sm 32, Tool 28, Xs 24})`（`ghost` 默认 `Tool`；Xs 是 12 号字、12 的图标）；`.variant(v)` 换掉别处建好的按钮的变体 | `.label(s)`、`.icon(name)`（只有图标时是方形按钮；图标和文字同色）、`.icon_end(name)`、`.selected(bool)`（在用：shadcn 的 `aria-expanded` / Toggle 的按下，`muted` 底；ghost 悬停也是 `muted`，深色 `muted/50`；在深色弹层、对话框、卡片上提一档：悬停白 6%、在用 `accent`）、`.disabled(bool)`（整体 50%）；按下时下移 1pt；`.child()` 加在图标和文字前面（要自定颜色的图标、记位置的 canvas） | `Styled`、`InteractiveElement`、`StatefulInteractiveElement`（`.on_click`）、`TipExt`（`.tip`）、`ParentElement` |
 | `Popover` | `Popover::new(id)` | `.menu()`（一列菜单项，上下 `PAD`）、`.padded()`（表单弹窗：内边距 16、间距 16） | 子元素随意（`ParentElement`） | 同上，另有 `.on_mouse_down_out` 等 |
-| `MenuItem` | `MenuItem::new(id)` | — | `.label(s)`、`.icon(name)`、`.leading(el)`、`.description(s)`（两行）、`.shortcut(s)`、`.checked(bool)`（单选标记，关时留位）、`.submenu(bool)`、`.inset()`、`.selected(bool)`（键盘或子菜单展开时的高亮；同一菜单里只亮一行，见下面「菜单的高亮」）、`.destructive(bool)`、`.disabled(bool)`；`.child()` 加在文字后面 | 同 `Button` |
+| `MenuItem` | `MenuItem::new(id)` | — | `.label(s)`、`.icon(name)`、`.leading(el)`、`.description(s)`（两行）、`.shortcut(s)`、`.checked(bool)`（单选标记，关时留位）、`.submenu(bool)`、`.inset()`、`.editor_icon(name)`（编辑器图标集里的同名图标）、`.selected(bool)`（键盘当前行）、`.open(bool)`（子菜单开着：一直亮着）、`.destructive(bool)`、`.disabled(bool)`（整行 50%）；亮的行文字、图标、快捷键都是 `accent-foreground`，见下面「菜单的高亮」；`.child()` 加在文字后面 | 同 `Button` |
 | `MenuLabel` | `MenuLabel::new(s)` | — | — | `Styled` |
 | `MenuSeparator` | `MenuSeparator::new()` | — | — | — |
-| `Field` | `Field::new(id)`；`Field::select(id)`（带箭头）；`Field::select_value(id, s)`（小号、显示一个值） | `.sized(FieldSize::{Default 36, Sm 32})` | `.focused(bool)`（输入中 / 选择框展开，`.open()` 同义）、`.disabled(bool)`；`.child()` 放输入控件（`crate::input::TextField` 实体）或文字 | 同 `Button` |
-| `Textarea` | `Textarea::new(id)` | — | `.focused(bool)`；`.child()` | 同 `Button` |
-| `Label` | `Label::new(s)` | `.muted()`（小号说明文字） | — | — |
+| `Field` | `Field::new(id)`；`Field::select(id)`（带箭头）；`Field::select_value(id, s)`（小号、显示一个值） | `.sized(FieldSize::{Default 36, Sm 32})` | `.focused(bool)`（输入中）、`.open(bool)`（选择框展开；照 shadcn 不改外观）、`.invalid(bool)`（出错：`destructive` 边和光晕）、`.disabled(bool)`（整体 50%）；`.child()` 放输入控件（`crate::input::TextField` 实体）或文字 | 同 `Button` |
+| `Textarea` | `Textarea::new(id)` | — | `.focused(bool)`、`.invalid(bool)`、`.disabled(bool)`；`.child()` | 同 `Button` |
+| `Label` | `Label::new(s)` | `.muted()`（说明文字，shadcn 的 FieldDescription：14 号 muted） | `.disabled(bool)` | — |
 | `Checkbox` | `Checkbox::new(checked)` | — | `.partial(bool)`（部分选中：实心加横杠）、`.disabled(bool)` | `Styled`（点击由外层可点元素接） |
 | `Radio` | `Radio::new(picked)` | — | `.disabled(bool)` | `Styled`（同上） |
 | `Switch` | `Switch::new(on)` | — | `.disabled(bool)` | `Styled`（同上） |
-| `Segmented` / `Segment` | `Segmented::new().child(Segment::new(id, label).selected(bool))`；`Segmented::of(id, &[..], picked)` | — | `Segment::selected(bool)`、`Segment::icon(name)`（文字为空时是图标分段，如宫格 / 列表切换） | `Segment`：同 `Button` |
-| `Badge` | `Badge::new(s)`（灰）、`Badge::chip(s, i)`（第 i 种选项色，9 为灰）、`Badge::colored(s, (底, 字))` | — | `.closable()`（末尾 ×） | `Styled` |
+| `Segmented` / `Segment` | `Segmented::new().child(Segment::new(id, label).selected(bool))`；`Segmented::of(id, &[..], picked)` | — | `Segment::selected(bool)`、`Segment::disabled(bool)`、`Segment::icon(name)`（文字为空时是图标分段，如宫格 / 列表切换） | `Segment`：同 `Button` |
+| `Badge` | `Badge::new(s)`（secondary）、`Badge::primary / outline / destructive(s)`、`Badge::chip(s, i)`（第 i 种选项色，9 为灰）、`Badge::colored(s, (底, 字))` | — | `.closable()`（末尾 ×） | `Styled` |
 | `Kbd` | `Kbd::new(s)` | — | — | — |
 | `KbdGroup` | `KbdGroup::new(strokes)`（每一下按键是一组键名，如 `shortcuts::strokes(key)`） | — | — | — |
-| `Dialog` | `Dialog::new(id)` | — | `.title(s)`、`.description(s)`、`.footer(el)`；`.child()` 是正文；`.closable(on_close)`（右上角 ×）；`.keys(&DialogFocus, esc, enter)`（接管键盘：Esc 取消，↩ 执行默认按钮） | 同 `Button` |
+| `Dialog` | `Dialog::new(id)`；`Dialog::alert(id)`（AlertDialog：确认类问题，不带 ×，默认宽 512，18 号标题） | — | `.title(s)`、`.description(s)`、`.footer(el)`；`.child()` 是正文；`.closable(on_close)`（右上角 ×：ghost 32，距上右 16；shadcn 的 Dialog 默认带）；`.keys(&DialogFocus, esc, enter)`（接管键盘：Esc 取消，↩ 执行默认按钮） | 同 `Button` |
 | `DialogFocus` | `DialogFocus::new(cx)`，存在持有对话框状态的视图里 | — | 每次绘制时 `.sync(open, window, cx)`：打开时把焦点从原来的地方（多半是编辑器）拿到对话框，关上时还回去 | — |
 | `scrim()` | 函数，返回铺满父元素、居中的遮罩 `Div` | — | — | — |
 | `Card` | `Card::new(id)` | — | `.child()`（默认一列） | 同 `Button`，另有 `ParentElement` |
 | `Item` | `Item::new(title)` | — | `.description(Option<s>)`；`.child()` 是右边的控件 | `Styled`、`ParentElement` |
 | `Separator` | `Separator::new()` | `.vertical()` | — | `Styled` |
-| `Toast` | `Toast::new(ToastTone::{Success, Error, Info}, s)` | — | — | `Styled` |
+| `Toast` | `Toast::new(ToastTone::{Success, Error, Info}, s)`（Sonner：宽 356、圆角 18、13 号字、Lucide 的线框图标） | — | — | `Styled` |
 | `icon(name, size, color)` | 两套图标里任取一个：外壳图标集没有的名字自动去编辑器图标集找，`MenuItem::icon` 等组件里的图标同样适用 | — | — | — |
 
 菜单位置计算用的常量：`design::menu::{PAD, ROW_H, SEP_H, LABEL_H}`。
@@ -95,10 +95,11 @@
 对齐 Radix：同一个菜单里任何时候最多亮一行。
 
 - `Popover` 就是一个菜单：它里面的 `MenuItem`（不算更里层的 `Popover` 里的）在 prepaint 时登记自己的位置和 `selected`，`Popover` 在 paint 前定出亮哪一行，行只在被选中时画 `accent` 底。状态按 `Popover` 的 id 存在 GPUI 的元素状态里，菜单关掉就丢掉。
-- 悬停和 `selected`（键盘、或子菜单开着）谁后变谁说了算：指针移到一行上、或在一行上移动，指针说了算；`selected` 换了一行，键盘说了算。指针离开所有行时回到 `selected` 的那一行。
-- 所以子菜单开着时，父行（`selected`）在指针移进子菜单（另一个 `Popover`）或不在任何行上时亮着；指针移到同一菜单的别的行上，父行就熄灭。
-- 指针在不可用的行上时谁都不亮。不在任何 `Popover` 里的 `MenuItem`（对话框里嵌的列表）照旧：悬停或 `selected` 就亮。
-- 调用方不用改：原来写 `.selected(true)` 的地方照写。
+- 悬停和 `selected`（键盘当前行）谁后变谁说了算：指针移到一行上、在一行上移动、或离开所有行，指针说了算；`selected` 换了一行，键盘说了算。**指针离开所有行时一行都不亮**（Radix 的规则；键盘再动一下，键盘行才重新亮）。
+- 亮的行文字、图标、快捷键、说明都换成 `accent-foreground`。行在排版时读上一帧定下的亮行；定下的亮行变了，就再画一帧。
+- 子菜单开着的那一行用 `.open(true)`：不管指针在哪都亮着（shadcn 的 `data-open:bg-accent`）。照 Radix，指针移到同一菜单的兄弟行时，调用方把子菜单关上。
+- 指针在不可用的行上时谁都不亮。不在任何 `Popover` 里的 `MenuItem`（对话框里嵌的列表）照旧：悬停、`selected` 或 `open` 就亮。
+- 2026-11-23 起，表示「子菜单开着」的调用点从 `.selected` 改成了 `.open`：`docmenu.rs` 的 `menu_item`、`sidebar.rs` 的「下载」、`editor/overlays.rs` 的 `row`（块菜单的缩进、颜色、在下方添加）和斜杠菜单里带子面板的行（`.open(sub && n == selected)`）、组件面板的子菜单演示。
 
 ### 对话框的键盘
 
@@ -116,6 +117,7 @@
 ### 和设计系统文档的出入
 
 - 删掉了对比用的 affectUI 风格（`Look::Affect`、`QUIET_MD_LOOK`）：每个 token 和组件不再按风格分支。组件库面板的「浅深对照」用 `theme::with_dark` 把同一页按浅色、深色并排画。
+- 2026-11-23 逐项照 shadcn 还原（[SHADCN_AUDIT.md](SHADCN_AUDIT.md)）：ghost 按钮悬停和在用改回 `muted`（深色弹层上提一档）；按钮图标和文字同色，新增 `Link` 变体和 `Lg` 尺寸，Xs 改成 12 号字和 12 的图标；菜单项亮起时文字变 `accent-foreground`、不可用整行 50%、新增 `.open()`；Dialog 的 × 改成 32、距边 16，新增 `Dialog::alert`；分段控件 36 高；Toast 照 Sonner；Item 照 shadcn 的间距；提示气泡立即出现；遮罩深色也是黑 10%；斜杠菜单不再给滚动条常驻留空。
 - 2026-11-23 打磨：新增 token `color::accent_hover`（ghost 按钮悬停，深色白 6%）；`Dialog::closable`、`Dialog::keys`、`DialogFocus`；组件库面板自己的外壳（左侧导航、顶部浅色 / 深色 / 浅深对照、点击提示）换成 `Button::ghost`、`Segmented`、`Toast`。
 - 新增 token：`button_sm_h`、`dialog_r`（R+4）、`dialog_pad` / `dialog_gap`（24，Vega 的 `p-6 gap-6`）、`shadow::sm()`（选中的分段）、`shadow::dialog()`、`color::secondary_hover`、`destructive_hover`、`disabled`、`overlay`、`background`；2026-11-22 全应用替换时又加了 `card_r`（R+4）、`toast_r` / `toast_px` / `toast_py`（Sonner：`rounded-lg`、p-4 左右、上下 12）、`tip_r` / `tip_px` / `tip_py`（tooltip：`rounded-md`、px-3 py-1.5）。
 - `MenuItem` 的文字统一用 `foreground`、图标 `muted-foreground`；危险项文字和图标都是 `destructive`，悬停 `destructive/10`。

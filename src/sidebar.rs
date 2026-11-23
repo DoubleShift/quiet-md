@@ -799,7 +799,7 @@ impl Workspace {
             .child(
                 item("rm-download", "export", crate::settings::text("下载"))
                     .submenu(true)
-                    .selected(m.sub)
+                    .open(m.sub)
                     .on_hover(set_sub(true)),
             )
             .child(

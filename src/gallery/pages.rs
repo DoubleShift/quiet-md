@@ -56,6 +56,10 @@ fn field_select(g: &Gallery, k: K, w: f32, cx: &mut Cx) -> Div {
     let menu = choices(g, k, &FIELDS, 200., cx);
     drop(g, k, pick_box(k, div().flex().items_center().gap(px(6.)).child(icon(glyph, 14., color::muted_foreground())).child(t(name))).open(g.open == Some(k)).w(px(w)), menu, cx)
 }
+/// Shuts the gallery's submenu when the pointer reaches a sibling row (Radix).
+fn shut(cx: &mut Cx) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
+    cx.listener(|g: &mut Gallery, on: &bool, _, cx| if *on && g.is(("sub", 0)) { g.on.remove(&("sub", 0)); cx.notify(); })
+}
 fn two(live: Div, still: Div) -> Div { div().flex().flex_col().gap(px(32.)).child(group("可操作", live)).child(group("状态对照", still)) }
 
 // ---- 按钮 ----
@@ -68,10 +72,15 @@ pub fn buttons(g: &mut Gallery, _w: &mut Window, cx: &mut Cx) -> Div {
         .child(Button::outline((tag, 1usize)).sized(sz).label("取消").on_click(says(cx, "取消")))
         .child(Button::secondary((tag, 2usize)).sized(sz).label("次要").on_click(says(cx, "次要")))
         .child(Button::ghost((tag, 3usize)).sized(sz).icon("plus").label("添加").on_click(says(cx, "添加")))
-        .child(Button::destructive((tag, 4usize)).sized(sz).label("删除").on_click(says(cx, "删除")));
+        .child(Button::destructive((tag, 4usize)).sized(sz).label("删除").on_click(says(cx, "删除")))
+        .child(Button::link((tag, 5usize)).sized(sz).label("了解更多").on_click(says(cx, "了解更多")));
     let live = div().flex().flex_col().gap(px(20.))
-        .child(item(&format!("默认 {} 高（主要 / 描边 / 次要 / 文字 / 危险）", gg.button_h), variants(ButtonSize::Default, "bd", cx)))
+        .child(item("Lg 40 高（主要 / 描边 / 次要 / 文字 / 危险 / 链接）", variants(ButtonSize::Lg, "bl", cx)))
+        .child(item(&format!("默认 {} 高", gg.button_h), variants(ButtonSize::Default, "bd", cx)))
         .child(item(&format!("Sm {} 高", gg.button_sm_h), variants(ButtonSize::Sm, "bs", cx)))
+        .child(item("Xs 24 高（text-xs，图标 12）", variants(ButtonSize::Xs, "bxs", cx)))
+        .child(item("图标按钮 · icon-lg 40 / icon 36 / icon-sm 32 / 工具栏 28 / icon-xs 24", div().flex().items_center().gap(px(8.))
+            .children([ButtonSize::Lg, ButtonSize::Default, ButtonSize::Sm, ButtonSize::Tool, ButtonSize::Xs].into_iter().enumerate().map(|(i, sz)| Button::outline(("bis", i)).sized(sz).icon("plus").on_click(says(cx, "图标按钮"))))))
         .child(row()
             .child(item(&format!("图标按钮 · 工具栏 {} 高", gg.tool_h), div().flex().gap(px(4.)).child(Button::ghost("bi0").icon("undo").on_click(says(cx, "撤销"))).child(Button::ghost("bi1").icon("redo").on_click(says(cx, "重做")))
                 .child(Button::ghost("bi2").icon("search").on_click(says(cx, "搜索"))).child(Button::ghost("bi3").icon("ellipsis").on_click(says(cx, "更多")))))
@@ -80,12 +89,16 @@ pub fn buttons(g: &mut Gallery, _w: &mut Window, cx: &mut Cx) -> Div {
             .child(item("工具按钮（点一下加一）", tool_btn("b-t", "text-search", n).on_click(tap(cx, |g, _, _| { let n = g.at(("tool", 0)); g.pick.insert(("tool", 0), (n + 1) % 4); }))))
             .child(item("在用 / 不在用（点一下切换）", Button::ghost("b-sel").icon("view-settings").label("字段配置").selected(g.is(("bsel", 0))).on_click(tap(cx, |g, _, _| g.flip(("bsel", 0))))))
             .child(item("带下拉", Button::outline("bdd").label("排序").icon_end("chevron-down").on_click(says(cx, "排序")))));
+    let ghost_hover = if crate::theme::dark() { color::muted_half() } else { color::muted() };
     let still = row()
-        .child(item("悬停（主要 / 描边 / 文字 / 图标）", div().flex().gap(px(8.)).child(Button::primary("bh0").label("确定").bg(color::primary_hover()))
-            .child(Button::outline("bh1").label("取消").bg(color::muted())).child(Button::ghost("bh2").icon("plus").label("添加").bg(color::accent_hover())).child(Button::ghost("bh3").icon("ellipsis").bg(color::accent_hover()))))
-        .child(item("文字按钮 · 悬停 / 在用", div().flex().gap(px(8.)).child(Button::ghost("bh4").icon("view-settings").label("字段配置").bg(color::accent_hover()))
-            .child(Button::ghost("bh5").icon("view-settings").label("字段配置").selected(true))))
-        .child(item("不可用", div().flex().gap(px(8.)).child(Button::primary("bx0").label("确定").disabled(true)).child(Button::outline("bx1").label("取消").disabled(true))))
+        .child(item("悬停（主要 / 描边 / 次要 / 文字 / 危险）", div().flex().gap(px(8.)).child(Button::primary("bh0").label("确定").bg(color::primary_hover()))
+            .child(Button::outline("bh1").label("取消").bg(if crate::theme::dark() { color::field_hover() } else { color::muted() })).child(Button::secondary("bh6").label("次要").bg(color::secondary_hover()))
+            .child(Button::ghost("bh2").icon("plus").label("添加").bg(ghost_hover)).child(Button::destructive("bh7").label("删除").bg(color::destructive_hover()))))
+        .child(item("文字按钮 · 悬停 / 在用（Toggle 按下、菜单展开）", div().flex().gap(px(8.)).child(Button::ghost("bh4").icon("view-settings").label("字段配置").bg(ghost_hover))
+            .child(Button::ghost("bh5").icon("view-settings").label("字段配置").selected(true)).child(Button::outline("bh8").label("排序").icon_end("chevron-down").selected(true))))
+        .child(item("弹层上的文字按钮 · 悬停 / 在用（深色提一档）", Popover::new("bpop").padded().flex_row().child(Button::ghost("bp0").icon("view-settings").label("悬停")
+            .bg(if crate::theme::dark() { color::accent_hover() } else { color::muted() })).child(Button::ghost("bp1").icon("view-settings").label("在用").selected(true))))
+        .child(item("不可用", div().flex().gap(px(8.)).child(Button::primary("bx0").label("确定").disabled(true)).child(Button::outline("bx1").label("取消").disabled(true)).child(Button::ghost("bx2").icon("plus").label("添加").disabled(true))))
         .child(item("工具按钮 · 在用", tool_btn("s-t", "sort-down", 2)));
     two(live, still)
 }
@@ -114,6 +127,10 @@ pub fn fields(g: &mut Gallery, w: &mut Window, cx: &mut Cx) -> Div {
         .child(item("有值", Field::new("f1").w(px(220.)).child(t("Reading log"))))
         .child(item("输入中", Field::new("f2").focused(true).w(px(220.)).child(t("Reading log")).child(div().w(px(1.)).h(px(16.)).bg(color::foreground()))))
         .child(item("不可用", Field::new("f3").disabled(true).w(px(220.)).child("Reading log")))
+        .child(item("出错（aria-invalid）", Field::new("f4").invalid(true).w(px(220.)).child(t("Reading log"))))
+        .child(item("Select · 不可用", Field::select("f7").disabled(true).w(px(220.)).child(t("文本"))))
+        .child(item("Textarea · 输入中 / 不可用", div().flex().gap(px(8.)).child(Textarea::new("ta1").focused(true).w(px(160.)).child(t("=SUM(A)"))).child(Textarea::new("ta2").disabled(true).w(px(160.)).child(t("=SUM(A)")))))
+        .child(item("Label · 说明文字", div().flex().flex_col().gap(px(gg.label_gap)).child(Label::new("文档标题")).child(Field::new("f8").w(px(220.)).child(t("周报"))).child(Label::new("在侧栏和标签页里显示").muted())))
         .child(item("Select · 展开", Field::select("f6").open(true).w(px(220.)).child(icon("ft-text", 16., color::muted_foreground())).child(t("文本"))))
         .child(item("小选择框（选项）", pick_box("s-pt", div().flex().items_center().gap(px(4.)).child(tag("Reading", 0)).child(tag("Next", 9))).w(px(200.))));
     two(live, still)
@@ -137,7 +154,8 @@ pub fn toggles(g: &mut Gallery, _w: &mut Window, cx: &mut Cx) -> Div {
     let still = row()
         .child(item("Checkbox · 关 / 开 / 部分 / 不可用", div().flex().gap(px(16.)).child(checkbox(false)).child(checkbox(true)).child(checkbox(false).partial(true)).child(checkbox(true).disabled(true))))
         .child(item("Radio · 关 / 开 / 不可用", div().flex().gap(px(16.)).child(Radio::new(false)).child(Radio::new(true)).child(Radio::new(true).disabled(true))))
-        .child(item("Switch · 关 / 开 / 不可用", div().flex().gap(px(16.)).child(switch(false, true)).child(switch(true, true)).child(switch(true, false))));
+        .child(item("Switch · 关 / 开 / 不可用", div().flex().gap(px(16.)).child(switch(false, true)).child(switch(true, true)).child(switch(true, false))))
+        .child(item("Segmented · 一段不可用", Segmented::new().w(px(260.)).child(Segment::new("sgd0", "低").selected(true)).child(Segment::new("sgd1", "中等")).child(Segment::new("sgd2", "高").disabled(true))));
     two(live, still)
 }
 
@@ -159,7 +177,7 @@ pub fn badges(g: &mut Gallery, _w: &mut Window, cx: &mut Cx) -> Div {
     if g.rows["chips"].is_empty() { chips = chips.child(ghost_btn("cx-reset", "undo", "恢复").on_click(tap(cx, |g, _, _| { g.rows.insert("chips", vec![0, 1, 2]); }))); }
     let live = row().child(item("Badge · 选项颜色（点一下换成深一档）", tags)).child(item("Badge · 可删除（点一下去掉）", chips));
     let still = row()
-        .child(item("Badge · 灰", Badge::new("草稿")))
+        .child(item("Badge · secondary / default / outline / destructive", div().flex().gap(px(8.)).child(Badge::new("草稿")).child(Badge::primary("新")).child(Badge::outline("只读")).child(Badge::destructive("过期"))))
         .child(item("关联 / 人员", div().flex().gap(px(8.)).child(link_chip("Objectivity")).child(person("Okafor", 0)).child(person("Lin", 4))))
         .child(item("Kbd", div().flex().gap(px(4.)).child(Kbd::new("⌘")).child(Kbd::new("⇧")).child(Kbd::new("F"))))
         .child(item("KbdGroup · 连按", crate::design::KbdGroup::new(vec![vec!["⌘".into(), "K".into()], vec!["⌘".into(), "S".into()]])));
@@ -249,7 +267,7 @@ pub fn menus(g: &mut Gallery, w: &mut Window, cx: &mut Cx) -> Div {
         .child(item("「…」菜单", drop(g, ("more", 0), Button::ghost("more-b").icon("ellipsis"), more, cx)));
     let mut dropl = Popover::new("g-dl").menu().w(px(160.));
     for (i, s) in OPS.iter().enumerate() { dropl = dropl.child(list_row(("sdl", i)).selected(i == 4).child(div().flex_1().text_color(color::foreground()).child(s.to_string())).when(i == 2, |d| d.child(icon("check", 14., color::foreground())))); }
-    // a submenu that stays open: its row lit while the pointer is in it or on no row, out on a sibling
+    // a submenu, as Radix: open on its row, shut when the pointer reaches a sibling; its row lit while it is open
     let sub_k = ("sub", 0);
     let sub_open = g.is(sub_k);
     let mut sub = Popover::new("s-sub").menu().w(px(160.));
@@ -257,15 +275,24 @@ pub fn menus(g: &mut Gallery, w: &mut Window, cx: &mut Cx) -> Div {
         sub = sub.child(MenuItem::new(("sw", i)).label(s).checked(g.at(("width", 0)) == i).on_click(tap(cx, move |g, _, cx| { g.pick.insert(("width", 0), i); g.on.remove(&("sub", 0)); g.say(format!("页面宽度：{s}"), cx); })));
     }
     let doc_live = Popover::new("s-doc").menu().w(px(220.))
-        .child(MenuItem::new("sd1").icon("page-width").label("页面宽度").submenu(true).selected(sub_open)
+        .child(MenuItem::new("sd1").icon("page-width").label("页面宽度").submenu(true).open(sub_open)
             .on_hover(cx.listener(move |g, on: &bool, _, cx| if *on && !g.is(sub_k) { g.on.insert(sub_k); cx.notify(); }))
             .on_click(tap(cx, move |g, _, _| g.flip(sub_k)))
             .when(sub_open, |d| d.child(div().absolute().left_full().top(px(-crate::design::menu::PAD)).child(deferred(anchored().snap_to_window_with_margin(px(8.)).child(div().pl(px(4.)).child(sub))).with_priority(1)))))
-        .child(MenuItem::new("sd2").icon("search").label("查找和替换").shortcut("⌘F").on_click(says(cx, "查找和替换")))
-        .child(MenuItem::new("sd5").icon("copy").label("创建副本").shortcut("⌘D").on_click(says(cx, "创建副本")))
-        .child(MenuItem::new("sd7").icon("info").label("文档信息").disabled(true))
-        .child(MenuItem::new("sd8").icon("bin").label("删除").destructive(true).on_click(says(cx, "删除")));
-    let still = row().child(item("子菜单开着（悬停「页面宽度」打开，点一下收起）：指针在子菜单里或不在任何行上时父行亮着，移到兄弟行上父行熄灭", doc_live).max_w(px(300.))).child(item("字段菜单 · 第二项悬停", field_menu("sfm", Some(1), cx))).child(item("下拉选择 · 第五项悬停", dropl));
+        .child(MenuItem::new("sd2").icon("search").label("查找和替换").shortcut("⌘F").on_hover(shut(cx)).on_click(says(cx, "查找和替换")))
+        .child(MenuItem::new("sd5").icon("copy").label("创建副本").shortcut("⌘D").on_hover(shut(cx)).on_click(says(cx, "创建副本")))
+        .child(MenuItem::new("sd7").icon("info").label("文档信息").disabled(true).on_hover(shut(cx)))
+        .child(MenuItem::new("sd8").icon("bin").label("删除").destructive(true).on_hover(shut(cx)).on_click(says(cx, "删除")));
+    let lit = Popover::new("s-lit").menu().w(px(220.)).child(MenuLabel::new("我的账户"))
+        .child(MenuItem::new("sl1").icon("pen-line").label("重命名").shortcut("⌘R").selected(true))
+        .child(MenuItem::new("sl2").inset().label("缩进的一项"))
+        .child(MenuItem::new("sl3").label("显示网格").checked(true))
+        .child(MenuSeparator::new())
+        .child(MenuItem::new("sl4").icon("bin").label("删除").destructive(true).selected(false));
+    let lit_d = Popover::new("s-litd").menu().w(px(220.))
+        .child(MenuItem::new("sd-1").icon("copy").label("创建副本").shortcut("⌘D"))
+        .child(MenuItem::new("sd-2").icon("bin").label("删除").shortcut("⌫").destructive(true).selected(true));
+    let still = row().child(item("键盘行亮着（标题、快捷键、缩进、勾选）", lit)).child(item("危险项亮着", lit_d)).child(item("子菜单（悬停「页面宽度」打开，点一下收起）：开着时父行一直亮着；指针移到兄弟行上子菜单收起（Radix）", doc_live).max_w(px(300.))).child(item("字段菜单 · 第二项悬停", field_menu("sfm", Some(1), cx))).child(item("下拉选择 · 第五项悬停", dropl));
     div().flex().flex_col().gap(px(32.)).child(group("可操作 · 应用", app)).child(group("可操作 · 数据表", table)).child(group("子菜单和状态对照", still))
 }
 
@@ -309,11 +336,11 @@ fn form_footer(cx: &mut Cx) -> Div {
 pub fn dialog(g: &mut Gallery, which: &'static str, w: &mut Window, cx: &mut Cx) -> Div {
     let close = |id: &'static str, label: &'static str, cx: &mut Cx| Button::outline(id).label(label).on_click(tap(cx, |g, _, _| g.dialog = None));
     let card = match which {
-        "delete" => Dialog::new("dg1").occlude().w(px(420.)).title("删除「周报」？").description("文档会移到回收站，30 天内可以恢复。")
+        "delete" => Dialog::alert("dg1").occlude().title("删除「周报」？").description("文档会移到回收站，30 天内可以恢复。")
             .footer(div().flex().justify_end().gap(px(8.)).child(close("dg1-n", "取消", cx)).child(Button::destructive("dg1-y").label("删除").on_click(tap(cx, |g, _, cx| { g.dialog = None; g.say("删了（假的）", cx); })))),
-        "rename" => Dialog::new("dg2").occlude().w(px(420.)).title("重命名").child(field_in(&g.inputs.rename, w, cx))
+        "rename" => Dialog::new("dg2").occlude().title("重命名").closable(tap(cx, |g, _, _| g.dialog = None)).child(field_in(&g.inputs.rename, w, cx))
             .footer(div().flex().justify_end().gap(px(8.)).child(close("dg2-n", "取消", cx)).child(Button::primary("dg2-y").label("确定").on_click(tap(cx, |g, _, cx| { g.dialog = None; let s = g.inputs.rename.read(cx).text.clone(); g.say(format!("改名为「{s}」"), cx); })))),
-        _ => Dialog::new("dg3").occlude().w(px(400.)).title("新增字段").child(form_body(g, w, cx)).footer(form_footer(cx)),
+        _ => Dialog::new("dg3").occlude().w(px(400.)).title("新增字段").closable(tap(cx, |g, _, _| g.dialog = None)).child(form_body(g, w, cx)).footer(form_footer(cx)),
     };
     div().absolute().inset_0().flex().items_center().justify_center()
         .child(div().id("scrim").absolute().inset_0().bg(color::overlay()).occlude().on_click(tap(cx, |g, _, _| g.dialog = None)))
@@ -330,9 +357,9 @@ pub fn dialogs(g: &mut Gallery, w: &mut Window, cx: &mut Cx) -> Div {
         .child(item("表单弹窗本身（类型能展开、选项能加减、色块点一下换）", if g.dialog.is_some() { small("（在弹窗里）").into_any_element() } else {
             Popover::new("form").padded().w(px(340.)).child(form_body(g, w, cx)).child(form_footer(cx)).into_any_element() }));
     let still = row()
-        .child(item("Dialog · 确认", Dialog::new("s-dg1").w(px(420.)).title("删除「周报」？").description("文档会移到回收站，30 天内可以恢复。")
+        .child(item("AlertDialog · 确认（不带 ×）", Dialog::alert("s-dg1").title("删除「周报」？").description("文档会移到回收站，30 天内可以恢复。")
             .footer(div().flex().justify_end().gap(px(8.)).child(Button::outline("s-dg1-n").label("取消")).child(Button::destructive("s-dg1-y").label("删除")))))
-        .child(item("Dialog · 表单（输入中）", Dialog::new("s-dg2").w(px(420.)).title("重命名").child(Field::new("s-dg2-f").focused(true).child(t("周报 · 第 47 周")))
+        .child(item("Dialog · 表单（输入中，带 ×）", Dialog::new("s-dg2").w(px(420.)).title("重命名").closable(|_, _, _| {}).child(Field::new("s-dg2-f").focused(true).child(t("周报 · 第 47 周")))
             .footer(div().flex().justify_end().gap(px(8.)).child(Button::outline("s-dg2-n").label("取消")).child(Button::primary("s-dg2-y").label("确定")))));
     two(live, still)
 }

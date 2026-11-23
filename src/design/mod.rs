@@ -94,6 +94,7 @@ pub mod color {
     pub fn primary() -> Hsla { pick(N900, N200) }
     pub fn primary_foreground() -> Hsla { pick(N50, N900) }
     pub fn secondary() -> Hsla { pick(N100, N800) }
+    pub fn secondary_foreground() -> Hsla { pick(N900, N50) }
     /// What is selected.
     pub fn muted() -> Hsla { pick(N100, N800) }
     /// Captions, icons, row numbers.
@@ -102,8 +103,9 @@ pub mod color {
     pub fn placeholder() -> Hsla { muted_foreground() }
     /// Under the pointer; a ghost button that is on.
     pub fn accent() -> Hsla { pick(N100, N700) }
-    /// A ghost button under the pointer, a step under `accent` so on and hovered tell apart in the
-    /// dark (white 6%, ours: on a #262626 popover `accent` is #404040 for both); `accent` in the light.
+    /// A ghost button under the pointer on a raised surface in the dark (white 6%, ours: there
+    /// shadcn's `muted/50` would be the surface itself, and `accent`, #404040, is its "on"); `accent`
+    /// in the light.
     pub fn accent_hover() -> Hsla { if dark() { alpha(hex(N0), 0.06) } else { accent() } }
     pub fn accent_foreground() -> Hsla { pick(N900, N50) }
     /// oklch(0.577 0.245 27.325) / oklch(0.704 0.191 22.216).
@@ -136,7 +138,7 @@ pub mod color {
     /// A disabled control's text.
     pub fn disabled() -> Hsla { alpha(muted_foreground(), 0.5) }
     /// shadcn's overlay under a dialog: `black/10`.
-    pub fn overlay() -> Hsla { crate::theme::rgbaf(0, 0, 0, if dark() { 0.4 } else { 0.1 }) }
+    pub fn overlay() -> Hsla { crate::theme::rgbaf(0, 0, 0, 0.1) }
 }
 
 /// The option colours of 单选 / 多选 (shadcn has none; ours): Tailwind's 200 fill under its 800
@@ -276,11 +278,11 @@ pub const G: Geo = Geo {
     popover_pad: 16., popover_gap: 16., panel_gap: 8., label_gap: 8.,
     dialog_r: R + 4., dialog_pad: 24., dialog_gap: 24.,
     badge_h: 20., badge_r: radius::PILL, badge_px: 8.,
-    checkbox: 16., checkbox_r: 4., switch_w: 32., switch_h: 18., thumb: 16.,
+    checkbox: 16., checkbox_r: 4., switch_w: 32., switch_h: 18.4, thumb: 16.,
     tool_h: 28., tool_r: R - 2.,
-    seg_h: 32., seg_pad: 3., seg_r: R,
-    table_head: 40., row_short: 36., row_medium: 44., cell_px: 8., frame_r: R + 4., card_r: R + 4., item_h: 48., item_px: 16., item_py: 10.,
-    toast_r: R, toast_px: 16., toast_py: 12., tip_r: R - 2., tip_px: 12., tip_py: 6.,
+    seg_h: 36., seg_pad: 3., seg_r: R,
+    table_head: 40., row_short: 36., row_medium: 44., cell_px: 8., frame_r: R + 4., card_r: R + 4., item_h: 48., item_px: 16., item_py: 14.,
+    toast_r: R + 8., toast_px: 16., toast_py: 16., tip_r: R - 2., tip_px: 12., tip_py: 6.,
     add_row_h: 36., footer_h: 40., group_h: 36.,
 };
 

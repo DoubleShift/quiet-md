@@ -54,7 +54,7 @@ pub(crate) type K = (&'static str, usize);
 /// The pages: name, what is on it, how to draw it.
 type Page = fn(&mut Gallery, &mut Window, &mut Context<Gallery>) -> Div;
 const PAGES: [(&str, &str, Page); 12] = [
-    ("按钮", "Button：五种变体、四种尺寸、图标按钮、工具按钮", pages::buttons),
+    ("按钮", "Button：六种变体、五种尺寸、图标按钮、工具按钮", pages::buttons),
     ("输入", "Field、Select、Textarea、Label", pages::fields),
     ("选择控件", "Checkbox、Radio、Switch、Segmented、颜色", pages::toggles),
     ("标签", "Badge、Kbd、KbdGroup、关联、人员", pages::badges),

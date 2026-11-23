@@ -31,7 +31,8 @@
   - 尺寸、圆角：`style-vega.css`，并在 ui.shadcn.com/create（Vega / Neutral / Radius Default）上实测核对过。
 - affectUI：[flohoeller/affectui](https://github.com/flohoeller/affectui) @ `e627e5b` 的 clean 风格（`components/*-clean.tsx`），MIT。只取了弹窗和卡片的阴影。
 - 两者都只搬数值和样式配方，不搬代码，登记在 THIRD_PARTY.md。组件是给 GPUI 写的，用到哪个组件再迁哪个。
-- 不参考 BoardUI（Pro 授权，不适合开源仓库）。GPUI Kit（longbridge/gpui-component）也不作为移植来源。
+- 不参考 BoardUI（Pro 授权，不适合开源仓库）。GPUI Kit（longbridge/gpui-component，Apache-2.0）可作实现参考（在 GPUI 里怎么做菜单的键盘导航、焦点、对话框），不整段搬代码；真有改写过来的，登记在 THIRD_PARTY.md。
+- **2026-11-23 起，细节完全照 shadcn 还原**（维护者要求）。逐个组件、逐个属性的对照在 [SHADCN_AUDIT.md](SHADCN_AUDIT.md)；允许保留的偏差只有下面「和 shadcn 的偏差」一节列的三类。
 
 ## 二、Token（`src/design/mod.rs`）
 
@@ -48,17 +49,36 @@ shadcn Neutral 主题的语义色，浅色、深色各一套，用 `theme::dark(
 | `popover` / `card` | #ffffff | #262626 | 菜单、弹窗 |
 | `primary` | #171717 | #e5e5e5 | 主按钮、勾选的复选框、开着的开关 |
 | `muted` | #f5f5f5 | #262626 | 选中的行、列、格子 |
-| `accent` | #f5f5f5 | #404040 | 亮着的菜单项、在用的文字按钮 |
-| `accent_hover` | #f5f5f5 | 白 6% | 悬停的文字按钮（比 `accent` 低一档，深色下和「在用」分得开） |
+| `muted` 也用于 | | | 文字按钮的悬停（深色 `muted/50`）和在用（同 shadcn 的 Toggle） |
+| `accent` | #f5f5f5 | #404040 | 亮着的菜单项；深色弹层上在用的文字按钮 |
+| `accent_hover` | #f5f5f5 | 白 6% | 深色弹层、对话框、卡片上悬停的文字按钮 |
 | `border` | #e5e5e5 | 白 10% | 表格线、分隔线 |
 | `input` | #e5e5e5 | 白 15% | 输入框、复选框的边 |
 | `ring` | #a1a1a1 | #737373 | 焦点环、选区框 |
 | `destructive` | #e7000b | #ff6467 | 删除 |
 
-和 shadcn 不同的两处：
+和 shadcn 不同的地方只有允许的那几类，见下面「和 shadcn 的偏差」。
 
-- **深色模式下的弹窗。** shadcn 的页面是 #0a0a0a、弹窗是 #171717；我们的深色页面是 #1c1c1c，比它的弹窗还亮。所以弹窗和卡片升一档，用 #262626；画在弹窗上的 `accent` 也跟着升一档，用 #404040（shadcn 官网自己的深色 accent）。
-- **浅色模式下的输入框底色。** shadcn 是透明。GPUI 会把阴影画在元素底下而不只是外面，透明底会透出 shadow-xs 的灰，所以画成白色。深色模式下输入框是半透明的 `input/30`，去掉 shadow-xs。
+### 和 shadcn 的偏差
+
+只有这三类，其余一律照 shadcn（逐项见 [SHADCN_AUDIT.md](SHADCN_AUDIT.md)）。
+
+**A. 边缘。** 弹层、卡片、对话框用 `shadow::popover()` / `frame()` / `dialog()`：0.5px 细环加投影，代替 shadcn 的 `ring-1 ring-foreground/10` 加 `shadow-*`。原因是维护者 2026-11-22 定的：shadcn 的边框和阴影两层叠在一起，边缘发虚。Toast 的 1px 边加 Sonner 的阴影也换成 `popover()`。控件（输入框、描边按钮、复选框）仍是 Vega 的 1px 实线。
+
+**B. 圆角档位。** 照下面的 R 档位表（目前和 Vega 一致）。以后「提档」由维护者决定。
+
+**C. GPUI 限制逼出来的。**
+
+- **深色弹层 #262626、弹层上的 `accent` #404040。** shadcn 的深色页面是 #0a0a0a、弹层 #171717；我们的深色页面是 #1c1c1c，比它的弹层还亮，弹层只能升一档。画在弹层上的 `accent` 跟着升一档（shadcn 官网自己的深色 accent）。
+- **深色弹层、对话框、卡片上的文字按钮提一档。** shadcn 用 `muted`（悬停 `muted/50`）。我们的深色弹层本身就是 `muted` 的颜色，画上去看不见，所以在这些面上（`base::raised()`）悬停用白 6%（`accent_hover`）、在用用 `accent`。浅色和页面上照 shadcn。
+- **浅色输入框铺白底。** shadcn 是透明。GPUI 会把阴影画在元素底下，透明底会透出 shadow-xs 的灰。深色输入框是半透明的 `input/30`，同理去掉 shadow-xs（描边按钮、复选框、开关也一样）。
+- **500 字重。** shadcn 的按钮、标签、标题、菜单标签是 font-medium。GPUI 用系统字体时 500 和 400 一样，第 3 批另做（打包有中等字重的界面字体）。
+- **菜单快捷键的字距**（`tracking-widest`）：GPUI 没有 letter-spacing，把字符拆开、每个后面空 0.1em 来模拟。
+- **对话框遮罩的模糊**（`backdrop-blur-xs`）：GPUI 画不了背景模糊，只有黑 10%。
+- **提示气泡不自动换行**（`max-w-xs`）：气泡按行量宽来定位，调用方用 `\n` 分行。
+- **按钮、开关等没有 `focus-visible` 焦点环**：这些控件不接键盘焦点。
+
+**待维护者决定（不在上面三类里，这次没改）：** 工具栏按钮 28 高（`ButtonSize::Tool`）。shadcn 只有 24（icon-xs）和 32（icon-sm）。应用里约 37 处默认用它，改高会动到多处按固定尺寸算的位置。
 
 ### 选项颜色 `chip`
 
@@ -77,12 +97,13 @@ shadcn Neutral 主题的语义色，浅色、深色各一套，用 `theme::dark(
 |---|---|---|---|
 | sm | R − 4 | 6 | 菜单项 |
 | md | R − 2 | 8 | 按钮、输入框、选择框、多行输入框、菜单、弹窗、工具栏按钮 |
-| lg | R | 10 | 分段控件的外框 |
-| xl | R + 4 | 14 | 卡片（页面里的表格外框） |
+| lg | R | 10 | 分段控件的外框（里面的段 8，照 shadcn 不按「外 − 内边距」算） |
+| xl | R + 4 | 14 | 卡片（页面里的表格外框）、对话框 |
+| 2xl | R + 8 | 18 | Toast（Sonner 的 `rounded-2xl`） |
 | 固定 | — | 4 | 复选框 |
 | 胶囊 | `radius::PILL` | — | 选项标签、开关 |
 
-- **想更圆：改档位，不改 `R`。** `geo()` 的 `SHADCN` 表里，每个圆角都写成 `R - 2.` 这样的形式。要让菜单更圆，就把它的 `R - 2.` 换成 `R + 2.` 或 `R + 4.`。
+- **想更圆：改档位，不改 `R`。** `design::G` 表里，每个圆角都写成 `R - 2.` 这样的形式。要让菜单更圆，就把它的 `R - 2.` 换成 `R + 2.` 或 `R + 4.`。
 - **嵌套的圆角要配套：里层 = 外层 − 中间的内边距。** 例如菜单提到 14、内边距 4，菜单项就用 10。否则角上的缝隙宽窄不一。
 
 ### 尺寸 `geo()`
@@ -92,14 +113,17 @@ shadcn Neutral 主题的语义色，浅色、深色各一套，用 `theme::dark(
 | | 值 |
 |---|---|
 | 字号 | 14（`text-sm`，行高 20）；小字 12（`text-xs`，行高 16） |
-| 按钮 | 高 36，左右 10；工具栏和图标按钮 28 |
+| 按钮 | Lg 40、默认 36、Sm 32、Xs 24（12 号字、12 的图标）；左右 10（Xs 8），图标那一侧 8（Sm、Xs 6）；工具栏 28 |
 | 输入框、选择框 | 高 36，左右 10；面板里的小号高 32 |
 | 多行输入框 | 内边距 10 |
 | 菜单 | 内边距 4；菜单项高 32、左右 8、图标和文字间距 8；分隔线通栏 |
 | 弹窗 | 内边距 16，字段之间 16，筛选和排序的行之间 8，标签在控件上方 8 |
 | 选项标签 | 高 20，左右 8 |
-| 复选框、开关 | 16；32×18，圆点 16 |
-| 分段控件 | 高 32，内边距 3 |
+| 复选框、开关 | 16；32×18.4，圆点 16 |
+| 分段控件 | 高 36，内边距 3；每段高 29、左右 8、圆角 8 |
+| 对话框 | 默认宽 448（AlertDialog 512），内边距 24，关闭 × 32、距上右 16 |
+| Toast | 宽 356，内边距 16，间距 6，13 号字，圆角 18 |
+| 提示气泡 | 离触发器 10，立即出现（`delayDuration = 0`） |
 | 表格 | 表头 40，单元格左右 8，行高 36（低）或 44（中等），添加记录 36，统计栏 40，分组标题 36 |
 
 ### 阴影 `shadow`
@@ -112,11 +136,12 @@ shadcn Neutral 主题的语义色，浅色、深色各一套，用 `theme::dark(
 | `ring(c, w)` | 宽 `w` 的环 | 弹窗里嵌的列表（0.5px `border`） |
 
 - 卡片的环用 10%，和 Vega 卡片的 `ring-foreground/10` 一样浓，只是画成 0.5px。卡片不浮起，所以投影只有 1–2px。
+- 边缘为什么不照 shadcn：见上面「和 shadcn 的偏差」A。
 - **GPUI 的限制：** 阴影画在元素底下，整块都会被盖住。所以用阴影画边缘的元素，自己必须有不透明的底色（卡片要 `bg(Theme::bg_body())`）。半透明的东西（比如颜色块）只能用 1px 边框。
 
 ### 字重
 
-shadcn 的表头、标签、按钮是 500。GPUI 用系统字体时，500 和 400 渲染出来一样，所以目前都是常规字重。要做到需要打包一款有中等字重的界面字体，留到以后。
+shadcn 的表头、标签、按钮是 500。GPUI 用系统字体时，500 和 400 渲染出来一样，所以目前都是常规字重（偏差 C）。要做到需要打包一款有中等字重的界面字体，第 3 批做。
 
 ## 三、组件
 
@@ -126,7 +151,7 @@ shadcn 的表头、标签、按钮是 500。GPUI 用系统字体时，500 和 40
 |---|---|---|
 | `primary_btn` | Button default | `primary` 底，悬停 `primary/80`，36 高、圆角 8 |
 | `plain_btn` | Button outline | `border` 细边加 `xs`；深色 `input` 边、`input/30` 底 |
-| `ghost_btn` / `icon_btn` / `tool_btn` | Button ghost | 无底，悬停 `accent_hover`，在用 `accent`；工具栏 28 高 |
+| `ghost_btn` / `icon_btn` / `tool_btn` | Button ghost | 无底，悬停和在用 `muted`（深色悬停 `muted/50`；深色弹层上提一档）；工具栏 28 高 |
 | `danger_btn` | Button destructive | `destructive` 的浅底和字 |
 | `field_box` / `input_box` | Input | `input` 细边，36 / 32 高，圆角 8；输入中是 `ring` 边加 3pt 的 `ring/50` 光晕 |
 | `area_box` | Textarea | 圆角 8，内边距 10 |
@@ -134,11 +159,11 @@ shadcn 的表头、标签、按钮是 500。GPUI 用系统字体时，500 和 40
 | `field_label` | Label | 14，`foreground`，在控件上方 8 |
 | `checkbox` | Checkbox | 16，圆角 4，勾上是 `primary` |
 | `switch` | Switch | 32×18，开 `primary`、关 `input` |
-| `segmented` / `seg_track` / `segment` | Tabs | `muted` 底，圆角 10、内边距 3，选中的一段白底、圆角 7 |
+| `segmented` / `seg_track` / `segment` | Tabs | `muted` 底，36 高、圆角 10、内边距 3；选中的一段白底加 shadow-sm（深色 `input/30` 加 `input` 边）、圆角 8 |
 | `swatch` | — | 颜色块；选中时 2pt 的环，用边框画（半透明） |
 | `tag` / `link_chip` / `person` | Badge | 高 20，胶囊，12 号字 |
 | `popover` | DropdownMenuContent / PopoverContent | `popover` 底，圆角 8，`shadow::popover()`，无描边 |
-| `menu_row` / `menu_item` / `list_row` / `menu_title` / `menu_rule` | DropdownMenuItem / Label / Separator | 32 高、圆角 6，悬停 `accent`；分隔线 `border`，通栏 |
+| `menu_row` / `menu_item` / `list_row` / `menu_title` / `menu_rule` | DropdownMenuItem / Label / Separator | 32 高、圆角 6；亮的行 `accent` 底、`accent-foreground` 字；不可用整行 50%；分隔线 `border`，通栏 |
 | `inset_list` | — | 弹窗里嵌的列表：菜单的外观、0.5px 环，不浮起 |
 | `panel_title` / `close_btn` / `kbd` / `chip_x` | — | 面板标题、关闭按钮、快捷键、选项上的 × |
 

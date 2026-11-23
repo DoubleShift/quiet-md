@@ -365,7 +365,7 @@ pub fn prompt(window: &mut Window, cx: &mut Context<crate::app::Workspace>) -> O
     if blocking(cx) {
         let State::Ready(m, _) = &state else { return None };
         let body = crate::localized_format!("这个版本需要更新后才能继续使用。{} 已下载好，重启即可完成更新，打开的文档会先保存。", "This version must be updated before you continue. Version {} is downloaded; Quiet.md restarts to finish, and open documents are saved first.", m.version);
-        let dialog = Dialog::new("forced-update-dialog").w(px(440.)).title(tr("需要更新 Quiet.md", "Quiet.md needs to update"))
+        let dialog = Dialog::alert("forced-update-dialog").title(tr("需要更新 Quiet.md", "Quiet.md needs to update"))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(div().flex().flex_col().gap(px(8.))
                 .children(f.message().map(|t| div().child(ui::ui_para(t.to_string()))))

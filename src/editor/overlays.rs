@@ -108,15 +108,15 @@ pub fn kind_color(k: &BlockKind) -> Hsla {
     })
 }
 
-/// A menu row: the editor's glyph (`leading`: most aren't in the shell's
-/// set), the label, a chevron when it opens a submenu.
-fn row(id: impl Into<ElementId>, icon_name: &str, label: impl Into<SharedString>, sub: bool, highlighted: bool) -> MenuItem {
-    MenuItem::new(id).leading(icon(icon_name, 16., color::muted_foreground())).label(crate::settings::label(label.into())).submenu(sub).selected(highlighted)
+/// A menu row: the editor's glyph (most aren't in the shell's set), the
+/// label, a chevron when it opens a submenu (lit while that is open).
+fn row(id: impl Into<ElementId>, icon_name: &str, label: impl Into<SharedString>, sub: bool, open: bool) -> MenuItem {
+    MenuItem::new(id).editor_icon(icon_name.to_string()).label(crate::settings::label(label.into())).submenu(sub).open(open)
 }
 
 /// A row that wouldn't apply: greyed, no hover.
 fn row_off(id: impl Into<ElementId>, icon_name: &str, label: impl Into<SharedString>) -> MenuItem {
-    MenuItem::new(id).leading(icon(icon_name, 16., color::disabled())).label(crate::settings::label(label.into())).disabled(true)
+    MenuItem::new(id).editor_icon(icon_name.to_string()).label(crate::settings::label(label.into())).disabled(true)
 }
 
 /// A 24pt tool with an 18pt editor glyph: the toolbars, the menus' icon
@@ -513,6 +513,7 @@ impl Editor {
                     .label(crate::settings::label(it.label))
                     .submenu(sub)
                     .selected(n == selected)
+                    .open(sub && n == selected)
                     .on_mouse_move(hover_sel(n))
                     .when(!sub, |d| d.on_mouse_down(MouseButton::Left, run(kind)))
                     .when(sub, |d| d.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())),

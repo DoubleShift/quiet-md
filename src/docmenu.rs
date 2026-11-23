@@ -27,9 +27,9 @@ fn item_top(k: usize, dividers: usize) -> f32 {
     PAD + ROW_H * k as f32 + DIV_H * dividers as f32
 }
 
-/// A row; one whose submenu is open keeps the hover fill.
+/// A row; one whose submenu is open stays lit (`open`).
 fn menu_item(id: &'static str, ic: &'static str, label: impl Into<SharedString>, sub: bool, open: bool) -> MenuItem {
-    MenuItem::new(id).icon(ic).label(crate::settings::label(label.into())).submenu(sub).selected(open)
+    MenuItem::new(id).icon(ic).label(crate::settings::label(label.into())).submenu(sub).open(open)
 }
 
 /// 下载为's text-only items.
