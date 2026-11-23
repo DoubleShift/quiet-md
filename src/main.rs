@@ -30,6 +30,7 @@ mod devtools {
     pub fn take_pick() -> Option<Vec<std::path::PathBuf>> { None }
     pub fn file_drag() -> bool { false }
 }
+mod design;
 mod docinfo;
 mod docmenu;
 mod editor;
@@ -64,6 +65,7 @@ mod themes;
 mod fonts;
 mod font_classes;
 mod font_downloads;
+mod gallery;
 mod shortcuts;
 #[allow(dead_code, unused_imports)]
 mod feishu_theme;
@@ -214,6 +216,8 @@ fn main() { web::main() }
 #[cfg(not(target_family = "wasm"))]
 fn main() {
     logging::init();
+    // the design system's 组件库 panel alone: no library, no main window (src/gallery)
+    if gallery::wanted() { return gallery::run(); }
     let scripted = devtools::scripted();
     // No single-instance guard: copies may share a library (builds tested
     // side by side). `Store` rereads an index another copy rewrote before

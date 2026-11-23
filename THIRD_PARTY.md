@@ -818,6 +818,8 @@ The 26 covers and their thumbnails in `assets/covers/` and the project-drawn ill
 
 `assets/themes/` contains four complete CSS themes (Craft, Feishu, Notion and Obsidian), each specifying the current value of every property. Individual color, font size and spacing values are not subject to copyright. The theme files are distributed under MIT. The names identify the styles and imply no affiliation with the respective companies.
 
+The design system in `src/design/` takes its colour, radius and spacing values from [shadcn/ui](https://github.com/shadcn-ui/ui) (MIT, Copyright (c) 2023 shadcn): the Neutral theme and the Nova and Vega styles. No shadcn code is included; the components are written for GPUI. The edge of its popovers and cards takes its values from [affectUI](https://github.com/flohoeller/affectui)'s clean style (MIT, Copyright (c) 2026 Florian Höller (adfects)), read at commit `e627e5b`; no affectUI code is included either.
+
 ## Bundled documents
 
 The project wrote the Getting Started sample documents in `shared-mock/library/` and distributes them under MIT.
