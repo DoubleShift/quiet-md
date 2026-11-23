@@ -199,6 +199,31 @@
 | secondary-foreground | oklch(0.205) / oklch(0.985) | `secondary_foreground()` | 新增 |
 | 遮罩 | black/10 | 黑 10% | 改（深色原来 40%） |
 
+## Toggle、ToggleGroup、ButtonGroup、Toolbar（`src/design/toolbar.rs`，2026-11-23 第 1d 批）
+
+| 属性 | shadcn | 我们 | 处理 |
+|---|---|---|---|
+| toggle 尺寸 | `.cn-toggle-size-default` h-9 min-w-9 px-2.5；sm h-8 min-w-8 px-2.5；lg h-10 min-w-10 | `ToggleSize::{Default, Sm, Lg}`：36 / 32 / 40，左右 10；只有图标时 36 宽 | 新增 |
+| toggle 带图标和文字 | `has-data-[icon=inline-start]:pl-2`（sm pl-1.5），gap-1 | 图标侧 8（sm 6），间距 4 | 新增 |
+| toggle 圆角、字号 | `.cn-toggle` rounded-md text-sm | 8、14 | 新增 |
+| toggle 字重 | font-medium | 400 | 保留 C |
+| toggle 悬停 | `hover:bg-muted hover:text-foreground` | `muted`；深色弹层上 `accent_hover` | 新增；弹层上提一档保留 C（同 1c 的 ghost） |
+| toggle 按下 | `aria-pressed:bg-muted` | `.pressed(true)`：`muted`；深色弹层上 `accent` | 新增；同上 |
+| toggle 图标 | `[&_svg]:size-4`，继承颜色 | 16，foreground | 新增 |
+| toggle outline | `border-input hover:bg-muted border bg-transparent shadow-xs` | 1px `input`、shadow-xs；浅色铺 `background` | 新增；浅色铺底保留 C（GPUI 把阴影画在元素底下，同输入框） |
+| toggle 不可用 | `disabled:opacity-50` | 50% | 新增 |
+| ToggleGroup 间距 | `spacing`（默认 2 = 8；文字格式示例用 1 = 4） | 工具条里 4 | 新增 |
+| ButtonGroup | 无间距；`[&>*:not(:first-child)]:rounded-l-none border-l-0`，`[&>*:not(:last-child)]:rounded-r-none` | `ButtonGroup`：同 | 新增 |
+| ButtonGroupSeparator | `.cn-button-group-separator` bg-input，self-stretch，竖的上下 my-px | 1px `input`，self-stretch，上下各 1 | 新增 |
+| Toolbar 外壳 | 无此组件；按 Popover：bg-popover rounded-md p-1，ring + shadow-md | `Toolbar`：popover 底、8、内边距 4、高 40；`shadow::popover()` | 我们的（拼法）；边缘保留 A |
+| 工具条里的按下、展开 | Toggle `aria-pressed`、Button `aria-expanded`：bg-muted，无阴影 | 同；原来按下的工具是 `accent` 底，下拉箭头开着时翻成朝上 | 改（箭头不再翻转：shadcn 的触发器箭头不变） |
+| 工具条按钮尺寸 | Toggle sm 36 × 32；Button icon-sm 32；带箭头的 sm 按钮 pl-1.5 pr-1.5 | 同（下拉触发器 48、分体 A▾ 64） | 改（原来 24 高的 Xs 按钮、18 的图标、间距 8、内边距 8） |
+| 下拉箭头 | lucide ChevronDown size-4，继承颜色 | `chevron-down` 16，foreground | 改（原来 12 的 caret，muted） |
+| 块手柄 | `ButtonGroup` + `Button variant="outline" size="icon-xs"`（24 方形，圆角 min(md, 8)，图标 size-3） | 两段 outline：1px 边、`background` 底、shadow-xs、圆角 8、图标 12；悬停 outline 的悬停色；菜单开着 `muted` | 改（原来 1px `line_border`、圆角 6、悬停和开着都是 `handle_active`、图标 14） |
+| 块手柄尺寸 | 24 × 48（两个 icon-xs） | 26 高，42 宽（24 + 18），空行 + 28 宽 | 保留 C：编辑器按这些固定尺寸摆手柄（和首行垂直居中、表格手柄在列选择条那一行） |
+| 块手柄悬停 | 每个按钮各自悬停 | 两半一起亮 | 我们的：整块是一个控件（按下就是拖动或开菜单），不分左右 |
+| 字数小块 | 无 | outline xs 按钮的外观（1px `border`、shadow-xs、8、text-xs muted、`background` 底） | 我们的；改（原来 `button_border`、`shadow_button`） |
+
 ## 滚动条（斜杠菜单，`src/editor/overlays.rs`）
 
 | 属性 | shadcn | 我们 | 处理 |

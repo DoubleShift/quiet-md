@@ -618,3 +618,64 @@ pub fn editors(g: &mut Gallery, w: &mut Window, cx: &mut Cx) -> Div {
         .child(item("编辑选项（改名、换色）", div().flex().flex_col().gap(px(10.)).child(edit).child(div().flex().items_center().gap(px(6.)).child(small("效果：")).child(tag(if name.is_empty() { " " } else { &name }, g.at(("es", 0)) as u8)))));
     div().flex().flex_col().gap(px(32.)).child(group("可操作", live))
 }
+
+// ---- 编辑器工具条 ----
+
+/// A toolbar as the editor's selection toolbar lays it out: T▾ | ≡▾ | six marks, A▾ | 更多.
+fn text_toolbar(id: &'static str, pressed: [bool; 6], open: Option<usize>, live: Option<&Gallery>, cx: &mut Cx) -> crate::design::Toolbar {
+    use crate::design::{ButtonGroup, ButtonGroupSeparator, Toggle, Toolbar};
+    const MARKS: [&str; 6] = ["bold", "strikethrough", "italic", "underline", "link", "code"];
+    let trigger = |k: usize, ic: &'static str| Button::ghost((id, k)).sized(ButtonSize::Sm).editor_icon(ic).icon_end("chevron-down").selected(open == Some(k));
+    let turn = if live.is_some() { trigger(0, "type").on_click(tap(cx, |g, _, _| g.flip(("tb-turn", 0)))) } else { trigger(0, "type") };
+    let mut bar = Toolbar::new(id).child(turn).child(ButtonGroupSeparator::new()).child(trigger(1, "align-left")).child(ButtonGroupSeparator::new());
+    for (i, ic) in MARKS.iter().enumerate() {
+        let k = ("tbm", i);
+        let t = Toggle::new((id, 10 + i)).editor_icon(*ic).pressed(match live { Some(g) => g.is(k), None => pressed[i] });
+        bar = bar.child(if live.is_some() && i != 4 { t.on_click(tap(cx, move |g, _, _| g.flip(k))) } else { t });
+    }
+    // the A shows the last colours (content): the editor's default, the light-yellow highlight
+    let hl = crate::editor_theme::bg_color("light-yellow").unwrap_or(color::muted());
+    let a = div().size(px(20.)).rounded(px(2.)).bg(hl).flex().items_center().justify_center().text_size(px(16.)).text_color(crate::theme::on_mark(color::foreground())).child("A");
+    bar.child(ButtonGroup::new().child(Button::ghost((id, 20usize)).sized(ButtonSize::Sm).child(a)).child(Button::ghost((id, 21usize)).sized(ButtonSize::Sm).icon("chevron-down").selected(open == Some(2))))
+        .child(ButtonGroupSeparator::new())
+        .child(Button::ghost((id, 22usize)).sized(ButtonSize::Sm).editor_icon("layout-grid").selected(open == Some(3)))
+}
+
+pub fn toolbars(g: &mut Gallery, _w: &mut Window, cx: &mut Cx) -> Div {
+    use crate::design::toolbar::block_handle;
+    use crate::design::{ButtonGroup, Toggle, ToggleSize};
+    let open = g.is(("tb-turn", 0)).then_some(0);
+    let turn = text_toolbar("tbl", [false; 6], open, Some(g), cx);
+    let turn = if open.is_some() {
+        turn.overlay(div().absolute().top(px(44.)).left(px(4.)).child(Popover::new("tbl-menu").menu().w(px(200.))
+            .child(MenuItem::new("tbl-m0").editor_icon("type").label("正文").checked(true).on_click(tap(cx, |g, _, _| g.flip(("tb-turn", 0)))))
+            .child(MenuItem::new("tbl-m1").editor_icon("heading-1").label("一级标题").checked(false).on_click(tap(cx, |g, _, _| g.flip(("tb-turn", 0)))))))
+    } else { turn };
+    let toggles = div().flex().items_center().gap(px(4.)).children(["bold", "italic", "underline"].iter().enumerate().map(|(i, ic)| {
+        let k = ("tgl", i);
+        Toggle::new(k).editor_icon(*ic).pressed(g.is(k)).on_click(tap(cx, move |g, _, _| g.flip(k)))
+    }));
+    let handles = div().flex().items_center().gap(px(16.))
+        .child(block_handle(900, Some(crate::editor_ui::icon("list-ordered", 12., crate::editor::overlays::kind_color(&crate::model::BlockKind::Bullet))), 42., g.is(("hdl", 0))).on_click(tap(cx, |g, _, _| g.flip(("hdl", 0)))))
+        .child(block_handle(901, None, 28., g.is(("hdl", 1))).on_click(tap(cx, |g, _, _| g.flip(("hdl", 1)))));
+    let live = row()
+        .child(item("Toolbar（选中文字工具条的排法；T▾ 点一下展开，记号点一下切换）", div().pb(px(if open.is_some() { 96. } else { 0. })).child(turn)))
+        .child(item("Toggle（sm）", toggles))
+        .child(item("块手柄（点一下 = 菜单开着）", handles));
+    let t = |id: &'static str| Toggle::new(id).editor_icon("bold");
+    let still = row()
+        .child(item("Toggle sm · 关 / 开 / 不可用 / 开且不可用", div().flex().gap(px(8.)).child(t("ts0")).child(t("ts1").pressed(true)).child(t("ts2").disabled(true)).child(t("ts3").pressed(true).disabled(true))))
+        .child(item("Toggle default / lg · 带文字", div().flex().items_center().gap(px(8.)).child(t("td0").sized(ToggleSize::Default).pressed(true)).child(t("tl0").sized(ToggleSize::Lg)).child(Toggle::new("tlb").editor_icon("italic").label("斜体").sized(ToggleSize::Default))))
+        .child(item("Toggle outline · 关 / 开", div().flex().gap(px(8.)).child(t("to0").outline()).child(t("to1").outline().pressed(true))))
+        .child(item("ButtonGroup · outline / ghost 分体按钮", div().flex().gap(px(16.))
+            .child(ButtonGroup::new().child(Button::outline("bg0").sized(ButtonSize::Sm).label("合并")).child(Button::outline("bg1").sized(ButtonSize::Sm).icon("chevron-down")))
+            .child(ButtonGroup::new().child(Button::ghost("bg2").sized(ButtonSize::Sm).label("应用")).child(Button::ghost("bg3").sized(ButtonSize::Sm).icon("chevron-down").selected(true)))))
+        .child(item("工具条 · 粗体开着", text_toolbar("tbs0", [true, false, false, false, false, false], None, None, cx)))
+        .child(item("工具条 · T▾ 展开", text_toolbar("tbs1", [false; 6], Some(0), None, cx)))
+        .child(item("工具条 · A▾ 展开", text_toolbar("tbs2", [false; 6], Some(2), None, cx)))
+        .child(item("块手柄 · 普通 / 菜单开着 / 空行 + / + 菜单开着", div().flex().items_center().gap(px(16.))
+            .child(block_handle(910, Some(crate::editor_ui::icon("list", 12., crate::editor::overlays::kind_color(&crate::model::BlockKind::Bullet))), 42., false))
+            .child(block_handle(911, Some(crate::editor_ui::icon("list", 12., crate::editor::overlays::kind_color(&crate::model::BlockKind::Bullet))), 42., true))
+            .child(block_handle(912, None, 28., false)).child(block_handle(913, None, 28., true))));
+    two(live, still)
+}

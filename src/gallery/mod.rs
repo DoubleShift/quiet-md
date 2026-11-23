@@ -53,7 +53,7 @@ pub(crate) type K = (&'static str, usize);
 
 /// The pages: name, what is on it, how to draw it.
 type Page = fn(&mut Gallery, &mut Window, &mut Context<Gallery>) -> Div;
-const PAGES: [(&str, &str, Page); 12] = [
+const PAGES: [(&str, &str, Page); 13] = [
     ("按钮", "Button：六种变体、五种尺寸、图标按钮、工具按钮", pages::buttons),
     ("输入", "Field、Select、Textarea、Label", pages::fields),
     ("选择控件", "Checkbox、Radio、Switch、Segmented、颜色", pages::toggles),
@@ -66,6 +66,7 @@ const PAGES: [(&str, &str, Page); 12] = [
     ("表格", "表头、行、勾选、选区、填色、分组、添加记录、统计", pages::grid),
     ("记录详情", "展开一条记录", pages::record),
     ("单元格编辑器", "日期、关联、编辑选项", pages::editors),
+    ("编辑器工具条", "Toggle、ButtonGroup、Toolbar；选中文字工具条、块手柄", pages::toolbars),
 ];
 
 /// The text inputs the pages type into.

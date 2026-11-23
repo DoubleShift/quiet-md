@@ -37,6 +37,7 @@
 | `control.rs` | `Checkbox`（含半选）、`Radio`、`Switch`、`Segmented` + `Segment`（可带图标） | Checkbox、RadioGroupItem、Switch、Tabs |
 | `badge.rs` | `Badge`（`new` / `primary` / `outline` / `destructive`、`chip(i)`、`colored`、`closable`）、`Kbd`、`KbdGroup` | Badge、Kbd、KbdGroup |
 | `dialog.rs` | `Dialog`（`title`、`description`、`footer`、`closable`、`keys`；`Dialog::alert`）、`DialogFocus`、`scrim()` | Dialog、AlertDialog |
+| `toolbar.rs` | `Toggle`（`ToggleSize`）、`ButtonGroup`、`ButtonGroupSeparator`、`Toolbar`、`block_handle()`；常量 `TOOLBAR_H`、`TOOLBAR_PAD`、`TOOLBAR_GAP`、`toolbar::w::*` 和 `toolbar_layout()` 给算下拉位置用 | Toggle、ToggleGroup、ButtonGroup（Toolbar 是这几样拼的） |
 
 ### 公开 API
 
@@ -44,7 +45,7 @@
 
 | 组件 | 构造 | 变体 / 尺寸 | 状态和插槽 | 可挂的处理 |
 |---|---|---|---|---|
-| `Button` | `Button::new(id, ButtonVariant)`，或 `primary / outline / secondary / ghost / destructive / link(id)` | `ButtonVariant::{Primary, Outline, Secondary, Ghost, Destructive, Link}`；`.sized(ButtonSize::{Lg 40, Default 36, Sm 32, Tool 28, Xs 24})`（`ghost` 默认 `Tool`；Xs 是 12 号字、12 的图标）；`.variant(v)` 换掉别处建好的按钮的变体 | `.label(s)`、`.icon(name)`（只有图标时是方形按钮；图标和文字同色）、`.icon_end(name)`、`.selected(bool)`（在用：shadcn 的 `aria-expanded` / Toggle 的按下，`muted` 底；ghost 悬停也是 `muted`，深色 `muted/50`；在深色弹层、对话框、卡片上提一档：悬停白 6%、在用 `accent`）、`.disabled(bool)`（整体 50%）；按下时下移 1pt；`.child()` 加在图标和文字前面（要自定颜色的图标、记位置的 canvas） | `Styled`、`InteractiveElement`、`StatefulInteractiveElement`（`.on_click`）、`TipExt`（`.tip`）、`ParentElement` |
+| `Button` | `Button::new(id, ButtonVariant)`，或 `primary / outline / secondary / ghost / destructive / link(id)` | `ButtonVariant::{Primary, Outline, Secondary, Ghost, Destructive, Link}`；`.sized(ButtonSize::{Lg 40, Default 36, Sm 32, Tool 28, Xs 24})`（`ghost` 默认 `Tool`；Xs 是 12 号字、12 的图标）；`.variant(v)` 换掉别处建好的按钮的变体 | `.label(s)`、`.icon(name)`（只有图标时是方形按钮；图标和文字同色）、`.editor_icon(name)`（编辑器图标集的同名图标）、`.icon_end(name)`（有图标、没文字、带尾部箭头时是菜单触发器，不是方形）、`.selected(bool)`（在用：shadcn 的 `aria-expanded` / Toggle 的按下，`muted` 底；ghost 悬停也是 `muted`，深色 `muted/50`；在深色弹层、对话框、卡片上提一档：悬停白 6%、在用 `accent`）、`.disabled(bool)`（整体 50%）；按下时下移 1pt；`.child()` 加在图标和文字前面（要自定颜色的图标、记位置的 canvas） | `Styled`、`InteractiveElement`、`StatefulInteractiveElement`（`.on_click`）、`TipExt`（`.tip`）、`ParentElement` |
 | `Popover` | `Popover::new(id)` | `.menu()`（一列菜单项，上下 `PAD`）、`.padded()`（表单弹窗：内边距 16、间距 16） | 子元素随意（`ParentElement`） | 同上，另有 `.on_mouse_down_out` 等 |
 | `MenuItem` | `MenuItem::new(id)` | — | `.label(s)`、`.icon(name)`、`.leading(el)`、`.description(s)`（两行）、`.shortcut(s)`、`.checked(bool)`（单选标记，关时留位）、`.submenu(bool)`、`.inset()`、`.editor_icon(name)`（编辑器图标集里的同名图标）、`.selected(bool)`（键盘当前行）、`.open(bool)`（子菜单开着：一直亮着）、`.destructive(bool)`、`.disabled(bool)`（整行 50%）；亮的行文字、图标、快捷键都是 `accent-foreground`，见下面「菜单的高亮」；`.child()` 加在文字后面 | 同 `Button` |
 | `MenuLabel` | `MenuLabel::new(s)` | — | — | `Styled` |
@@ -66,9 +67,25 @@
 | `Item` | `Item::new(title)` | — | `.description(Option<s>)`；`.child()` 是右边的控件 | `Styled`、`ParentElement` |
 | `Separator` | `Separator::new()` | `.vertical()` | — | `Styled` |
 | `Toast` | `Toast::new(ToastTone::{Success, Error, Info}, s)`（Sonner：宽 356、圆角 18、13 号字、Lucide 的线框图标） | — | — | `Styled` |
+| `Toggle` | `Toggle::new(id)`（默认 sm） | `.sized(ToggleSize::{Default 36, Sm 32, Lg 40})`、`.outline()` | `.icon(name)` / `.editor_icon(name)`、`.label(s)`、`.pressed(bool)`（`aria-pressed`：`muted` 底，深色弹层上提一档）、`.disabled(bool)` | 同 `Button` |
+| `ButtonGroup` | `ButtonGroup::new().child(button)…` | — | 子元素紧挨着，里侧圆角变直角、里侧左边框去掉；`.separator(ButtonGroupSeparator::new())` | `Styled` |
+| `ButtonGroupSeparator` | `ButtonGroupSeparator::new()` | — | 1px `input` 竖线，和这一行一样高，上下各缩 1 | `Styled` |
+| `Toolbar` | `Toolbar::new(id)` | — | `.child()` 是一排工具（Toggle、ghost `Button`、`ButtonGroup`、分隔线）；`.overlay(el)` / `.overlays(..)` 挂下拉（绝对定位，从工具条左上角算） | `Styled`、`InteractiveElement`、`StatefulInteractiveElement`、`ParentElement` |
+| `block_handle(key, glyph, w, open)` | 函数：编辑器的块手柄 | 42 宽（类型图标 + ⋮⋮），没有 glyph 时是 28 宽的 + | `open`：菜单开着 | 返回 `Stateful<Div>`，调用方挂按下 |
 | `icon(name, size, color)` | 两套图标里任取一个：外壳图标集没有的名字自动去编辑器图标集找，`MenuItem::icon` 等组件里的图标同样适用 | — | — | — |
 
 菜单位置计算用的常量：`design::menu::{PAD, ROW_H, SEP_H, LABEL_H}`。
+
+### 工具条
+
+shadcn 没有 Toolbar，这里按它已有的零件拼（2026-11-23，维护者要求把编辑器工具条和块手柄纳入组件库）：
+
+- **外壳**：`Toolbar` = `Popover` 的底色和边缘（`shadow::popover()`），内边距 4（Popover 的 p-1），工具之间 4（shadcn 文字格式示例的 `ToggleGroup spacing={1}`），高 40（工具都是 sm 32）。
+- **工具**：开 / 关的（粗体、斜体、对齐、裁剪、视图）用 `Toggle`，36 × 32；一次性动作（链接以外的：下载、合并、删除、添加描述）用 ghost `Button` sm 方形 32；带下拉的用 ghost `Button` sm 加 `icon_end("chevron-down")`，48 宽，下拉开着时 `selected`（`aria-expanded`）；分体按钮（A▾）用 `ButtonGroup` 包两个 32 方形 ghost 按钮；组和组之间用 `ButtonGroupSeparator`。链接按钮不会「开着」，但为了和旁边的记号一样宽，也用 `Toggle`。
+- **不要阴影、不要胶囊**：按下、展开、选中一律 `muted` 底（深色弹层上 `accent`），圆角跟按钮（8）。
+- **算位置**：下拉要贴在按钮下面，按钮的起点用 `toolbar_layout(&widths)` 算（`widths` 用 `toolbar::w::{TOGGLE, BUTTON, DROPDOWN, SPLIT, SEPARATOR}`），同时得到整条宽度；下拉放在 `top = TOOLBAR_H + 4`。编辑器里的 `toolbar_widths()`、`table_toolbar_widths()` 是现成的例子。
+- **块手柄**：`block_handle()`，shadcn 的 `ButtonGroup` 加两个 `Button variant="outline" size="icon-xs"`：1px 边、`background` 底、shadow-xs，指针在上面时两半一起变 outline 的悬停色，菜单开着时 `muted`；类型图标保留各类型的颜色，⋮⋮ 用 `muted-foreground`，图标 12。尺寸保持 26 高、42 / 28 宽（偏差 C）。
+- 用到的地方：选中文字工具条、表格选区工具条（`overlays.rs`），高亮块悬停条（`callout_bar`），图片工具条（`image.rs`），附件工具条和行内附件的悬停卡片（`file.rs`），块手柄（`overlays.rs` 的 `handle`）。
 
 ### `table::style` 里名字的变化
 
@@ -135,7 +152,11 @@
 
 - **画板工具栏、属性面板、颜色选择器、帮助对话框外壳**（`board/chrome/`）：照搬 Excalidraw 的样式和图标，工具按钮带编号角标、色块和字号滑块，组件库里没有对应的东西；只换了它的菜单和确认按钮。要不要整体换成 design 风格待定。
 - **压在影片背景上的引导页按钮**（跳过、上一步、全选）：深色半透明白字，组件的悬停底色在草地画面上看不清；背景是平的时候已经用 design 按钮。
-- **图片大图查看器的深色控制条**、**选中文字时的字数小块**、**代码块头上的语言 / 复制 / 换行工具条**（`render.rs`，在块里面，位置按固定宽度算）。
+- **图片大图查看器的深色控制条**：压在黑色遮罩上的白色图标，ghost 的 `muted` 在上面看不见。
+- **代码块头上的语言 / 复制 / 换行**（`render.rs`）：在块里面、跟文档主题走（文档字体、主题色），不是浮起来的工具条。
+- **倒计时块的设置 / 颜色按钮**（`countdown.rs`）、**斜杠菜单和块菜单的图标格子**（`overlays.rs` 的 `tool`）：在菜单或块里面，不是工具条。
+- **表格的行 / 列选择条**（`table.rs`）：贴着表格边的细条，带插入点，不是按钮。
+- **选中文字时的字数小块**：2026-11-23 起照 outline xs 按钮的外观画（1px `border`、shadow-xs、圆角 8、12 号 muted 字），但它不是按钮，没有套组件。
 - **侧栏的「更新」药丸**：带下载进度的波浪填充。
 - **没有对应组件、各只有一两处的**：提醒和倒计时的小日历、表情格子、封面面板和查找框顶部带下划线的页签、引用列表的页签、颜色色块、尺寸选择器格子、倒计时的两张选项卡片。
 - **列表行**（侧栏树、主页列表、回收站、搜索结果、设置导航、版本历史行）：按约定保持列表行的样子，只把颜色换成 token。
