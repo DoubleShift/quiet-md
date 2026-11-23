@@ -264,7 +264,8 @@ pub struct Geo {
 /// `rounded-md` R−2, `rounded-lg` R, `rounded-xl` R+4. To round the look (wanted in time), move a
 /// component up a step, as Maia does (`R - 2.` → `R + 2.`), keeping inner = outer − padding; raising
 /// `R` only scales every corner alike.
-pub const R: f32 = 10.;
+// Experiment 2026-11-23 (maintainer): R 14 with continuous corners (GPUI patch 0047).
+pub const R: f32 = 14.;
 
 /// Vega's sizes (style-vega.css, measured on ui.shadcn.com/create): 36pt controls at `rounded-md`,
 /// px-2.5; menus `rounded-md` p-1 over `rounded-sm` rows of px-2 py-1.5; popovers p-4 gap-4; dialogs
