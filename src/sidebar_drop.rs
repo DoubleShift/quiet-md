@@ -1,6 +1,7 @@
 //! Dropping onto the sidebar's 我的文档: files from the Finder are imported
-//! into the folder under the pointer (a document row: its folder; elsewhere:
-//! the top), and a 本机文件 row carried up into the tree is imported there.
+//! into the folder under the pointer, or between the rows there (a document
+//! row only opens a slot beside it, #418), and a 本机文件 row carried up into
+//! the tree is imported there.
 use fdl_core::vfs::PathExt as _;
 use crate::app::Workspace;
 use crate::settings::tr;

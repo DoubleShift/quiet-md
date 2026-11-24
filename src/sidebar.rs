@@ -674,7 +674,7 @@ impl Workspace {
                                 .with_transformation(Transformation::rotate(radians(if open { std::f32::consts::FRAC_PI_2 } else { 0. }))))))
                     }
                     // A document with children: its own icon, turning into the chevron on hover like a folder's.
-                    _ if note.is_some() && !drop_target => {
+                    _ if note.is_some() => {
                         let face = div().absolute().inset_0().flex().items_center().justify_center().opacity(1. - chevron);
                         d.child(match &e.icon {
                             Some(em) if !e.meta.markdown => face.text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 7.)).child(em.clone()),
@@ -684,7 +684,6 @@ impl Workspace {
                             .child(icon("disclosure", ROW_ICON, Theme::icon())
                                 .with_transformation(Transformation::rotate(radians(if open { std::f32::consts::FRAC_PI_2 } else { 0. }))))))
                     }
-                    _ if note.is_some() => d.child(icon("folder-input", ROW_ICON, Theme::icon())),
                     _ if e.meta.named_by_file() => d.child(icon(crate::search::file_glyph(&e.meta), ROW_ICON, Theme::icon())),
                     Some(em) => d.text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 7.)).child(em.clone()),
                     None => d.child(icon("doc", ROW_ICON, Theme::icon())),
