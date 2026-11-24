@@ -99,9 +99,11 @@ pub fn paint_texture(img: std::sync::Arc<RenderImage>, b: Bounds<Pixels>, window
 /// a ring every point out to 18 with copies no more than 2.5 apart, each
 /// ring turned half a step from the last, fading on a bell curve with a
 /// long soft tail: their overlap blurs out from every stroke's edge
-/// without steps you can see.
+/// without steps you can see. Every copy stays on one line: the box is as
+/// wide as the word, so a copy set off to the right had less room than its
+/// width and wrapped its t onto a second line (#417).
 pub fn wordmark(alpha: f32) -> Div {
-    let word = |a: f32| div().text_size(px(92.)).line_height(px(110.)).font_weight(FontWeight::MEDIUM).text_color(hsla(0., 0., 1., a)).child("Quiet");
+    let word = |a: f32| div().text_size(px(92.)).line_height(px(110.)).font_weight(FontWeight::MEDIUM).whitespace_nowrap().text_color(hsla(0., 0., 1., a)).child("Quiet");
     let mut halo = div().relative();
     for ring in 1..=18 {
         let r = ring as f32;
