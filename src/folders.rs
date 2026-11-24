@@ -9,6 +9,8 @@ impl Workspace {
     /// `markdown` picks the on-disk format; the choice is remembered for ⌘N.
     pub(crate) fn create_doc(&mut self, markdown: bool, parent: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         self.create_menu = None;
+        // A 快速笔记 window's own note is written as always; it needs no list.
+        if !self.quick_note && self.still_loading(cx) { return }
         let (m, p) = (markdown, parent.clone());
         if !self.save_before(cx, move |w, window, cx| w.create_doc(m, p.clone(), window, cx)) { return; }
         let file_before = self.store.track_file_changes();
@@ -147,6 +149,7 @@ impl Workspace {
     }
 
     pub(crate) fn new_folder(&mut self, parent: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        if self.still_loading(cx) { return }
         let file_before = self.store.track_file_changes();
         self.create_menu = None;
         match self.store.create_folder(tr("未命名文件夹", "Untitled folder"), parent.as_deref()) {

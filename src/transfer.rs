@@ -520,6 +520,7 @@ impl Workspace {
     /// document; the last one opens.
     pub fn open_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_menus();
+        if self.still_loading(cx) { return }
         cx.notify();
         let paths = open_paths(cx);
         cx.spawn_in(window, async move |this, cx| {
@@ -678,6 +679,7 @@ impl Workspace {
     /// 导入文件夹: pick a folder; it lands at the top of 我的文档 as a folder,
     /// its sub-folders as folders, its Markdown and DocxXML files as documents.
     pub fn open_import_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.still_loading(cx) { return }
         self.open_import_kind(ImportKind::Folder, None, window, cx);
     }
 

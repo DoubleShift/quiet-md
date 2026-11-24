@@ -1181,4 +1181,9 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("{} · {} 篇思源笔记文档", "{} · {} SiYuan belgesi"),
     ("Obsidian、Typora、思源笔记或任何放着 Markdown 的文件夹", "Obsidian, Typora, SiYuan veya Markdown içeren herhangi bir klasör"),
     ("，{} 篇未能导入", ", {} başarısız"),
+    ("正在载入文档库", "Kitaplık yükleniyor"),
+    ("正在载入 {} / {} 篇", "{} / {} not yükleniyor"),
+    ("已读取 {} 篇", "{} not okundu"),
+    ("文档库还在载入，稍后再试", "Kitaplık hâlâ yükleniyor; birazdan yeniden deneyin"),
+    ("马上就好…", "Neredeyse bitti…"),
 ];

@@ -421,6 +421,12 @@ impl Drop for Store {
     fn drop(&mut self) { let _ = self.flush_view_state(); }
 }
 
+/// How far a `list_with` on another thread has got: documents gone through
+/// of all it found (0 until the folders are scanned). Several libraries
+/// listed one after another add up.
+#[derive(Default)]
+pub struct ListProgress { pub done: std::sync::atomic::AtomicUsize, pub total: std::sync::atomic::AtomicUsize }
+
 /// The parts of an `Entry` that come from the document file.
 #[derive(Clone, Default)]
 struct Parsed { title: String, icon: Option<String>, body: std::sync::Arc<str>, reminders: Vec<crate::model::InlineReminder>, links: Vec<crate::model::DocLink>,
@@ -2283,7 +2289,13 @@ impl Store {
 
     /// All documents found on disk. Files and folders made in the Finder are
     /// picked up; entries whose files are gone are dropped.
-    pub fn list(&mut self) -> Vec<Entry> {
+    pub fn list(&mut self) -> Vec<Entry> { self.list_with(None, true) }
+
+    /// `list`, counting into `progress` as it goes. With `parse` off a
+    /// document `list` has not read yet is listed by its file's name, the way
+    /// one still in iCloud is, and read on a later `list` (本机文件 are read
+    /// anyway: there are few, and one may be opening right now).
+    pub fn list_with(&mut self, progress: Option<&ListProgress>, parse: bool) -> Vec<Entry> {
         let _lock = match self.begin_write() {
             Ok(lock) => Some(lock),
             Err(e) => { self.warnings.push(format!("无法锁定文档库：{e}")); None }
@@ -2326,7 +2338,9 @@ impl Store {
         let mut reparsed = false;
         let mut ids: Vec<String> = self.index.iter().filter(|(_, m)| m.folder.is_none()).map(|(k, _)| k.clone()).collect();
         ids.sort();
+        if let Some(p) = progress { p.total.fetch_add(ids.len(), std::sync::atomic::Ordering::Relaxed); }
         for id in ids {
+            if let Some(p) = progress { p.done.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
             let m = &self.index[&id];
             let p = self.path(&id);
             if m.local() && !p.fs_exists() { continue; }
@@ -2343,7 +2357,7 @@ impl Store {
                 Some(c) => c.2.clone(),
                 // Still only in iCloud (#406): listed by its name, read once
                 // someone opens it; reading it here would download the library.
-                None if crate::vfs::is_dataless(&p) => Parsed { title: stem_of(base_name(&m.rel)).to_string(), ..Default::default() },
+                None if crate::vfs::is_dataless(&p) || (!parse && !m.local()) => Parsed { title: stem_of(base_name(&m.rel)).to_string(), ..Default::default() },
                 None => {
                     #[cfg(test)]
                     DOC_READS.with(|n| n.set(n.get() + 1));
@@ -2383,6 +2397,18 @@ impl Store {
         // Written just above (`save_index` marked memory as the disk); unwritten, read next time.
         if disk_left_out && _lock.is_some() && let Some(s) = self.synced.get_mut() { s.absent.extend(left_out); }
         out
+    }
+
+    /// Takes over what `from` (a `tree_writer` of this library that listed it
+    /// off the main thread) read: the index as merged, the 回收站 and what each
+    /// document's file holds. Safe whatever was written meanwhile: whether
+    /// the next write reads the device files again is decided from the disk.
+    pub fn adopt(&mut self, mut from: Store) {
+        use std::mem::take;
+        (self.index, self.foreign, self.trash) = (take(&mut from.index), take(&mut from.foreign), take(&mut from.trash));
+        for (id, c) in from.parsed.drain() { self.parsed.entry(id).or_insert(c); }
+        (self.seen, self.merged, self.synced, self.seen_trash) = (take(&mut from.seen), take(&mut from.merged), take(&mut from.synced), take(&mut from.seen_trash));
+        self.clock.set(self.clock.get().max(from.clock.get()));
     }
 
     /// What `list` parsed last launch, for the files still where they were.
@@ -4859,6 +4885,43 @@ mod tests {
         assert_eq!(listed.len(), 4);
         assert!(listed.iter().all(|e| e.title.starts_with("页")));
         assert_eq!(DOC_READS.with(|n| n.get()), 0);
+    }
+
+    /// A first listing off the main thread: counted as it goes, and what it
+    /// read is taken over, so the main store reads no document again.
+    #[test]
+    fn a_listing_elsewhere_is_counted_and_taken_over() {
+        let lib = Lib::new("adopt");
+        let mut s = lib.open();
+        for i in 0..6 { s.create_from(&doc(&format!("页 {i}"))).unwrap(); }
+        let mut s = lib.open();
+        // Not parsing: listed by their names, nothing read.
+        DOC_READS.with(|n| n.set(0));
+        assert_eq!(s.list_with(None, false).len(), 6);
+        assert_eq!(DOC_READS.with(|n| n.get()), 0);
+        let mut w = s.tree_writer();
+        let progress = ListProgress::default();
+        let listed = w.list_with(Some(&progress), true);
+        assert_eq!((progress.done.load(std::sync::atomic::Ordering::Relaxed), progress.total.load(std::sync::atomic::Ordering::Relaxed)), (6, 6));
+        assert!(listed.iter().all(|e| e.title.starts_with("页")));
+        // Written meanwhile on the main store: still there after taking over.
+        let late = s.create_from(&doc("晚到")).unwrap();
+        s.adopt(w);
+        DOC_READS.with(|n| n.set(0));
+        let now = s.list();
+        assert_eq!(DOC_READS.with(|n| n.get()), 1, "only the page written meanwhile");
+        assert_eq!(now.len(), 7);
+        assert!(now.iter().any(|e| e.id == late && e.title == "晚到"));
+        // What the writer read and wrote stands: numbering pages there, the main store reads nothing again.
+        let mut w = s.tree_writer();
+        let _ = w.list();
+        assert!(w.initialize_manual_order().unwrap());
+        let _ = w.list();
+        s.adopt(w);
+        let before = loads();
+        assert!(!s.initialize_manual_order().unwrap());
+        let _ = s.list();
+        assert_eq!(loads(), before, "nothing read again");
     }
 
     #[test]

@@ -45,6 +45,7 @@ impl Workspace {
     /// 打开文件夹…: pick folders and add them to the sidebar where they are.
     pub fn open_folder_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.row_menu = None;
+        if self.still_loading(cx) { return }
         let paths = pick(cx);
         cx.spawn_in(window, async move |this, cx| {
             let Some(paths) = paths.await else { return };
@@ -56,6 +57,7 @@ impl Workspace {
     /// 新建文件夹…: make an empty folder and add it to the sidebar.
     pub fn new_folder_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.row_menu = None;
+        if self.still_loading(cx) { return }
         let path = pick_new(cx);
         cx.spawn_in(window, async move |this, cx| {
             let Some(path) = path.await else { return };
@@ -151,7 +153,7 @@ impl Workspace {
                 // Every window lists the top-level folder by its new name.
                 let me = window.window_handle().window_id();
                 for h in cx.windows().into_iter().filter(|w| w.window_id() != me).filter_map(|w| w.downcast::<Workspace>()) {
-                    let _ = h.update(cx, |ws, _, cx| { if !ws.store.file_task_busy() { ws.entries = ws.store.list(); ws.sort(); } cx.notify(); });
+                    let _ = h.update(cx, |ws, _, cx| { if !ws.store.file_task_busy() && !ws.store.loading() { ws.entries = ws.store.list(); ws.sort(); } cx.notify(); });
                 }
             }
             Err(e) => {

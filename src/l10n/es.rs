@@ -1129,4 +1129,9 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("{} · {} 篇思源笔记文档", "{} · {|one:# documento de SiYuan|other:# documentos de SiYuan}"),
     ("Obsidian、Typora、思源笔记或任何放着 Markdown 的文件夹", "Obsidian, Typora, SiYuan o cualquier carpeta con Markdown"),
     ("，{} 篇未能导入", ", {|one:# falló|other:# fallaron}"),
+    ("正在载入文档库", "Cargando la biblioteca"),
+    ("正在载入 {} / {} 篇", "Cargando {} de {} notas"),
+    ("已读取 {} 篇", "{} notas leídas"),
+    ("文档库还在载入，稍后再试", "La biblioteca aún se está cargando; inténtalo de nuevo en un momento"),
+    ("马上就好…", "Casi listo…"),
 ];

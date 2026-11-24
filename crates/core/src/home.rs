@@ -324,12 +324,15 @@ impl Home {
     }
 
     /// Every top-level folder's entries, each marked with its top-level folder.
-    pub fn list(&mut self) -> Vec<Entry> {
+    pub fn list(&mut self) -> Vec<Entry> { self.list_with(true) }
+
+    /// `list`; with `parse` off, documents not read yet go by their file's name (`Store::list_with`).
+    pub fn list_with(&mut self, parse: bool) -> Vec<Entry> {
         let mut out = vec![];
         self.owner.clear();
         for r in &mut self.folders {
             let Some(s) = r.store.as_mut() else { continue };
-            for mut e in s.list() {
+            for mut e in s.list_with(None, parse) {
                 self.owner.insert(e.id.clone(), r.key.clone());
                 e.top = r.key.clone();
                 out.push(e);

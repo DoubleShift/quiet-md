@@ -666,6 +666,13 @@ impl Workspace {
 
     pub(crate) fn file_drop_paths(&mut self, paths: Vec<std::path::PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
         if !matches!(self.view, crate::app::View::Home | crate::app::View::Folder) { return; }
+        // The first listing still running: Markdown files and folders open where they are, as from the Finder.
+        if self.store.loading() {
+            self.home.folders.file_drop = None;
+            let open: Vec<_> = paths.into_iter().filter(|p| p.fs_is_dir() || crate::local_files::is_markdown_path(p)).collect();
+            if open.is_empty() { self.still_loading(cx); } else { self.open_paths(&open, window, cx); }
+            return;
+        }
         if self.home.folders.file_drop.is_none() { self.home.folders.file_drop = Some(FileDrop::new(paths)); }
         let page = if self.view == crate::app::View::Folder { self.folder_current.clone() } else { None };
         let Some(d) = self.home.folders.file_drop.as_mut() else { return };

@@ -76,6 +76,7 @@ Write one command per line. Lines beginning with `#` are comments. See the top o
 - `FDL_WINDOW_CAPTURE` uses the window server to capture system-drawn window controls.
 - `FDL_NOBLINK` disables caret blinking (set by `compare.py`).
 - `FDL_RECORD_FPS` sets the recording frame rate (default 30).
+- `FDL_RECORD_START=<file.mp4>` records from the window's first frame, before the script starts (it waits about a second for the window to settle): launch and first-open loading. `record stop` ends it.
 - `QUIET_MD_FONT_URL`, `QUIET_MD_FONT_DIR` and `QUIET_MD_TRIAL_FONTS` are passed through: downloadable fonts (the board's Xiaolai, document fonts) are fetched from that folder into that cache, a compiled-in Xiaolai is ignored, and the trial fonts are listed (docs/FONTS.md). `python3 tools/harness/board_font.py` checks the board's font and its download note, `python3 tools/harness/doc_fonts.py` the document font list (`--compare` shoots an article in every font).
 - `QUIET_MD_UPDATE_URL` is passed through: the updater reads that folder instead of download.quiet.md. To test forced updates see docs/UPDATES.md. Downloads land in `~/Library/Caches/com.s1dashu.quietmd` of the `HOME` the app sees.
 - `QUIET_MD_COMPONENTS=1` opens only the 组件库 panel (`src/gallery/`, the same as `quiet_md --components`): no main window and no library; the script plays in the panel.

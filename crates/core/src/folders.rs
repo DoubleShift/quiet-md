@@ -56,31 +56,35 @@ impl Store {
         Ok(id)
     }
 
-    pub fn initialize_manual_order(&mut self) -> Result<()> {
+    /// True when it numbered something (else nothing was written).
+    pub fn initialize_manual_order(&mut self) -> Result<bool> {
         let _lock = self.begin_write()?;
         let mut settings = self.settings();
         let initialized = settings.home_manual_initialized;
-        let previous = self.index.clone();
-        let mut groups: HashMap<Option<String>, Vec<String>> = HashMap::new();
-        for (id, m) in &self.index { groups.entry(m.parent.clone()).or_default().push(id.clone()); }
-        let mut changed = false;
+        let mut groups: HashMap<Option<&str>, Vec<&str>> = HashMap::new();
+        for (id, m) in &self.index { groups.entry(m.parent.as_deref()).or_default().push(id); }
         // Freeze the order the sidebar shows (`Meta::place`): pages not yet placed
         // keep their spot at the top instead of dropping to the end.
+        let mut numbers = vec![];
         for (parent, mut ids) in groups {
-            ids.sort_by(|a, b| (self.index[a].place(), a).cmp(&(self.index[b].place(), b)));
-            if initialized && ids.iter().all(|id| self.index[id].place().0) { continue; }
-            changed = true;
-            for (i, id) in ids.iter().enumerate() {
-                let m = self.index.get_mut(id).unwrap();
-                if parent.is_none() { m.top_order = Some(i as u64 + 1); }
-                else { m.order = i as u64 + 1; m.top_order = None; }
+            ids.sort_by(|a, b| (self.index[*a].place(), a).cmp(&(self.index[*b].place(), b)));
+            if initialized && ids.iter().all(|id| self.index[*id].place().0) { continue; }
+            for (i, id) in ids.into_iter().enumerate() {
+                let m = &self.index[id];
+                let n = if parent.is_none() { (m.order, Some(i as u64 + 1)) } else { (i as u64 + 1, None) };
+                // Numbered so already: nothing to write. A FORMAT 5 library keeps no
+                // `home_manual_initialized` (its settings live in the device files),
+                // so every folder opened came here and rewrote the whole index.
+                if (m.order, m.top_order) != n { numbers.push((id.to_string(), n)); }
             }
         }
-        if !changed && initialized { return Ok(()); }
+        if numbers.is_empty() { return Ok(false); }
+        let previous = self.index.clone();
+        for (id, (order, top_order)) in numbers { if let Some(m) = self.index.get_mut(&id) { (m.order, m.top_order) = (order, top_order); } }
         if let Err(e) = self.save_index() { self.index = previous; return Err(e); }
         self.record_tree_changes(&previous);
         settings.home_manual_initialized = true;
-        self.save_settings(&settings)
+        self.save_settings(&settings).map(|()| true)
     }
 
     /// Persist one drop atomically; neither document content nor timestamps change.

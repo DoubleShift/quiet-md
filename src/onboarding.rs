@@ -134,7 +134,7 @@ const FLOW_FPS: f32 = 30.;
 /// cloud and grass green below, each patch a blurred circle wandering on its
 /// own slow loop. Colours measured from the website's hillside picture
 /// (site/public/bg.png).
-fn paint_backdrop(b: Bounds<Pixels>, t: f32, window: &mut Window) {
+pub(crate) fn paint_backdrop(b: Bounds<Pixels>, t: f32, window: &mut Window) {
     use std::f32::consts::TAU;
     let (x, y, w, h) = (f32::from(b.left()), f32::from(b.top()), f32::from(b.size.width), f32::from(b.size.height));
     let dark = theme::dark();

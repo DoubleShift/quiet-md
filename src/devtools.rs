@@ -121,8 +121,9 @@ pub fn start(window: &mut Window, cx: &mut App) {
         return;
     }
     cx.spawn(async move |cx| {
+        // `FDL_RECORD_START=<file.mp4>`: recording from the window's first frame, before the script starts.
+        let mut recording: Option<std::rc::Rc<std::cell::Cell<bool>>> = std::env::var("FDL_RECORD_START").ok().map(|f| start_recording(handle, &f, cx));
         park(ns_view, cx).await;
-        let mut recording: Option<std::rc::Rc<std::cell::Cell<bool>>> = None;
         // Only leading whitespace is insignificant: `type ab ` types a trailing space.
         for line in script.lines().map(str::trim_start).filter(|l| !l.trim().is_empty() && !l.starts_with('#')) {
             let Some((handle, ns_view)) = CURRENT.with(|c| c.get()) else { break };

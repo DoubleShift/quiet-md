@@ -175,6 +175,11 @@ impl Workspace {
             list = list.child(self.section(1, crate::settings::text("我的文档"), cx));
             list = list.child(self.render_folder_rows(window, cx));
         }
+        // The first listing still running: grey rows in place of the tree, fading out over it once it is here.
+        let load = crate::loading::phase(cx);
+        if load.loading() { list = div().flex().flex_col().px(px(SB_X)).pb(px(8.)).child(crate::loading::sidebar_rows(load, crate::loading::t(cx))); }
+        // The sidebar sits on the window's glass: nothing can cover the rows, so they fade in as the grey ones fade out.
+        else if load.moving() { list = div().relative().child(list.opacity(1. - load.cover())).child(crate::loading::sidebar_rows(load, crate::loading::t(cx)).absolute().top_0().left(px(SB_X)).right(px(SB_X))); }
         // 本机文件: Markdown files and folders edited where they are, outside the
         // library. Files or folders from the Finder let go here open the same way.
         let local = self.local_rows();

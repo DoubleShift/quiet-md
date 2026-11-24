@@ -356,6 +356,7 @@ pub(crate) fn result_info(e: &Entry, q: &str, summary: Option<(String, Vec<Range
 
 impl Workspace {
     pub(crate) fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.still_loading(cx) { return }
         self.search_open = true;
         self.search_sel = Some(0);
         self.row_menu = None;

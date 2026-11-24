@@ -64,6 +64,7 @@ mod selftest {
 }
 mod sidebar;
 mod local_files;
+mod loading;
 mod local_folders;
 mod sidebar_drag;
 mod sidebar_drop;

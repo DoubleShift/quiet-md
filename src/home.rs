@@ -581,8 +581,12 @@ impl Workspace {
     pub(crate) fn prepare_manual_order(&mut self, cx: &mut Context<Self>) -> bool {
         if self.tree_writes_pending() { return false; }
         let previous = self.store.track_file_changes();
-        if let Err(e) = self.store.initialize_manual_order() { self.show_toast_kind(crate::ui::ToastKind::Error, &e.to_string(), cx); return false; }
-        self.entries = self.store.list();
+        match self.store.initialize_manual_order() {
+            Err(e) => { self.show_toast_kind(crate::ui::ToastKind::Error, &e.to_string(), cx); return false; }
+            // Already in order: nothing written, the rows stand.
+            Ok(false) => return true,
+            Ok(true) => self.entries = self.store.list(),
+        }
         self.remember_files(previous, crate::settings::tr("初始化手动排序", "Initialize manual order"));
         true
     }
@@ -768,6 +772,9 @@ impl Workspace {
     }
 
     /// 主页's view and sort order are remembered (`settings.json`).
+    /// Whether 主页 lists by hand (手动排序) under these settings, as `load_home` reads them.
+    pub(crate) fn sorts_by_hand(s: &crate::store::Settings) -> bool { s.home_sort.as_deref().map(HomeSort::of).unwrap_or(HomeSort::Manual) == HomeSort::Manual }
+
     pub(crate) fn load_home(&mut self) {
         let s = self.store.settings();
         self.home.grid = !s.home_list;

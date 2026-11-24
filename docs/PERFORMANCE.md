@@ -176,7 +176,7 @@ These grow with the library too. Times are for the 15,000-note vault, with a lib
 
 | Operation | When | Before | After |
 |---|---|---:|---:|
-| `Store::list`, the first time | Opening a library for the first time: every note is read | 2.0 s | 2.0 s |
+| `Store::list`, the first time | Opening a library for the first time: every note is read | 2.0 s | off the main thread (below) |
 | `Store::list` | Every time the window comes forward (`app.rs`, window activation), and 2 s after files change on disk | 70-78 ms (4 ms) | 38-44 ms (3 ms) |
 | `Store::save_editor` | Every autosave while typing | 52-57 ms (8 ms) | 12 ms (8 ms) |
 
@@ -193,7 +193,28 @@ Now memory is known to be what the disk says while nothing has changed since thi
 
 A save compares only the entries that changed since the last write and the folders they left or went to (their order keys), not the whole index. Tests check both against the old way: in the test build every skipped read is compared with reading everything again, and every save with comparing the whole index.
 
-What is left of `list` is finding the files (`layout::scan` and a `stat` for each note, most of its 40 ms); of a save, writing this device's metadata file whole, as FORMAT 6 keeps it. The first `list` of a new library still reads every note on the main thread.
+What is left of `list` is finding the files (`layout::scan` and a `stat` for each note, most of its 40 ms); of a save, writing this device's metadata file whole, as FORMAT 6 keeps it.
+
+### Opening a big library the first time
+
+The first `list` reads every note (no parse cache yet), and the first folder opened under 手动排序 numbers every page (`initialize_manual_order`, a write of every entry). Both ran on the main thread before the window's first frame, which stayed empty meanwhile.
+
+Now ([loading.rs](../src/loading.rs)) a `tree_writer` of each top-level folder lists it (and numbers its pages) on a background thread, counting into a `ListProgress`, and hands everything back at once; the main store takes over what it read (`Store::adopt`). The window waits up to 150 ms for it before its first frame, so a small or already-read library opens exactly as before. Past that, sidebar and 主页 stay empty until 300 ms, then grey rows and the onboarding's drifting light show how far it got (正在载入 3,214 / 15,000 篇), and fade out over what was found, from the second frame after the hand-back.
+
+Meanwhile search, 新建 and the imports say the library is still loading and do nothing, rather than queue work that would happen by surprise later; a Markdown file opened from the Finder or dropped on the window opens where it is. Listing meanwhile (after such a write) reads no note, and the hand-back then lists once more, with every note already read.
+
+`initialize_manual_order` also no longer rewrites the index when the numbers are already right. A FORMAT 5/6 library never kept `home_manual_initialized` (its settings live in the device files, which hold only some of them), so every folder opened under 手动排序 rewrote the whole index: 184 ms for 15,000 notes.
+
+Cold first open (no parse cache), measured 2026-11-25 on the Mac mini above, [harness](../tools/harness/README.md) with `FDL_RECORD_START`:
+
+| | 300 notes | 15,000 notes | 60,000 notes |
+|---|---:|---:|---:|
+| Before the first frame | as before (listed within the 150 ms) | 150 ms | 150 ms |
+| Listing in the background | — | 0.6-1.0 s | 2.4-7.8 s |
+| Main-thread frame while loading, P50 | — | 1-7 ms | 0.6-1.2 ms |
+| Taking the result in (one frame) | — | 55-71 ms | 300-420 ms |
+
+Before, the 15,000-note window showed nothing for the 2.0 s of the `list` plus 1.1 s for the first folder's numbering. A file opened during loading costs one more `list` at the hand-back (264 ms for 60,000 notes). What the hand-back still takes is `begin_write` and `settings()` in opening the start folder, sorting the entries and the first frame laying out the rows.
 
 ### Reproduce
 
@@ -205,4 +226,7 @@ grep -a bench /tmp/quiet-big/run/log
 # list and save: on a copy, opened once by the app or by the first run
 cp -R /tmp/quiet-big/vault /tmp/quiet-big/store
 QUIET_MD_HOME=/tmp/quiet-big/store cargo run --release -p fdl_core --example store_bench /tmp/quiet-big/store
+# first open: a fresh copy under $TMPDIR (its parse cache goes there too), recorded from the first frame
+FDL_RECORD_START=/tmp/quiet-big/launch.mp4 python3 tools/harness/run.py <script> /tmp/quiet-big/vault $TMPDIR/quiet-big-run
+grep -a 'library:' $TMPDIR/quiet-big-run/log
 ```
