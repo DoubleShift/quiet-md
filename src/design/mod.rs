@@ -292,8 +292,18 @@ pub const G: Geo = Geo {
     add_row_h: 36., footer_h: 40., group_h: 36.,
 };
 
-/// The geometry (a function, so a later density or step-up can choose).
-pub fn geo() -> &'static Geo { &G }
+/// Touch (iPhone and iPad): the HIG's 44pt targets and 17pt body text.
+pub const fn touch() -> bool { cfg!(target_os = "ios") }
+
+/// `G` for touch: controls, fields, menu rows and tools 44pt tall, text 17pt.
+pub const T: Geo = Geo {
+    text: 17., text_xs: 13.,
+    button_h: 44., button_sm_h: 44., field_h: 44., field_sm_h: 40., menu_row_h: 44., tool_h: 44., seg_h: 40.,
+    ..G
+};
+
+/// The geometry (a function, so a later density or step-up can choose): `T` on touch.
+pub fn geo() -> &'static Geo { if touch() { &T } else { &G } }
 
 /// Shadows (Tailwind's, and affectUI's for floating things), each heavier in the dark look so it
 /// still reads.

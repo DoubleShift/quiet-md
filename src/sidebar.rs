@@ -36,11 +36,12 @@ const _: () = assert!(row_sub_top(0.) == 168.5);
 /// labels start at 54pt; groups are 16pt apart, a section header is 34pt
 /// (6 above its 28pt label).
 pub(crate) const SB_X: f32 = 14.;
-pub(crate) const ROW_H: f32 = 30.;
+/// 44pt on touch (the HIG's smallest target).
+pub(crate) const ROW_H: f32 = if crate::design::touch() { 44. } else { 30. };
 const DOC_ROW_H: f32 = ROW_H;
 pub(crate) const ROW_R: f32 = 9.;
 pub(crate) const ROW_GAP: f32 = crate::design::G.sidebar_gap;
-pub(crate) const ROW_ICON: f32 = 18.;
+pub(crate) const ROW_ICON: f32 = if crate::design::touch() { 22. } else { 18. };
 pub(crate) const GROUP_GAP: f32 = 16.;
 pub(crate) const SECTION_H: f32 = 34.;
 pub(crate) const SECTION_TOP: f32 = 6.;
@@ -90,6 +91,8 @@ impl Workspace {
     /// 268 and min(800, window − 540).
     pub(crate) fn sidebar_w(&self, window: &Window) -> f32 {
         let vw = f32::from(window.viewport_size().width);
+        // A phone's drawer: most of the width, for its 17pt rows.
+        if self.drawer(window) { return (vw * 0.8).min(300.) }
         let max = theme::SIDEBAR_MAX.min(vw - theme::SIDEBAR_MIN_CONTENT).max(theme::SIDEBAR_MIN);
         self.sidebar_width.clamp(theme::SIDEBAR_MIN, max)
     }

@@ -471,6 +471,8 @@ impl Theme {
 /// 外观 › 界面字号: the sidebar and the settings page scale together.
 /// Module level on purpose — callers reach it as `theme::ui_font()`.
 pub fn ui_font() -> f32 {
+    // Touch: the HIG's 17pt body, whatever the desktop size is set to.
+    if crate::design::touch() { return 17. }
     match crate::settings::prefs().ui_font.as_str() { "small" => 12., "large" => 15., _ => 13. }
 }
 

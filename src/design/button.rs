@@ -44,10 +44,11 @@ pub enum ButtonSize {
 }
 
 impl ButtonSize {
-    fn h(self) -> f32 { let g = geo(); match self { ButtonSize::Default => g.button_h, ButtonSize::Sm => g.button_sm_h, ButtonSize::Tool => g.tool_h, ButtonSize::Xs => 24., ButtonSize::Lg => 40. } }
+    fn h(self) -> f32 { let g = geo(); match self { ButtonSize::Default => g.button_h, ButtonSize::Sm => g.button_sm_h, ButtonSize::Tool => g.tool_h, ButtonSize::Xs => if super::touch() { 32. } else { 24. }, ButtonSize::Lg => if super::touch() { 44. } else { 40. } } }
     /// `[&_svg]:size-4`, `size-3` at xs beside a label. An icon-only xs button keeps the 16pt glyph
     /// (maintainer 2026-11-24: shadcn's 12 read thin and small where the app had 15–16).
-    fn icon(self, square: bool) -> f32 { match self { ButtonSize::Xs if !square => 12., _ => 16. } }
+    /// Touch: 22pt glyphs alone, 18 beside a label (the HIG's bar glyphs).
+    fn icon(self, square: bool) -> f32 { match self { _ if super::touch() => if square { 22. } else { 18. }, ButtonSize::Xs if !square => 12., _ => 16. } }
     /// px-2.5, px-2 at xs.
     fn px(self) -> f32 { match self { ButtonSize::Default | ButtonSize::Sm | ButtonSize::Lg => geo().button_px, ButtonSize::Tool | ButtonSize::Xs => 8. } }
     /// The side a glyph is on (`has-data-[icon=inline-start]`): pl-2, pl-1.5 at sm and xs.

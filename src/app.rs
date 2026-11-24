@@ -1955,7 +1955,8 @@ pub const HEADER_H: f32 = 48.;
 /// The narrowest the main pane (document, Home, settings) gets and the
 /// window's minimum width: a narrower window hides the sidebar.
 pub const DOC_MIN_W: f32 = 480.;
-pub(crate) const HEADER_ACTIONS_H: f32 = 32.;
+/// 44pt on touch (the HIG's smallest target).
+pub(crate) const HEADER_ACTIONS_H: f32 = if crate::design::touch() { 44. } else { 32. };
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
