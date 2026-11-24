@@ -15,7 +15,7 @@ fn only_quiet_mds_files_are_synced() {
         ".quiet/history/周报/1.xml", ".quiet/history-trash/x.xml", ".quiet/index.json", ".quiet/settings.json", ".quiet/.lock",
         ".quiet/meta/x.txt", ".quiet/trash", ".assets/thumbs/a.png", ".assets", "表.sqlite-journal", "周报.xml.1234.tmp",
         ".DS_Store", "a/.DS_Store", "Thumbs.db", ".git/config", ".obsidian/x.md", "a/.hidden/x.xml", "photo.png", "notes.txt",
-        "a/.gitignore", "x.lock",
+        "a/.gitignore", "x.lock", ".quiet/trash/index.json", ".quiet/trash/index.json.v5",
     ] { assert!(!synced(p), "{p}") }
 }
 

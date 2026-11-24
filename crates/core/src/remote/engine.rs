@@ -38,6 +38,8 @@ pub fn synced(path: &str) -> bool {
         [".gitignore"] => true,
         [".quiet", "format.json"] => true,
         [".quiet", "meta", file] => file.ends_with(".json"),
+        // FORMAT 5's shared trash index and the copy FORMAT 6 keeps of it are this computer's.
+        [".quiet", "trash", "index.json" | "index.json.v5"] => false,
         [".quiet", "trash" | "themes", _, ..] => true,
         [".quiet", ..] => false,
         [".assets", "thumbs", ..] => false,
@@ -81,7 +83,7 @@ const GITIGNORE_END: &str = "# <<< Quiet.md";
 /// layouts' local files, since FORMAT 5 keeps them outside the library.
 const GITIGNORE: &[&str] = &[
     ".quiet/.lock", ".quiet/index.json", ".quiet/index.json.bak", ".quiet/*.corrupt-*", ".quiet/settings.json",
-    ".quiet/history/", ".quiet/history-trash/", ".quiet/before-folders-*/", ".assets/thumbs/",
+    ".quiet/history/", ".quiet/history-trash/", ".quiet/before-folders-*/", ".quiet/trash/index.json", ".quiet/trash/index.json.v5", ".assets/thumbs/",
     "*.sqlite-journal", "*.tmp", ".DS_Store", "Thumbs.db",
 ];
 
