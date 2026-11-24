@@ -109,7 +109,16 @@ impl Workspace {
             .child(div().id("drawer-scrim").absolute().inset_0().bg(crate::design::color::overlay()).occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|w, _, _, cx| { cx.stop_propagation(); w.sidebar_open = false; cx.notify(); })))
             .child(div().id("drawer").absolute().top_0().left_0().h_full().w(px(self.sidebar_w(window))).flex()
-                .bg(Theme::window()).shadow(theme::shadow_panel()).occlude().child(sidebar))
+                .bg(Theme::window()).shadow(theme::shadow_panel()).occlude()
+                // The window's own press tracking sits behind the scrim: a row's tap opens it here.
+                .on_mouse_move(cx.listener(|w, ev: &MouseMoveEvent, window, cx| w.track_sidebar_press(ev, window, cx)))
+                .on_mouse_up(MouseButton::Left, cx.listener(|w, _, window, cx| {
+                    // A document tapped closes the drawer even when it is the one open.
+                    let doc = w.pressed_row().is_some_and(|id| w.entries.iter().any(|e| e.id == id && e.meta.folder.is_none()));
+                    w.finish_sidebar_click(window, cx);
+                    if doc { w.sidebar_open = false; cx.notify(); }
+                }))
+                .child(sidebar))
             .into_any_element()
     }
 
@@ -926,9 +935,9 @@ impl Workspace {
     }
 }
 
-/// The drawer closes once another document opens from it. `from`: the
-/// document open when it opened (`None` while it is closed). True: it stays.
-pub(crate) fn drawer_stays(from: &mut Option<Option<String>>, open: bool, current: &Option<String>) -> bool {
+/// The drawer closes once another document or page opens from it. `from`:
+/// what was shown when it opened (`None` while it is closed). True: it stays.
+pub(crate) fn drawer_stays<K: Clone + PartialEq>(from: &mut Option<K>, open: bool, current: &K) -> bool {
     if !open { *from = None; return false }
     let stays = from.get_or_insert_with(|| current.clone()) == current;
     if !stays { *from = None; }

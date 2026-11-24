@@ -1297,7 +1297,8 @@ impl Editor {
                 div()
                     .relative()
                     .group("doc-header")
-                    .pt(px(if crate::settings::feishu() { 48. } else { 52. }))
+                    // A phone's title sits just under the top bar.
+                    .pt(px(if crate::theme::compact(f32::from(window.viewport_size().width)) { 20. } else if crate::settings::feishu() { 48. } else { 52. }))
                     .pb(px(if crate::settings::feishu() { 22. } else { 24. }))
                     .children(self.header_entries(cx))
                     .child(

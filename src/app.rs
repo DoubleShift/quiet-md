@@ -386,7 +386,7 @@ pub struct Workspace {
     /// widens the window, narrowing the window below it hides it again.
     sidebar_was_open: bool,
     /// A phone's drawer: the document open when it opened (`sidebar::drawer_stays`).
-    drawer_from: Option<Option<String>>,
+    drawer_from: Option<(View, Option<String>)>,
     /// The window width before that widening, until the window takes the new size.
     widen_from: Option<f32>,
     /// The keyboard's height last frame (iOS): when it grows, the caret is scrolled back into view.
@@ -680,7 +680,8 @@ impl Workspace {
             editor: None,
             search,
             search_sel: None,
-            sidebar_open: !quick,
+            // A phone starts on its page; the sidebar is a drawer it opens.
+            sidebar_open: !quick && !theme::compact(f32::from(window.viewport_size().width)),
             sidebar_width,
             sidebar_was_open: false,
             drawer_from: None,
@@ -1830,6 +1831,11 @@ impl Workspace {
             let record = self.path_btn_bounds.clone();
             let open = self.path_menu;
             crumbs = vec![
+                // The drawer's way in from a document (the home page has its own).
+                crate::design::Button::ghost("open-sidebar").no_drag().icon("panel-left-open")
+                    .on_click(cx.listener(|w, _, _, cx| { w.sidebar_open = true; cx.notify(); }))
+                    .into_any_element(),
+                div().w(px(2.)).flex_none().into_any_element(),
                 crate::design::Button::ghost("path-menu").no_drag().icon("folder").selected(open)
                     .child(canvas(move |b, _, _| record.set(Some(b)), |_, _, _, _| {}).absolute().inset_0())
                     .on_mouse_down(MouseButton::Left, cx.listener(move |w, _, _, cx| { cx.stop_propagation(); w.path_menu = !open; cx.notify(); }))
@@ -2005,7 +2011,7 @@ impl Render for Workspace {
         }
         self.sidebar_was_open = self.sidebar_open;
         let drawer = self.drawer(window);
-        if !crate::sidebar::drawer_stays(&mut self.drawer_from, drawer && self.sidebar_open, &self.current) && drawer { self.sidebar_open = false; }
+        if !crate::sidebar::drawer_stays(&mut self.drawer_from, drawer && self.sidebar_open, &(self.view, self.current.clone())) && drawer { self.sidebar_open = false; }
         let sidebar = if self.sidebar_open { Some(if matches!(self.view, View::Settings | View::Trash) { self.render_settings_sidebar(window, cx) } else { self.render_sidebar(window, cx) }) } else { None };
         let sidebar = sidebar.map(|s| if inset_top + inset_bottom > 0. { div().flex_none().h_full().pt(px(inset_top)).pb(px(if keyboard > 0. { 0. } else { inset_bottom })).child(s).into_any_element() } else { s });
         // A phone: over the note instead of beside it.
@@ -2074,6 +2080,8 @@ impl Render for Workspace {
         // the two (no gutter, radius or border).
         // A document sits on its theme's page colour.
         let page = if self.view == View::Doc { crate::editor_theme::Theme::bg_body() } else { Theme::bg_body() };
+        // Under the keyboard, whose top corners are round: the note's colour, not the window's.
+        let under_keyboard = (keyboard > 0.).then(|| div().absolute().bottom_0().right_0().left(px(self.sidebar_room(window))).h(px(keyboard)).bg(page));
         let note = div().id("note").relative().flex_1().min_w_0().h_full().pt(px(inset_top)).flex().bg(page).shadow(theme::shadow_note()).child(main)
             // Files from the Finder dropped on 主页 or a folder's page are imported there.
             .when(matches!(self.view, View::Home | View::Folder), |d| d
@@ -2209,6 +2217,7 @@ impl Render for Workspace {
                 if w.search_open { w.close_search(window, cx); } else { w.open_search(window, cx); }
                 cx.stop_propagation();
             }))
+            .children(under_keyboard)
             .children(sidebar)
             .child(note)
             .children(drawer_el)

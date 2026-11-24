@@ -865,6 +865,9 @@ impl Workspace {
         else { self.folder_drag.active = None; }
     }
 
+    /// The row pressed and not yet dragged: the one a release now clicks.
+    pub(crate) fn pressed_row(&self) -> Option<&str> { self.folder_drag.active.as_ref().filter(|d| !d.started).map(|d| d.id.as_str()) }
+
     pub(crate) fn finish_sidebar_click(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let click = self.folder_drag.active.as_ref().filter(|d| !d.started).map(|d| d.id.clone());
         if let Some(id) = click { self.folder_drag.active = None; self.sidebar_click(&id, window, cx); }

@@ -315,9 +315,10 @@ impl Editor {
         if self.touch.on && mode == CatMode::Unpinned && self.handle_block().is_some() {
             return None;
         }
+        let compact = crate::theme::compact(f32::from(self.pane_size().width));
+        if compact { return Some(self.render_outline_drawer(window, cx)); }
         let floating = mode == CatMode::Forced;
         let pinned = self.cat_pinned;
-        let compact = crate::theme::compact(f32::from(self.pane_size().width));
         let pin = crate::design::Button::ghost(SharedString::from(format!("cat-pin-{pinned}")))
             .sized(crate::design::ButtonSize::Xs)
             .absolute()
@@ -357,6 +358,26 @@ impl Editor {
                 .children(body)
                 .into_any_element(),
         )
+    }
+
+    /// A phone's outline: a drawer from the right over the whole window, as
+    /// the sidebar's is from the left; tapping the scrim or a heading closes it.
+    fn render_outline_drawer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let size = window.viewport_size();
+        let (vw, vh) = (f32::from(size.width), f32::from(size.height));
+        let insets = window.insets();
+        let (top, bottom) = (f32::from(insets.safe_area.top), f32::from(insets.safe_area.bottom));
+        let w = (vw * 0.8).min(300.);
+        let body = self.catalogue_list(w - 16., vh - top - bottom - 24., window, cx);
+        deferred(anchored().position(point(px(0.), px(0.))).child(
+            div().id("outline-drawer").relative().w(px(vw)).h(px(vh))
+                .child(div().id("outline-scrim").absolute().inset_0().bg(crate::design::color::overlay()).occlude()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|ed, _, _, cx| { cx.stop_propagation(); ed.cat_float = false; cx.notify(); })))
+                .child(div().id("outline-panel").absolute().top_0().right_0().h_full().w(px(w)).pt(px(top + 12.)).pb(px(bottom)).pl(px(8.))
+                    .bg(Theme::bg_body()).shadow(crate::theme::shadow_panel()).occlude().cursor(CursorStyle::Arrow)
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(body)),
+        )).with_priority(3).into_any_element()
     }
 
     fn catalogue_list(&mut self, width: f32, max_h: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
