@@ -124,19 +124,20 @@ impl Drop for NoCloudDownloads {
 /// A Markdown file as a new Markdown document inside `parent`; `root`: the
 /// folder being imported, where `![[picture.png]]` embeds are also looked up.
 pub(crate) fn import_markdown(store: &mut crate::store::Store, path: &Path, root: Option<&Path>, parent: Option<&str>) -> anyhow::Result<String> {
-    let (doc, front) = read_markdown(path, root)?;
+    let (doc, front) = read_markdown(path, root, &crate::store::Store::assets_in(store.top_dir()))?;
     store.create_markdown_in(&doc, &front, parent)
 }
 
-/// `import_markdown`'s document and front matter, before the library is touched.
-fn read_markdown(path: &Path, root: Option<&Path>) -> anyhow::Result<(Document, String)> {
+/// `import_markdown`'s document and front matter, its pictures copied into
+/// `assets` (the importing library's: not whichever is in front meanwhile).
+fn read_markdown(path: &Path, root: Option<&Path>, assets: &Path) -> anyhow::Result<(Document, String)> {
     let bytes = crate::store::read_bounded(path, IMPORT_FILE_LIMIT)?;
     let text = String::from_utf8_lossy(&bytes);
     let text = text.trim_start_matches('\u{feff}');
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().trim().to_string();
     let mut doc = crate::markdown::parse_file(text, &stem, path.parent());
     if let Some(dir) = path.parent() { crate::markdown::wiki_images(&mut doc.blocks, dir, root); }
-    crate::editor::image::localize_pasted_images(&mut doc.blocks);
+    crate::editor::image::localize_images_in(assets, &mut doc.blocks);
     if doc.blocks.is_empty() { doc.blocks.push(Block::text("")); }
     Ok((doc, crate::markdown::front_matter(text).0.to_string()))
 }
@@ -160,7 +161,7 @@ fn tree(store: &mut crate::store::Store, t: &Scanned, root: &Path, parent: Optio
     for sub in &t.dirs { tree(store, sub, root, Some(&id), failed); }
     for p in &t.docs {
         let made = if crate::local_files::is_markdown_path(p) {
-            let read = { let _local = NoCloudDownloads::new(); read_markdown(p, Some(root)) };
+            let read = { let _local = NoCloudDownloads::new(); read_markdown(p, Some(root), &crate::store::Store::assets_in(store.top_dir())) };
             read.and_then(|(doc, front)| store.create_markdown_in(&doc, &front, Some(&id)))
         } else { store.import_into(p, Some(&id)) };
         match made { Ok(doc) => keep_times(store, &doc, p), Err(_) => *failed += 1 }
@@ -173,7 +174,7 @@ pub(crate) fn import_file(store: &mut crate::store::Store, p: &Path, parent: Opt
     let ext = p.extension().and_then(|s| s.to_str()).unwrap_or_default().to_ascii_lowercase();
     let id = match ext.as_str() {
         _ if crate::local_files::is_markdown_path(p) => import_markdown(store, p, None, parent),
-        e if MARKDOWN_EXTS.contains(&e) => markdown_document(p).map_err(anyhow::Error::from).and_then(|doc| store.create_from_in(&doc, parent)),
+        e if MARKDOWN_EXTS.contains(&e) => markdown_document(p, &crate::store::Store::assets_in(store.top_dir())).map_err(anyhow::Error::from).and_then(|doc| store.create_from_in(&doc, parent)),
         "xml" => store.import_into(p, parent),
         "csv" | "tsv" if crate::DATATABLE => import_csv(store, p, parent),
         _ => Err(anyhow::anyhow!("文件格式不支持")),
@@ -333,8 +334,8 @@ fn resolve_images(blocks: &mut [Block], base: &Path) {
 }
 
 /// A Markdown / TXT file as a page: titled after the file, its leading
-/// `# 标题` dropped when it repeats the name.
-pub fn markdown_document(path: &Path) -> std::io::Result<Document> {
+/// `# 标题` dropped when it repeats the name; its pictures copied into `assets`.
+pub fn markdown_document(path: &Path, assets: &Path) -> std::io::Result<Document> {
     let bytes = fdl_core::vfs::read(path)?;
     let text = String::from_utf8_lossy(&bytes);
     let text = text.trim_start_matches('\u{feff}');
@@ -348,7 +349,7 @@ pub fn markdown_document(path: &Path) -> std::io::Result<Document> {
         resolve_images(&mut blocks, dir);
         crate::markdown::wiki_images(&mut blocks, dir, None);
     }
-    crate::editor::image::localize_pasted_images(&mut blocks);
+    crate::editor::image::localize_images_in(assets, &mut blocks);
     if blocks.is_empty() {
         blocks.push(Block::text(""));
     }
@@ -874,8 +875,7 @@ mod tests {
         std::fs::write(v.join(".obsidian/app.json"), r#"{"attachmentFolderPath":"attachments"}"#).unwrap();
         for f in ["attachments/red.png", "pics/green.png", "notes/deep/blue.png"] { image::RgbImage::new(2, 2).save(v.join(f)).unwrap(); }
         std::fs::write(v.join("notes/Embeds.md"), "![[red.png]]\n\n![[red.png|300]]\n\n![[pics/green.png]]\n\n![[blue.png]]\n\n![[Other]]\n").unwrap();
-        // Never the real library's assets: this library is the one in front.
-        crate::store::Store::set_active_dir(&tmp.join("library"));
+        // Its pictures go to the library it imports into, whichever is in front (none here).
         let mut store = crate::store::Store::open_at(tmp.join("library")).unwrap();
         let tree = super::scan_folder(&v, 0).unwrap();
         let mut failed = 0;
@@ -938,7 +938,7 @@ mod tests {
         fdl_core::vfs::create_dir_all(&dir).unwrap();
         let path = dir.join("周报.md");
         fdl_core::vfs::write(&path, "\u{feff}# 周报\n\n第一段\n\n- a\n- b\n\n![图](https://e.com/a.png)\n\n## 小结\n").unwrap();
-        let doc = markdown_document(&path).unwrap();
+        let doc = markdown_document(&path, &dir.join("assets")).unwrap();
         assert_eq!(doc.title.text, "周报");
         let kinds: Vec<_> = doc.blocks.iter().map(|b| std::mem::discriminant(&b.kind)).collect();
         assert_eq!(kinds.len(), 5);
@@ -1117,19 +1117,19 @@ mod tests {
     #[test]
     fn pictures_copied_in_keep_their_change_time() {
         let (tmp, from, _store) = places("pictures");
-        // Never the real library's assets: this library is the one in front.
-        crate::store::Store::set_active_dir(&tmp.join("library"));
+        // Into this library's assets, never the real library's (nor the global one in front).
+        let assets = crate::store::Store::assets_in(&tmp.join("library"));
         let pic = from.join("photo.png");
         image::RgbImage::new(2, 2).save(&pic).unwrap();
         fdl_core::vfs::set_modified(&pic, THEN).unwrap();
-        let b = crate::editor::image::image_block_from_file(&pic).unwrap();
+        let b = crate::editor::image::image_block_from_file_in(&assets, &pic).unwrap();
         let BlockKind::Image { src, .. } = &b.kind else { panic!() };
         let copy = std::path::Path::new(src);
-        assert!(copy.starts_with(fdl_core::vfs::temp_dir()) && copy != pic, "{src}");
+        assert!(copy.starts_with(&assets) && copy != pic, "{src}");
         assert_eq!((mtime(copy), mtime(&pic)), (THEN, THEN));
         // A Markdown file's picture, imported with it.
         aged(&from.join("page.md"), "![](photo.png)\n", THEN + 60);
-        let (doc, _) = super::read_markdown(&from.join("page.md"), None).unwrap();
+        let (doc, _) = super::read_markdown(&from.join("page.md"), None, &assets).unwrap();
         let BlockKind::Image { src, .. } = &doc.blocks[0].kind else { panic!("{:?}", doc.blocks[0].kind) };
         assert_eq!(mtime(std::path::Path::new(src)), THEN);
         std::fs::remove_dir_all(tmp).unwrap();
