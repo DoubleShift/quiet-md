@@ -1651,6 +1651,12 @@ impl Store {
         self.index.get(id)?.path.as_ref().and_then(|p| std::path::Path::new(p).parent()).map(PathBuf::from)
     }
 
+    /// A Markdown file's folder and the vault its `![[…]]` embeds are looked up in.
+    fn wiki_dirs(&self, id: &str) -> Option<(PathBuf, PathBuf)> {
+        let file = self.path(id);
+        Some((file.parent()?.to_path_buf(), crate::markdown::wiki_vault(&file, Some(&self.top_dir), &[])))
+    }
+
     /// The title of a Markdown file or a 画板: its file name.
     fn markdown_title(&self, id: &str) -> String {
         let Some(m) = self.index.get(id) else { return String::new() };
@@ -1702,6 +1708,8 @@ impl Store {
             return Ok(doc);
         }
         let mut doc = crate::markdown::parse_file(text, &self.markdown_title(id), self.base(id).as_deref());
+        // Obsidian's `![[picture.png]]` shows as the picture; the file keeps saying `![[…]]`.
+        if text.contains("![[") && let Some((dir, vault)) = self.wiki_dirs(id) { crate::markdown::wiki_images(&mut doc.blocks, &dir, Some(&vault)); }
         // Images a Markdown file carries inline (#133) become assets, so the
         // page shows them and an export writes them like any other picture.
         crate::data_images::absorb(&mut doc.blocks, &self.top_dir);
@@ -1728,8 +1736,10 @@ impl Store {
         let base = self.base(id);
         let name = base.is_some().then(|| self.markdown_title(id));
         let copied = self.copied.borrow();
+        let wiki = disk.filter(|d| d.contains("![[")).and_then(|_| self.wiki_dirs(id));
         let out = crate::markdown::write_file_with(doc, front, &crate::markdown::Options {
-            library_dir: Some(&self.top_dir), base: base.as_deref(), name: name.as_deref(), copied: copied.get(id), original: disk, ..Default::default()
+            library_dir: Some(&self.top_dir), base: base.as_deref(), name: name.as_deref(), copied: copied.get(id), original: disk,
+            wiki: wiki.as_ref().map(|(d, v)| (d.as_path(), Some(v.as_path()))), ..Default::default()
         });
         let bom = if disk.is_some_and(|d| d.starts_with('\u{feff}')) { "\u{feff}" } else { "" };
         (format!("{bom}{}", out.text), out.files)
@@ -3586,6 +3596,43 @@ mod tests {
         let md = s.create_markdown_in(&doc, "", Some(&folder)).unwrap();
         let xml = s.create_from_in(&doc, Some(&folder)).unwrap();
         for id in [md, xml] { assert_eq!(s.list().into_iter().find(|e| e.id == id).unwrap().meta.parent.as_deref(), Some(folder.as_str())); }
+    }
+
+    /// Obsidian's `![[picture.png]]` in a Markdown document — one in the
+    /// library or a 本机文件 — shows as the picture, and saving writes it as it was.
+    #[test]
+    fn wiki_embeds_show_as_pictures_and_stay_written() {
+        let lib = Lib::new("wiki-embeds");
+        let mut s = lib.open();
+        let outside = crate::vfs::temp_dir().join(format!("fdl-vault-{}", uuid::Uuid::new_v4()));
+        let md = "# Embeds\n\n![[red.png]]\n\n![[red.png|300]]\n\n![[pics/green.png]]\n\n![[blue.png]]\n\n![[Other]]\n\nend\n";
+        for v in [lib.0.join("vault"), outside.clone()] {
+            for d in [".obsidian", "attachments", "pics", "notes/deep"] { crate::vfs::create_dir_all(v.join(d)).unwrap(); }
+            crate::vfs::write(v.join(".obsidian/app.json"), r#"{"attachmentFolderPath":"attachments"}"#).unwrap();
+            for f in ["attachments/red.png", "pics/green.png", "notes/deep/blue.png"] { crate::vfs::write(v.join(f), b"png").unwrap(); }
+            crate::vfs::write(v.join("notes/Embeds.md"), md).unwrap();
+        }
+        let in_lib = s.list().into_iter().find(|e| e.meta.rel == "vault/notes/Embeds.md").unwrap().id;
+        let local = s.open_local(&outside.join("notes/Embeds.md")).unwrap();
+        let real = |p: &Path| p.fs_canonicalize().unwrap();
+        for (id, v) in [(in_lib, lib.0.join("vault")), (local, outside.clone())] {
+            let mut doc = s.load_for_edit(&id, false).unwrap();
+            let pics: Vec<(PathBuf, Option<f32>)> = doc.blocks.iter().filter_map(|b| match &b.kind {
+                crate::model::BlockKind::Image { src, width, .. } => Some((real(Path::new(src)), *width)),
+                _ => None,
+            }).collect();
+            let (red, green, blue) = (real(&v.join("attachments/red.png")), real(&v.join("pics/green.png")), real(&v.join("notes/deep/blue.png")));
+            assert_eq!(pics, vec![(red.clone(), None), (red, Some(300.)), (green, None), (blue, None)]);
+            // `![[Other]]` embeds a note, not a picture: it stays text.
+            assert!(doc.blocks.iter().any(|b| b.text.text == "![[Other]]"));
+            let file = v.join("notes/Embeds.md");
+            s.save(&id, &doc).unwrap();
+            assert_eq!(crate::vfs::read_to_string(&file).unwrap(), md);
+            *doc.blocks.last_mut().unwrap() = crate::model::Block::text("the end");
+            s.save(&id, &doc).unwrap();
+            assert_eq!(crate::vfs::read_to_string(&file).unwrap(), md.replace("\nend\n", "\nthe end\n"));
+        }
+        let _ = crate::vfs::remove_dir_all(&outside);
     }
 
     #[test]

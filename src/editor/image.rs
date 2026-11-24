@@ -2429,9 +2429,15 @@ pub(crate) fn localize_pasted_images(blocks: &mut Vec<Block>) {
         } else {
             return true;
         };
+        // The copy keeps the width and caption the page gave the picture (`<img width>`, `![[a.png|300]]`).
+        let (old_width, old_caption) = match &b.kind { BlockKind::Image { width, caption, .. } => (*width, caption.clone()), _ => (None, None) };
         match local {
             Ok(n) => {
                 b.kind = n.kind;
+                if let BlockKind::Image { width, height, caption, .. } = &mut b.kind {
+                    if old_width.is_some() { (*width, *height) = (old_width, None); }
+                    if old_caption.is_some() { *caption = old_caption; }
+                }
                 true
             }
             Err(_) => false,

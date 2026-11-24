@@ -863,6 +863,38 @@ mod tests {
         std::fs::remove_dir_all(tmp).unwrap();
     }
 
+    /// An Obsidian vault imported: its `![[picture.png]]` embeds — in the
+    /// attachment folder, by a path, by a name only, with a width — are pictures
+    /// copied into the library, written as Markdown writes one; `![[Note]]` stays.
+    #[test]
+    fn imported_vault_embeds_become_library_pictures() {
+        let tmp = fdl_core::vfs::temp_dir().join(format!("quiet-vault-embeds-{}", uuid::Uuid::new_v4()));
+        let v = tmp.join("vault");
+        for d in [".obsidian", "attachments", "pics", "notes/deep"] { std::fs::create_dir_all(v.join(d)).unwrap(); }
+        std::fs::write(v.join(".obsidian/app.json"), r#"{"attachmentFolderPath":"attachments"}"#).unwrap();
+        for f in ["attachments/red.png", "pics/green.png", "notes/deep/blue.png"] { image::RgbImage::new(2, 2).save(v.join(f)).unwrap(); }
+        std::fs::write(v.join("notes/Embeds.md"), "![[red.png]]\n\n![[red.png|300]]\n\n![[pics/green.png]]\n\n![[blue.png]]\n\n![[Other]]\n").unwrap();
+        // Never the real library's assets: this library is the one in front.
+        crate::store::Store::set_active_dir(&tmp.join("library"));
+        let mut store = crate::store::Store::open_at(tmp.join("library")).unwrap();
+        let tree = super::scan_folder(&v, 0).unwrap();
+        let mut failed = 0;
+        store.batch(|s| super::import_tree(s, &tree, None, &mut failed)).unwrap().unwrap();
+        assert_eq!(failed, 0);
+        let e = store.list().into_iter().find(|e| e.title == "Embeds").unwrap();
+        let text = std::fs::read_to_string(store.file_path(&e.id).unwrap()).unwrap();
+        let assets = crate::store::Store::assets_in(&tmp.join("library"));
+        let doc = store.load(&e.id).unwrap();
+        let pics: Vec<(std::path::PathBuf, Option<f32>)> = doc.blocks.iter().filter_map(|b| match &b.kind {
+            BlockKind::Image { src, width, .. } => Some((std::path::PathBuf::from(src), *width)),
+            _ => None,
+        }).collect();
+        assert_eq!(pics.iter().map(|p| p.1).collect::<Vec<_>>(), [None, Some(300.), None, None], "{text}");
+        assert!(pics.iter().all(|(p, _)| p.starts_with(&assets) && p.is_file()), "{text}");
+        assert!(text.contains("width=\"300\"") && text.trim_end().ends_with("![[Other]]") && !text.contains("![[red"), "{text}");
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
     #[test]
     fn notes_left_in_icloud_are_counted_not_read() {
         let tmp = fdl_core::vfs::temp_dir().join(format!("quiet-icloud-{}", uuid::Uuid::new_v4()));

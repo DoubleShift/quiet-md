@@ -30,6 +30,10 @@ pub struct Options<'a> {
     pub original: Option<&'a str>,
     /// With `in_place` and no `base`: local sources as absolute paths (复制为 Markdown).
     pub absolute: bool,
+    /// The file's folder and its vault, when its `![[picture.png]]` embeds are
+    /// read as pictures (`wiki_images`): `original` is read the same way, so an
+    /// untouched embed is matched and written back as `![[…]]`.
+    pub wiki: Option<(&'a Path, Option<&'a Path>)>,
 }
 
 pub struct Export {
@@ -174,6 +178,12 @@ impl Writer<'_> {
                 indent(&format!("{emoji} {body}"), "> ")
             }
             BlockKind::Divider => "---".into(),
+            // A width Markdown has no room for: an `<img>` line, as GitHub writes one (and as it is read).
+            BlockKind::Image { src, caption, width: Some(w), .. } if self.opts.in_place => {
+                let attr = |s: &str| s.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;");
+                let alt = caption.as_deref().filter(|c| !c.is_empty()).map(|c| format!(" alt=\"{}\"", attr(c))).unwrap_or_default();
+                format!("<img src=\"{}\"{alt} width=\"{}\">", attr(&self.keep(src, true)), w.round())
+            }
             BlockKind::Image { src, caption, .. } if self.opts.in_place => {
                 format!("![{}]({})", escape(caption.as_deref().unwrap_or_default()), link_target(&self.keep(src, true)))
             }
@@ -394,7 +404,8 @@ const PICTURES: [&str; 6] = ["jpeg", "jpg", "png", "gif", "webp", "bmp"];
 /// On import: a paragraph that is just `![[name.png]]` (or `![[name.png|300]]`)
 /// — how Obsidian and its exports embed a picture — as that picture. Looked up
 /// the way Obsidian does: beside the page, in the vault's attachment folder,
-/// at the vault's top, then anywhere in the vault by a name only one file has.
+/// at the vault's top, then anywhere in the vault by name, the file with the
+/// shortest path (several that short: none, it can't be told which).
 /// The vault is the nearest folder above the page holding `.obsidian`, else
 /// `root` (the folder being imported). What can't be found or shown
 /// (`![[page#heading]]`, a missing file, an svg) stays the text it was.
@@ -416,13 +427,20 @@ pub fn wiki_images(blocks: &mut [Block], page_dir: &Path, root: Option<&Path>) {
             // A name the folders a person sees have nothing for is looked for
             // in the hidden ones (#227); one they do have stays decided by
             // them, so a copy in `.cache` cannot make it ambiguous.
-            match names.get(&key).map(Vec::as_slice) {
-                Some([one]) => Some(one.clone()),
-                Some(_) => None,
-                None => match hidden_names(v).get(&key)?.as_slice() { [one] => Some(one.clone()), _ => None },
+            match names.get(&key) {
+                Some(all) => shortest(all),
+                None => shortest(hidden_names(v).get(&key)?),
             }
         })
     });
+}
+
+/// Of files with one name, the one with the fewest folders above it; none on a tie.
+fn shortest(all: &[PathBuf]) -> Option<PathBuf> {
+    let depth = |p: &PathBuf| p.components().count();
+    let min = all.iter().map(depth).min()?;
+    let mut at = all.iter().filter(|p| depth(p) == min);
+    match (at.next(), at.next()) { (Some(one), None) => Some(one.clone()), _ => None }
 }
 
 fn wiki_walk(blocks: &mut [Block], find: &mut dyn FnMut(&str) -> Option<PathBuf>) {
@@ -604,7 +622,7 @@ pub fn write_file(doc: &Document, front: &str, base: Option<&Path>) -> String {
 /// `write_file` with the copies to make beside a 本机文件 (`Export::files`,
 /// relative to the file's folder).
 pub fn write_file_with(doc: &Document, front: &str, opts: &Options) -> Export {
-    let opts = Options { in_place: true, library_dir: opts.library_dir, base: opts.base, name: opts.name, copied: opts.copied, original: opts.original, ..Default::default() };
+    let opts = Options { in_place: true, library_dir: opts.library_dir, base: opts.base, name: opts.name, copied: opts.copied, original: opts.original, wiki: opts.wiki, ..Default::default() };
     let mut w = Writer { opts: &opts, files: vec![], generated: vec![], missing: 0 };
     let pieces = w.pieces(&doc.blocks);
     let canonical = joined(&pieces);
@@ -634,6 +652,7 @@ fn preserve(original: &str, pieces: &[Piece], opts: &Options, strict: bool) -> S
     let (mut blocks, spans) = crate::paste::markdown_to_blocks_with_lines(&norm, crate::paste::Off { file: true, alt: true, ..Default::default() });
     if blocks.len() != spans.len() { return joined(pieces); }
     if let Some(dir) = opts.base { resolve_images(&mut blocks, dir); }
+    if let Some((dir, vault)) = opts.wiki { wiki_images(&mut blocks, dir, vault); }
     // The file's blocks as written now, each with the lines it came from.
     let mut old: Vec<(String, (usize, usize))> = vec![];
     {
@@ -722,6 +741,7 @@ fn joined(pieces: &[Piece]) -> String {
 fn reads_as(body: &str, canonical: &str, opts: &Options) -> bool {
     let mut blocks = crate::paste::markdown_to_blocks(body, crate::paste::Off { file: true, alt: true, ..Default::default() });
     if let Some(dir) = opts.base { resolve_images(&mut blocks, dir); }
+    if let Some((dir, vault)) = opts.wiki { wiki_images(&mut blocks, dir, vault); }
     let mut w = Writer { opts, files: vec![], generated: vec![], missing: 0 };
     joined(&w.pieces(&blocks)) == canonical
 }
@@ -1246,6 +1266,59 @@ mod tests {
         let mut blocks = crate::paste::markdown_to_blocks("![[att.png]]\n", crate::paste::Off { file: true, ..Default::default() });
         wiki_images(&mut blocks, &notes, None);
         assert!(matches!(&blocks[0].kind, BlockKind::Image { src, .. } if Path::new(src) == root.join("files/att.png")), "{blocks:?}");
+        let _ = crate::vfs::remove_dir_all(&root);
+    }
+
+    /// A name several files have is the one with the shortest path, as in
+    /// Obsidian; two equally short stay the text they were.
+    #[test]
+    fn wiki_embeds_take_the_shortest_path_of_a_shared_name() {
+        let root = crate::vfs::temp_dir().join(format!("fdl-shortest-{}", uuid::Uuid::new_v4()));
+        let notes = root.join("notes");
+        for d in ["notes", ".obsidian", "a/b/c", "d", "e"] { crate::vfs::create_dir_all(root.join(d)).unwrap(); }
+        for f in ["a/b/c/pic.png", "d/pic.png", "d/tie.png", "e/tie.png"] { crate::vfs::write(root.join(f), b"png").unwrap(); }
+        let mut doc = parse_file("![[pic.png]]\n\n![[tie.png]]\n", "page", Some(&notes));
+        wiki_images(&mut doc.blocks, &notes, None);
+        assert!(matches!(&doc.blocks[0].kind, BlockKind::Image { src, .. } if Path::new(src) == root.join("d/pic.png")), "{:?}", doc.blocks[0]);
+        assert_eq!(doc.blocks[1].text.text, "![[tie.png]]");
+        let _ = crate::vfs::remove_dir_all(&root);
+    }
+
+    /// Read with `wiki` (as a library document is), the embeds are pictures;
+    /// written back with the file as `original`, they keep `![[…]]`, also when
+    /// a block beside them changed. Another picture in one's place is `![](…)`.
+    #[test]
+    fn wiki_embeds_round_trip_in_place() {
+        let root = crate::vfs::temp_dir().join(format!("fdl-embed-rt-{}", uuid::Uuid::new_v4()));
+        let notes = root.join("notes");
+        for d in ["notes", ".obsidian", "files"] { crate::vfs::create_dir_all(root.join(d)).unwrap(); }
+        crate::vfs::write(root.join(".obsidian/app.json"), r#"{"attachmentFolderPath":"files"}"#).unwrap();
+        crate::vfs::write(root.join("files/a.png"), b"png").unwrap();
+        let src = "intro\n\n![[a.png|300]]\n\n![[a.png]]\n\n![[Note]]\n\nend\n";
+        let opts = |o| Options { wiki: Some((notes.as_path(), None)), original: Some(o), ..Default::default() };
+        let read = |text: &str| { let mut d = parse_file(text, "t", None); wiki_images(&mut d.blocks, &notes, None); d };
+        let mut doc = read(src);
+        assert_eq!(doc.blocks.iter().filter(|b| matches!(b.kind, BlockKind::Image { .. })).count(), 2);
+        assert_eq!(write_file_with(&doc, "", &opts(src)).text, src);
+        doc.blocks[0] = Block::text("first");
+        let out = write_file_with(&doc, "", &opts(src)).text;
+        assert_eq!(out, src.replace("intro", "first"));
+        // Read again, it is the same document; and stable from then on.
+        assert_eq!(write_file_with(&read(&out), "", &opts(&out)).text, out);
+        // Another picture in its place is written the way Markdown writes one.
+        let b = root.join("files/b.png");
+        if let BlockKind::Image { src, .. } = &mut doc.blocks[2].kind { *src = b.to_string_lossy().into_owned(); }
+        let out = write_file_with(&doc, "", &opts(src)).text;
+        assert_eq!(out, src.replace("intro", "first").replace("![[a.png]]", &format!("![]({})", link_target(&b.to_string_lossy()))));
+        // A width Markdown can't hold is an `<img>` line, which reads back with it.
+        if let BlockKind::Image { width, .. } = &mut doc.blocks[1].kind { *width = Some(120.); }
+        let out = write_file_with(&doc, "", &opts(src)).text;
+        let a = root.join("files/a.png");
+        assert!(out.contains(&format!("<img src=\"{}\" width=\"120\">", a.to_string_lossy())), "{out}");
+        assert!(read(&out).blocks.iter().any(|b| matches!(&b.kind, BlockKind::Image { src, width: Some(w), .. } if Path::new(src) == a && *w == 120.)));
+        // Written fresh (an import): the width as `<img>`, the rest as `![](…)`.
+        let out = write_file(&read(src), "", None);
+        assert!(out.contains(&format!("<img src=\"{}\" width=\"300\">", a.to_string_lossy())) && out.contains(&format!("![]({})", link_target(&a.to_string_lossy()))), "{out}");
         let _ = crate::vfs::remove_dir_all(&root);
     }
 
