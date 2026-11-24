@@ -23,7 +23,7 @@ use web_time::Instant;
 const SAVE_DELAY: Duration = Duration::from_millis(500);
 const SAVE_MAX_DELAY: Duration = Duration::from_secs(2);
 
-actions!(workspace, [NewDoc, OpenFile, OpenFolder, ImportDoc, ImportFolder, ToggleSidebar, FocusSearch, FindInDoc, ReplaceInDoc, OpenSettings, OpenAbout, CheckForUpdates, GoHome, CloseWindow, Quit,
+actions!(workspace, [NewDoc, OpenFile, OpenFolder, ImportDoc, ImportFolder, ImportSiYuan, ToggleSidebar, FocusSearch, FindInDoc, ReplaceInDoc, OpenSettings, OpenAbout, CheckForUpdates, GoHome, CloseWindow, Quit,
     ReplayOnboarding, HideApp, HideOthers, ShowAll, Minimize, Zoom, ToggleFullScreen, ToggleDarkMode]);
 // A confirmation dialog's keys, in its own key context: ↩ is the action button, Esc 取消.
 actions!(confirm, [ConfirmOk, ConfirmCancel]);
@@ -73,6 +73,7 @@ fn menu_bar(markdown: bool) -> Vec<Menu> {
                 MenuItem::action(tr("打开文件夹…", "Open Folder…"), OpenFolder),
                 MenuItem::action(tr("导入为文档…", "Import as Document…"), ImportDoc),
                 MenuItem::action(tr("导入文件夹…", "Import Folder…"), ImportFolder),
+                MenuItem::action(tr("导入思源笔记…", "Import from SiYuan…"), ImportSiYuan),
                 MenuItem::separator(),
                 MenuItem::action(tr("关闭窗口", "Close Window"), CloseWindow),
             ],
@@ -2096,6 +2097,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|w, _: &OpenFile, window, cx| w.open_file_dialog(window, cx)))
             .on_action(cx.listener(|w, _: &OpenFolder, window, cx| w.open_folder_dialog(window, cx)))
             .on_action(cx.listener(|w, _: &ImportFolder, window, cx| w.open_import_folder(window, cx)))
+            .on_action(cx.listener(|w, _: &ImportSiYuan, window, cx| w.open_import_kind(crate::transfer::ImportKind::SiYuan, None, window, cx)))
             .on_action(cx.listener(|w, _: &ToggleSidebar, _, cx| {
                 w.sidebar_open = !w.sidebar_open;
                 cx.notify();
@@ -2317,6 +2319,15 @@ mod menu_tests {
         let mut out = vec![];
         for m in menus { out.push(m.name.to_string()); walk(&m.items, &mut out); }
         out
+    }
+
+    /// 文件's import group has what the in-window 导入 menus have, 思源笔记 next to 导入文件夹.
+    #[test]
+    fn the_file_menu_imports_from_siyuan() {
+        let file = names(&menu_bar(false));
+        let at = |n: &str| file.iter().position(|d| d == n).unwrap_or_else(|| panic!("{n}"));
+        assert_eq!(at(tr("导入思源笔记…", "Import from SiYuan…")), at(tr("导入文件夹…", "Import Folder…")) + 1);
+        assert_eq!(at(tr("导入文件夹…", "Import Folder…")), at(tr("导入为文档…", "Import as Document…")) + 1);
     }
 
     #[test]
