@@ -11,7 +11,9 @@
 //!   row <title> | rrow <title> | hoverrow <title> (click, right-click or hover the sidebar row
 //!   with that title: 主页, 我的文档, a document or folder, 设置, a page in 设置's list…; the
 //!   topmost if several; no row shown by that title ends the run with exit code 3) |
-//!   anchor <name> (click the middle of a tracked control, e.g. `create-sidebar`: 我的文档's "+")
+//!   anchor <name> (click the middle of a tracked control, e.g. `create-sidebar`: 我的文档's "+") |
+//!   origin board | origin window (the points of the mouse and file steps after it count from the open
+//!   画板's top-left corner, or again from the window's; no board open ends the run with exit code 3)
 //!   filedrag x y <path>[|<path>...] / filedrop x y / fileleave (files dragged in from the Finder)
 //! For profiling: bench <n> <step> (runs the step n times, drawing a frame
 //!   synchronously after each, and prints step / frame / editor-render times) |
@@ -50,6 +52,8 @@ static PICK: Mutex<Option<Vec<std::path::PathBuf>>> = Mutex::new(None);
 static BENCHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Where the scripted drag is (`down`, `dragto`, `dragby`).
 static DRAG_AT: Mutex<(f32, f32)> = Mutex::new((0., 0.));
+/// Where the points of later steps count from (`origin board`), in window coordinates.
+static ORIGIN: Mutex<(f32, f32)> = Mutex::new((0., 0.));
 /// Modifier keys held for the mouse steps that follow (`mods shift cmd` / `mods none`), as NSEvent flags.
 static MODS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -146,7 +150,23 @@ pub fn start(window: &mut Window, cx: &mut App) {
                         }
                     }
                 }
-                _ => (cmd, rest),
+                "origin" => {
+                    let at = match rest.trim() {
+                        "window" => Ok((0., 0.)),
+                        "board" => handle.update(cx, |root, window, cx| {
+                            if window.needs_draw() { window.draw(cx).clear(cx); }
+                            let ws = root.downcast::<crate::app::Workspace>().map_err(|_| "no workspace window".to_string())?;
+                            let b = ws.read(cx).editor.as_ref().and_then(|e| e.read(cx).board_view()).ok_or("no board open")?.read(cx).bounds.get();
+                            Ok((f32::from(b.origin.x).round(), f32::from(b.origin.y).round()))
+                        }).unwrap_or_else(|e| Err(e.to_string())),
+                        o => Err(format!("unknown origin {o:?}")),
+                    };
+                    match at {
+                        Ok(o) => { eprintln!("devtools: origin {} at {} {}", rest.trim(), o.0, o.1); *ORIGIN.lock().unwrap() = o; continue }
+                        Err(e) => { eprintln!("devtools: origin: {e}"); std::process::exit(3); }
+                    }
+                }
+                _ => { resolved = shifted(cmd, rest); (cmd, resolved.as_str()) }
             };
             if cmd == "wait" {
                 // Draw invalidated frames ourselves: the display link stops
@@ -387,6 +407,34 @@ fn row_center(window: &Window, title: &str) -> Result<(f32, f32), String> {
             .map(|(_, b)| (f32::from(b.center().x).round(), f32::from(b.center().y).round()))
             .ok_or_else(|| format!("no sidebar row titled {title:?}; shown: {:?}", rows.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>()))
     })
+}
+
+/// `rest` of a step with its points moved by `ORIGIN`: the first point of the pointer and file steps,
+/// both of `drag`'s, the inner step of `bench`. Offsets (`dragby`, wheel deltas) stay as written.
+fn shifted(cmd: &str, rest: &str) -> String {
+    let (ox, oy) = *ORIGIN.lock().unwrap();
+    if (ox, oy) == (0., 0.) { return rest.to_string() }
+    let points = match cmd {
+        "move" | "click" | "dclick" | "rclick" | "down" | "dragto" | "up" | "mdown" | "mdragto" | "mup" | "wheel" | "pinch" | "glide" | "scroll" | "filedrag" | "filedrop" => 1,
+        "drag" => 2,
+        "bench" => {
+            let (n, step) = rest.trim().split_once(' ').unwrap_or((rest.trim(), ""));
+            let (scmd, srest) = step.split_once(' ').unwrap_or((step, ""));
+            return format!("{n} {scmd} {}", shifted(scmd, srest));
+        }
+        _ => 0,
+    };
+    if points == 0 { return rest.to_string() }
+    let mut out = vec![];
+    let mut tail = rest.trim_start();
+    for i in 0..points * 2 {
+        let (v, t) = tail.split_once(' ').unwrap_or((tail, ""));
+        let Ok(v) = v.parse::<f32>() else { break };
+        out.push((v + if i % 2 == 0 { ox } else { oy }).to_string());
+        tail = t.trim_start();
+    }
+    if !tail.is_empty() { out.push(tail.to_string()); }
+    out.join(" ")
 }
 
 fn nums(s: &str) -> Vec<f32> {
