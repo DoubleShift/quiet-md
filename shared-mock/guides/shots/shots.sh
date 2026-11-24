@@ -28,7 +28,7 @@ for n in home toolbar slash; do
   [ -f "$work/run/$n.png" ] || { echo "shots.sh: $n.png missing (see $work/run/log)" >&2; exit 1; }
   sips -Z 1600 -s format jpeg -s formatOptions 80 "$work/run/$n.png" --out "shared-mock/guides/assets/$n.jpg" >/dev/null
 done
-for n in home editor; do
+for n in home; do
   [ -f "$work/run/$n.png" ] || { echo "shots.sh: $n.png missing" >&2; exit 1; }
   sips -s format jpeg -s formatOptions 85 "$work/run/$n.png" --out "docs/images/$n.jpg" >/dev/null
 done
