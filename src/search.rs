@@ -701,7 +701,7 @@ impl Workspace {
                 .child(entry_icon(e))
                 .child(div().flex_1().min_w_0().h_full().pr(px(16.)).flex().flex_col().justify_center().border_b_1().border_color(Theme::line_divider())
                     .child(div().text_size(px(16.)).line_height(px(22.)).text_color(Theme::text()).overflow_hidden().whitespace_nowrap().text_ellipsis()
-                        .child(ui_text(title).hit(title_hit, Theme::link())))
+                        .child(ui_text(title).hit(title_hit, crate::design::color::foreground())))
                     .child(div().text_size(px(13.)).line_height(px(18.)).text_color(Theme::text_caption()).overflow_hidden().whitespace_nowrap().text_ellipsis()
                         .child(ui_text(line)))));
         }
