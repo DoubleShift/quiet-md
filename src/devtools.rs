@@ -642,6 +642,15 @@ fn run(cmd: &str, rest: &str, window: &mut Window, cx: &mut App) {
                 window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position: point(px(x), px(y)), pressed_button, modifiers: Modifiers::default() }), cx);
             }
         }
+        // A finger: `tdown x y`, `tmove x y`, `tup x y`, raw touches through
+        // GPUI's gesture recognizer as on iOS (a tap, a pan, a drag a handle claims).
+        "tdown" | "tmove" | "tup" => {
+            let n = nums(rest);
+            if n.len() >= 2 {
+                let phase = match cmd { "tdown" => TouchPhase::Started, "tmove" => TouchPhase::Moved, _ => TouchPhase::Ended };
+                window.dispatch_event(PlatformInput::Touch(TouchEvent { id: TouchId(1), phase, position: point(px(n[0]), px(n[1])), predicted_position: None, force: None }), cx);
+            }
+        }
         // Synthesized right-button NSEvents report buttonNumber 0, so GPUI would
         // read them as left clicks; feed the right click to GPUI directly.
         "forget-uploads" => eprintln!("devtools: forgot {} uploads", crate::editor::image::forget_uploads(window, cx)),

@@ -309,6 +309,12 @@ impl Editor {
         if mode == CatMode::None {
             return None;
         }
+        // Touch: a tapped block's handle sits where the folded outline's
+        // button does (the first paragraph on screen); the button steps aside
+        // while it shows.
+        if self.touch.on && mode == CatMode::Unpinned && self.handle_block().is_some() {
+            return None;
+        }
         let floating = mode == CatMode::Forced;
         let pinned = self.cat_pinned;
         let compact = crate::theme::compact(f32::from(self.pane_size().width));

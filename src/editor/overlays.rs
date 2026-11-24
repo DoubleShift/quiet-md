@@ -263,7 +263,7 @@ impl Editor {
     }
 
     /// Handle bounds (window coords) for a block: centered on its first line.
-    fn handle_rect(&self, id: BlockId, add: bool) -> Option<Bounds<Pixels>> {
+    pub(super) fn handle_rect(&self, id: BlockId, add: bool) -> Option<Bounds<Pixels>> {
         let b = self.block_rect(id)?;
         let (top, lh) = {
             let first = self.probed(Probe::Point(Pos::new(id, 0)));
@@ -294,7 +294,7 @@ impl Editor {
         dx
     }
 
-    fn is_empty_line(&self, id: BlockId) -> bool {
+    pub(super) fn is_empty_line(&self, id: BlockId) -> bool {
         self.core.block(id).is_some_and(|b| matches!(b.kind, BlockKind::Text) && b.text.is_empty() && b.children.is_empty())
     }
 
@@ -384,20 +384,25 @@ impl Editor {
                     if !add {
                         e.press_handle(id, ev.position);
                     }
-                    let open = match &e.menu {
-                        Some(Menu::Block { block, .. }) | Some(Menu::Add { block, .. }) => *block == id,
-                        _ => false,
-                    };
-                    if open {
-                        e.menu = None;
-                        e.core.clear_block_sel();
-                        cx.notify();
-                    } else {
-                        e.open_block_menu(id, add, window, cx);
-                    }
+                    e.toggle_block_menu(id, add, window, cx);
                 }),
             );
         Some(at(point(px(left), px(top)), Anchor::TopLeft, el))
+    }
+
+    /// A click on a block's handle: opens its menu, or closes it when open.
+    pub(super) fn toggle_block_menu(&mut self, id: BlockId, add: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let open = match &self.menu {
+            Some(Menu::Block { block, .. }) | Some(Menu::Add { block, .. }) => *block == id,
+            _ => false,
+        };
+        if open {
+            self.menu = None;
+            self.core.clear_block_sel();
+            cx.notify();
+        } else {
+            self.open_block_menu(id, add, window, cx);
+        }
     }
 
     // ---- slash / add menu

@@ -3,6 +3,9 @@
 //! where a mouse would hover. All drawn by GPUI: the system edit menu
 //! (UIEditMenuInteraction) was out of reach (#377).
 //!
+//! A finger on a block's handle drags the block as the mouse does (the same
+//! drop line and edge scrolling); let go without moving, it opens the menu.
+//!
 //! Touch mode starts with a touch (a long press, a touch drag) or on iOS, and
 //! ends when the mouse moves. Out of it nothing here draws or changes, so the
 //! desktop stays as it is.
@@ -24,12 +27,16 @@ const DOT: f32 = 10.;
 const GRAB: f32 = 22.;
 /// The edit menu floats this far above what it points at.
 const MENU_GAP: f32 = 8.;
+/// A block handle (42 × 26) takes a finger this much further round it.
+const GRAB_BLOCK: f32 = 9.;
 
 pub struct Touch {
     pub on: bool,
     /// The end of the selection a finger is dragging, and how far the finger
     /// sits from that end's line (so the text under the dot isn't what counts).
     pub(super) grab: Option<(End, Point<Pixels>)>,
+    /// The block whose handle a finger holds (dragging it, or a tap if it never moves).
+    pub(super) block: Option<BlockId>,
     /// The edit menu shows: after a long press, a handle let go, a tap on the caret.
     pub menu: bool,
     /// The block a tap showed the handle of.
@@ -45,7 +52,7 @@ pub struct Touch {
 impl Default for Touch {
     fn default() -> Self {
         let pinned = cfg!(feature = "devtools") && std::env::var_os("FDL_TOUCH").is_some();
-        Touch { on: cfg!(target_os = "ios") || pinned, grab: None, menu: false, handle: None, pinned, seen: None }
+        Touch { on: cfg!(target_os = "ios") || pinned, grab: None, block: None, menu: false, handle: None, pinned, seen: None }
     }
 }
 
@@ -56,7 +63,7 @@ impl Touch {
     /// True when there was something to take.
     pub fn moused(&mut self) -> bool {
         if !self.on || self.pinned { return false }
-        *self = Touch { on: false, grab: None, menu: false, handle: None, pinned: false, seen: None };
+        *self = Touch { on: false, grab: None, block: None, menu: false, handle: None, pinned: false, seen: None };
         true
     }
 }
@@ -69,6 +76,20 @@ pub enum End { Start, End }
 /// shift-click moves the head. Dragged past the other end, it just keeps going.
 pub fn grab((s, e): (Pos, Pos), end: End) -> Selection {
     match end { End::Start => Selection { anchor: e, head: s }, End::End => Selection { anchor: s, head: e } }
+}
+
+/// What letting go of a held block handle does: drop the blocks where the
+/// line shows, or (it never moved) open the handle's menu, as a click would;
+/// a cancelled touch does neither.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Release { Drop, Menu, Cancel }
+
+pub fn release(phase: TouchPhase, started: bool) -> Release {
+    match (phase, started) {
+        (TouchPhase::Ended, true) => Release::Drop,
+        (TouchPhase::Ended, false) => Release::Menu,
+        _ => Release::Cancel,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,7 +158,18 @@ impl Editor {
             TouchPhase::Started => {
                 self.touched(cx);
                 let under = self.handle_under(ev.start_position);
-                log::info!("touch: drag starts {:?} on handle {:?}", ev.start_position, under.map(|(e, _)| e));
+                let block = under.is_none().then(|| self.block_handle_under(ev.start_position)).flatten();
+                log::info!("touch: drag starts {:?} on handle {:?}, block handle {:?}", ev.start_position, under.map(|(e, _)| e), block);
+                if let Some(id) = block {
+                    self.press_handle(id, ev.start_position);
+                    // Columns and grids have a handle but don't move.
+                    if self.block_drag.is_none() { return }
+                    self.touch.block = Some(id);
+                    self.touch.menu = false;
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    return cx.notify();
+                }
                 let Some((end, off)) = under else { return };
                 self.core.sel = grab(self.core.ordered(), end);
                 self.touch.grab = Some((end, off));
@@ -147,7 +179,18 @@ impl Editor {
                 cx.stop_propagation();
                 cx.notify();
             }
+            TouchPhase::Moved if self.touch.block.is_some() => self.block_drag_move(ev.position, true, window, cx),
             TouchPhase::Moved => if let Some((_, off)) = self.touch.grab { self.drag_to(ev.position + off, cx) },
+            TouchPhase::Ended | TouchPhase::Cancelled if self.touch.block.is_some() => {
+                let Some(id) = self.touch.block.take() else { return };
+                let started = self.block_drag.as_ref().is_some_and(|d| d.started);
+                log::info!("touch: block handle let go {:?}: {:?}", ev.phase, release(ev.phase, started));
+                match release(ev.phase, started) {
+                    Release::Drop => self.end_block_drag(Some(ev.position), window, cx),
+                    Release::Menu => { self.block_drag = None; self.toggle_block_menu(id, false, window, cx) }
+                    Release::Cancel => { self.block_drag = None; self.toolbar_hidden = false; cx.notify() }
+                }
+            }
             TouchPhase::Ended | TouchPhase::Cancelled => {
                 if let Some((_, off)) = self.touch.grab.take() {
                     if ev.phase == TouchPhase::Ended { self.drag_to(ev.position + off, cx) }
@@ -157,6 +200,14 @@ impl Editor {
                 }
             }
         }
+    }
+
+    /// The shown block handle a finger landing at `p` holds (not the one of an
+    /// empty line, which only adds).
+    fn block_handle_under(&self, p: Point<Pixels>) -> Option<BlockId> {
+        let id = self.handle_block()?;
+        if self.is_empty_line(id) { return None }
+        self.handle_rect(id, false).is_some_and(|r| r.dilate(px(GRAB_BLOCK)).contains(&p)).then_some(id)
     }
 
     /// A tap coming down in touch mode, before anything can return early:
@@ -275,7 +326,8 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: gpui's `test` would shadow `#[test]`.
-    use super::{End, Item, Touch, grab, items};
+    use super::{End, Item, Release, Touch, grab, items, release};
+    use gpui::TouchPhase;
     use super::core::{self, Pos, Selection};
     use crate::model::BlockId;
 
@@ -330,5 +382,13 @@ mod tests {
         assert_eq!(items(false, true), [Item::Paste, Item::Select, Item::SelectAll]);
         assert_eq!(items(true, false), [Item::Copy, Item::SelectAll]);
         assert_eq!(items(true, true), [Item::SelectAll]);
+    }
+
+    #[test]
+    fn a_held_block_handle_drops_once_moved_and_otherwise_opens_its_menu() {
+        assert_eq!(release(TouchPhase::Ended, true), Release::Drop);
+        assert_eq!(release(TouchPhase::Ended, false), Release::Menu);
+        assert_eq!(release(TouchPhase::Cancelled, true), Release::Cancel);
+        assert_eq!(release(TouchPhase::Cancelled, false), Release::Cancel);
     }
 }

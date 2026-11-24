@@ -385,6 +385,8 @@ pub struct Workspace {
     /// The sidebar was open at the last render: opening it in a narrow window
     /// widens the window, narrowing the window below it hides it again.
     sidebar_was_open: bool,
+    /// A phone's drawer: the document open when it opened (`sidebar::drawer_stays`).
+    drawer_from: Option<Option<String>>,
     /// The window width before that widening, until the window takes the new size.
     widen_from: Option<f32>,
     /// The keyboard's height last frame (iOS): when it grows, the caret is scrolled back into view.
@@ -681,6 +683,7 @@ impl Workspace {
             sidebar_open: !quick,
             sidebar_width,
             sidebar_was_open: false,
+            drawer_from: None,
             widen_from: None,
             keyboard_inset: 0.,
             sidebar_auto_hidden: false,
@@ -1675,7 +1678,7 @@ impl Workspace {
     /// traffic lights and 展开侧栏) on the left, … 导入 + on the right. Below a
     /// usable width it is None and the caller shows a search icon instead.
     pub(crate) fn header_search(&self, window: &Window, cx: &mut Context<Self>) -> Option<crate::design::Field> {
-        let main = f32::from(window.viewport_size().width) - if self.sidebar_open { self.sidebar_w(window) } else { 0. };
+        let main = f32::from(window.viewport_size().width) - self.sidebar_room(window);
         let title = crate::settings::label(crate::settings::text("主页"));
         let title_w = f32::from(window.text_system().shape_line(title.clone().into(), px(17.), &[window.text_style().highlight(HighlightStyle { font_weight: Some(FontWeight::SEMIBOLD), ..Default::default() }).to_run(title.len())], None).width);
         // page_header's left inset (26 with the sidebar, else the traffic
@@ -2001,9 +2004,14 @@ impl Render for Workspace {
             }
         }
         self.sidebar_was_open = self.sidebar_open;
+        let drawer = self.drawer(window);
+        if !crate::sidebar::drawer_stays(&mut self.drawer_from, drawer && self.sidebar_open, &self.current) && drawer { self.sidebar_open = false; }
         let sidebar = if self.sidebar_open { Some(if matches!(self.view, View::Settings | View::Trash) { self.render_settings_sidebar(window, cx) } else { self.render_sidebar(window, cx) }) } else { None };
+        let sidebar = sidebar.map(|s| if inset_top + inset_bottom > 0. { div().flex_none().h_full().pt(px(inset_top)).pb(px(if keyboard > 0. { 0. } else { inset_bottom })).child(s).into_any_element() } else { s });
+        // A phone: over the note instead of beside it.
+        let (sidebar, drawer_el) = if drawer { (None, sidebar.map(|s| self.render_drawer(s, window, cx))) } else { (sidebar, None) };
         let row_menu = self.render_row_menu(window, cx);
-        let resize = self.sidebar_open.then(|| self.render_resize_handle(window, cx));
+        let resize = (self.sidebar_open && !drawer).then(|| self.render_resize_handle(window, cx));
         let resize_overlay = self.render_resize_overlay(cx);
         let folder_drag_overlay = self.render_folder_drag_overlay(cx);
         let home_drag_overlay = self.render_home_drag_overlay(window, cx);
@@ -2035,7 +2043,7 @@ impl Render for Workspace {
                 .h_full()
                 .flex()
                 .flex_col()
-                .child(self.top_bar(f32::from(window.viewport_size().width) - if self.sidebar_open { self.sidebar_w(window) } else { 0. }, cx))
+                .child(self.top_bar(f32::from(window.viewport_size().width) - self.sidebar_room(window), cx))
                 .children(self.render_history_banner(cx))
                 .child(
                     div()
@@ -2201,8 +2209,9 @@ impl Render for Workspace {
                 if w.search_open { w.close_search(window, cx); } else { w.open_search(window, cx); }
                 cx.stop_propagation();
             }))
-            .children(sidebar.map(|s| if inset_top + inset_bottom > 0. { div().flex_none().h_full().pt(px(inset_top)).pb(px(if keyboard > 0. { 0. } else { inset_bottom })).child(s).into_any_element() } else { s }))
+            .children(sidebar)
             .child(note)
+            .children(drawer_el)
             .children(resize)
             .children(crate::ui::window_controls(window))
             .children(row_menu)

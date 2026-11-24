@@ -94,6 +94,25 @@ impl Workspace {
         self.sidebar_width.clamp(theme::SIDEBAR_MIN, max)
     }
 
+    /// A phone (`theme::compact`): the sidebar is a drawer over the note
+    /// instead of a column beside it.
+    pub(crate) fn drawer(&self, window: &Window) -> bool { theme::compact(f32::from(window.viewport_size().width)) }
+
+    /// What the sidebar takes from the pane's width: nothing when closed or a drawer.
+    pub(crate) fn sidebar_room(&self, window: &Window) -> f32 {
+        if self.sidebar_open && !self.drawer(window) { self.sidebar_w(window) } else { 0. }
+    }
+
+    /// The drawer: the sidebar over the note, a scrim behind it that closes it when tapped.
+    pub(crate) fn render_drawer(&self, sidebar: AnyElement, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        div().absolute().inset_0()
+            .child(div().id("drawer-scrim").absolute().inset_0().bg(crate::design::color::overlay()).occlude()
+                .on_mouse_down(MouseButton::Left, cx.listener(|w, _, _, cx| { cx.stop_propagation(); w.sidebar_open = false; cx.notify(); })))
+            .child(div().id("drawer").absolute().top_0().left_0().h_full().w(px(self.sidebar_w(window))).flex()
+                .bg(Theme::window()).shadow(theme::shadow_panel()).occlude().child(sidebar))
+            .into_any_element()
+    }
+
     pub(crate) fn render_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let mut entries: Vec<Entry> = self.entries.clone();
         // 置顶 follows the same order as the lists below it.
@@ -904,5 +923,34 @@ impl Workspace {
             self.row_sub_bounds.set(None);
         }
         out
+    }
+}
+
+/// The drawer closes once another document opens from it. `from`: the
+/// document open when it opened (`None` while it is closed). True: it stays.
+pub(crate) fn drawer_stays(from: &mut Option<Option<String>>, open: bool, current: &Option<String>) -> bool {
+    if !open { *from = None; return false }
+    let stays = from.get_or_insert_with(|| current.clone()) == current;
+    if !stays { *from = None; }
+    stays
+}
+
+#[cfg(test)]
+mod tests {
+    use super::drawer_stays;
+
+    #[test]
+    fn the_drawer_closes_once_another_document_opens() {
+        let (a, b) = (Some("a".to_string()), Some("b".to_string()));
+        let mut from = None;
+        assert!(!drawer_stays(&mut from, false, &a) && from.is_none());
+        // Opened over a: stays while a is open, also after a frame or two.
+        assert!(drawer_stays(&mut from, true, &a) && drawer_stays(&mut from, true, &a));
+        // b chosen in it: closes, and forgets a.
+        assert!(!drawer_stays(&mut from, true, &b) && from.is_none());
+        // Opened again over b, or with nothing open, then a document chosen.
+        assert!(drawer_stays(&mut from, true, &b));
+        assert!(!drawer_stays(&mut from, false, &b) && from.is_none());
+        assert!(drawer_stays(&mut from, true, &None) && !drawer_stays(&mut from, true, &a));
     }
 }

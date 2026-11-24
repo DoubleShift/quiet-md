@@ -48,6 +48,7 @@ Write one command per line. Lines beginning with `#` are comments. See the top o
 | `down x y` / `dragto x y` / `dragby dx dy` / `up x y` | Press, drag to an absolute point, drag relative to the last point or release. Use `bench 30 dragby 4 0` to time individual steps. |
 | `mods shift cmd` / `mods none` | Hold these modifier keys (shift, cmd, alt, ctrl) for the mouse steps that follow; `none` lets go. |
 | `mdown x y` / `mdragto x y` / `mup x y` | Press, drag or release the middle (wheel) button. |
+| `tdown x y` / `tmove x y` / `tup x y` | A finger down, moving, lifted: raw touches through GPUI's gesture recognizer as on iOS (a quick `tdown` + `tup` is a tap; a `tmove` pans unless a handle claims the drag). |
 | `wheel x y dy [dx]` | Send one wheel event. Optional horizontal delta simulates a trackpad. Positive values reveal content to the right. |
 | `pinch x y delta` | Send one trackpad pinch event at (x, y). A delta of 0.1 zooms in by 10%; negative values zoom out. |
 | `shot <name>` / `burst <name> n` | Take one screenshot or n shots about 8 ms apart. |

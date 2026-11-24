@@ -957,7 +957,7 @@ impl Workspace {
 
     pub(crate) fn render_home_grid(&self, entries: &[Entry], in_folder: bool, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let grid_scroll = if in_folder { &self.home.folder_grid_scroll } else { &self.home.grid_scroll };
-        let main_w = f32::from(window.viewport_size().width) - if self.sidebar_open { self.sidebar_w(window) } else { 0. };
+        let main_w = f32::from(window.viewport_size().width) - self.sidebar_room(window);
         let avail = (main_w - 48.).max(1.);
         let entries = entries.to_vec();
         let mixed = entries.iter().any(|e| e.meta.folder.is_some() && e.note.is_none());
