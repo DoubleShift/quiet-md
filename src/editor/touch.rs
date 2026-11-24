@@ -37,12 +37,15 @@ pub struct Touch {
     /// On for good, the mouse notwithstanding: scripts (`FDL_TOUCH=1`, devtools
     /// builds) drive touch mode with mouse clicks.
     pub pinned: bool,
+    /// What the last frame showed (focus, handle block, text drag, typing), for
+    /// the diagnostic log: only changes are written.
+    seen: Option<(bool, Option<BlockId>, bool, bool)>,
 }
 
 impl Default for Touch {
     fn default() -> Self {
         let pinned = cfg!(feature = "devtools") && std::env::var_os("FDL_TOUCH").is_some();
-        Touch { on: cfg!(target_os = "ios") || pinned, grab: None, menu: false, handle: None, pinned }
+        Touch { on: cfg!(target_os = "ios") || pinned, grab: None, menu: false, handle: None, pinned, seen: None }
     }
 }
 
@@ -53,7 +56,7 @@ impl Touch {
     /// True when there was something to take.
     pub fn moused(&mut self) -> bool {
         if !self.on || self.pinned { return false }
-        *self = Touch { on: false, grab: None, menu: false, handle: None, pinned: false };
+        *self = Touch { on: false, grab: None, menu: false, handle: None, pinned: false, seen: None };
         true
     }
 }
@@ -133,7 +136,9 @@ impl Editor {
         match ev.phase {
             TouchPhase::Started => {
                 self.touched(cx);
-                let Some((end, off)) = self.handle_under(ev.start_position) else { return };
+                let under = self.handle_under(ev.start_position);
+                log::info!("touch: drag starts {:?} on handle {:?}", ev.start_position, under.map(|(e, _)| e));
+                let Some((end, off)) = under else { return };
                 self.core.sel = grab(self.core.ordered(), end);
                 self.touch.grab = Some((end, off));
                 self.touch.menu = false;
@@ -154,14 +159,43 @@ impl Editor {
         }
     }
 
-    /// A tap in touch mode: the tapped block shows its handle; a tap on the
-    /// caret where it already was (`was`: the caret before), or a double or
-    /// triple tap's word or line, brings the menu.
-    pub(super) fn touch_tap(&mut self, p: Point<Pixels>, was: Option<Pos>, taps: usize) {
+    /// A tap coming down in touch mode, before anything can return early:
+    /// the block under it (or right of it, a tap in the margin) shows its
+    /// handle, as a pointer arriving there would; the pointer "moved", so a
+    /// past edit no longer hides it; and the keyboard is asked for, from
+    /// within the gesture as UIKit wants.
+    pub(super) fn touch_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if !self.touch.on { return }
-        self.touch.handle = self.hover_target(p);
+        self.typing = false;
+        self.touch.handle = self.hover_target(ev.position);
+        if !self.read_only { window.request_virtual_keyboard(); }
+        log::info!("touch: down {:?} x{} focused={:?} handle={:?} of {} targets", ev.position, ev.click_count, window.focused(cx), self.touch.handle, self.handle_targets.len());
+    }
+
+    /// The tap placed the caret or selected: a tap on the caret where it
+    /// already was (`was`: the caret before), or a double or triple tap's word
+    /// or line, brings the menu.
+    pub(super) fn touch_tap(&mut self, was: Option<Pos>, taps: usize, window: &Window, cx: &App) {
+        if !self.touch.on { return }
         let caret = self.core.sel.is_collapsed();
         self.touch.menu = if caret { was.is_some() && Some(self.core.sel.head) == was } else { taps >= 2 };
+        log::info!("touch: placed {:?} menu={} focused={:?} dragging={}", self.core.sel, self.touch.menu, window.focused(cx), self.dragging);
+    }
+
+    /// The tap's release reached the editor.
+    pub(super) fn touch_up(&mut self, ev: &MouseUpEvent, window: &Window, cx: &App) {
+        if self.touch.on { log::info!("touch: up {:?} focused={:?}", ev.position, window.focused(cx)) }
+    }
+
+    /// Diagnostic log (iOS bring-up): each frame whose focus, shown handle,
+    /// text drag or typing differs from the last one's, with who has focus.
+    pub(super) fn touch_frame(&mut self, focused: bool, window: &Window, cx: &App) {
+        if !self.touch.on { return }
+        let now = (focused, self.handle_block(), self.dragging, self.typing);
+        if self.touch.seen != Some(now) {
+            self.touch.seen = Some(now);
+            log::info!("touch: frame focused={} (window: {:?}) handle={:?} (tapped {:?}) dragging={} typing={}", now.0, window.focused(cx), now.1, self.touch.handle, now.2, now.3);
+        }
     }
 
     /// 选择: the word at the caret, as a long press would.

@@ -2493,6 +2493,7 @@ impl Editor {
         window.focus(&self.focus, cx);
         let was = self.core.sel.is_collapsed().then_some(self.core.sel.head);
         self.touch.menu = false;
+        self.touch_down(ev, window, cx);
         self.reminder_blur(window, cx);
         self.menu = None;
         self.menu_hovered = false;
@@ -2547,10 +2548,11 @@ impl Editor {
             self.set_caret(pos, false);
             self.caret_row_end = at_row_end.then_some((pos.block, pos.offset));
         }
-        self.touch_tap(ev.position, was, ev.click_count);
+        self.touch_tap(was, ev.click_count, window, cx);
         // A click out of a `$x$` typed delimiters first makes it an equation.
         if self.core.equation_on_leave() { self.changed_preserving_viewport(window, cx); }
-        self.dragging = ev.click_count == 1;
+        // A finger moving pans the page: a tap starts no text drag (the handles do that).
+        self.dragging = ev.click_count == 1 && (!self.touch.on || self.touch.pinned);
         self.restart_blink(window, cx);
         cx.notify();
     }
@@ -2611,6 +2613,7 @@ impl Editor {
     /// and moving the finger extends the selection.
     pub(super) fn on_long_press(&mut self, ev: &LongPressEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.touched(cx);
+        if ev.phase != TouchPhase::Moved { log::info!("touch: long press {:?} at {:?}", ev.phase, ev.position) }
         match ev.phase {
             TouchPhase::Started => {
                 let Some((pos, _)) = self.pos_at(ev.position) else { return };
