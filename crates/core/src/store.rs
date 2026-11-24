@@ -23,7 +23,7 @@ pub use layout::{file_name_for, relative, resolve, file_link};
 use layout::{parent_rel, base_name, stem_of, join_rel};
 #[path = "migrate.rs"] mod migrate;
 #[path = "meta.rs"] mod meta;
-pub use meta::{Device, device};
+pub use meta::{Device, DeviceInfo, device, set_device_name};
 pub use migrate::{MigrationState, ConsentReason, DeviceHint, MigrationReport, RestoreReport, SyncService, sync_of, set_ubiquity_probe};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -435,12 +435,26 @@ fn parsed_cache_path(root: &Path, key: &str) -> PathBuf {
 /// One write to the indexes: several copies of the app may share a library
 /// (builds tested side by side), so this is a short mutex, not a
 /// single-instance guard. Released when the write is done.
-/// `None`: the lock a batch already holds.
-struct WriteLock(Option<crate::vfs::File>);
+/// Empty: the lock a batch already holds.
+struct WriteLock(Vec<crate::vfs::File>);
 
 impl Drop for WriteLock {
-    fn drop(&mut self) { if let Some(f) = &self.0 { let _ = f.unlock(); } }
+    fn drop(&mut self) { for f in self.0.iter().rev() { let _ = f.unlock(); } }
 }
+
+/// `path` opened (made if missing) and locked, waiting for whoever holds it.
+fn lock_file(path: &Path) -> Result<crate::vfs::File> {
+    if let Some(dir) = path.parent() { crate::vfs::create_dir_all(dir)?; }
+    let f = crate::vfs::OpenOptions::new().create(true).truncate(false).write(true).open(path)?;
+    f.lock()?;
+    Ok(f)
+}
+
+/// This computer's write lock on root `key` (sync.md 1.6): in local data, as
+/// a lock in the root would only travel to other devices and lock nothing
+/// there. Every copy of the app and the CLI on this computer opening the
+/// root by the same key share it.
+fn lock_path_for(root: &Path, key: &str) -> PathBuf { local_base(root).join("locks").join(format!("{key}.lock")) }
 
 /// A batch of writes (`Store::batch`): the lock is held throughout and the
 /// index is written once at the end, not once per document.
@@ -1274,7 +1288,7 @@ impl Store {
                 Some(m) => {
                     if migrate::legacy(&root) { migrate::finish(&root, &mut warnings); }
                     if m.id.is_empty() { let _ = write_atomic(&marker, &serde_json::to_vec_pretty(&FormatMarker { format: m.format, id: uuid::Uuid::new_v4().to_string() })?); }
-                    if m.format < 5 && sync_of(&root) == SyncService::Local && !tests::STAY_4.with(|k| k.get()) && let Err(e) = meta::upgrade(&root, &me, &mut warnings) { warnings.push(format!("无法升级文档索引：{e}")); }
+                    if m.format < 5 && sync_of(&root) == SyncService::Local && !tests::STAY_4.with(|k| k.get()) && let Err(e) = Self::upgrade_meta(&root, key, &me, &mut warnings) { warnings.push(format!("无法升级文档索引：{e}")); }
                 }
                 None => {
                     crate::vfs::create_dir_all(&internal)?;
@@ -1323,6 +1337,14 @@ impl Store {
         Ok(store)
     }
 
+    /// FORMAT 4 → 5 under the locks a FORMAT 4 write takes: a copy opening
+    /// the root at the same time waits, then finds it done.
+    fn upgrade_meta(root: &Path, key: &str, me: &Device, warnings: &mut Vec<String>) -> Result<()> {
+        let _locks = WriteLock(vec![lock_file(&lock_path_for(root, key))?, lock_file(&root.join(INTERNAL).join(".lock"))?]);
+        if Self::format_at(root) >= 5 { return Ok(()); }
+        meta::upgrade(root, me, warnings)
+    }
+
     /// The format `root`'s `.quiet/format.json` names (0: none).
     /// One still only in iCloud: 5 when the per-device index folder is
     /// there, else 4 (the formats with a `.quiet/`).
@@ -1335,7 +1357,7 @@ impl Store {
     /// FORMAT 5: the index from every device's file (sync.md 3.3). Entries
     /// whose files are not here (yet) come along and `list` passes them over.
     fn load_meta(&mut self, warnings: &mut Vec<String>) {
-        let merged = meta::load(&self.root, &self.me.id, warnings);
+        let merged = meta::cached(&self.root, &self.me.id, self.merged.get_mut(), warnings);
         self.clock.set(self.clock.get().max(merged.max));
         let mut disk = merged.disk_index();
         self.foreign = foreign_of(&disk);
@@ -1353,7 +1375,7 @@ impl Store {
         let now = meta::by_id(&self.disk_index());
         let changes = meta::diff(&self.seen.borrow(), &now);
         if !changes.is_empty() {
-            let merged = meta::commit(&self.root, &self.me, &self.clock, changes, &mut vec![])?;
+            let merged = meta::commit_over(&self.root, &self.me, &self.clock, &self.merged.borrow(), changes, &mut vec![])?;
             *self.merged.borrow_mut() = merged;
             *self.seen.borrow_mut() = now;
         }
@@ -1368,9 +1390,52 @@ impl Store {
     fn index_file(&self) -> PathBuf { self.internal().join("index.json") }
     fn trash_index_file(&self) -> PathBuf { self.internal().join("trash").join("index.json") }
     fn local_file(&self) -> PathBuf { local_file_for(&self.root, &self.key) }
+    fn lock_path(&self) -> PathBuf { lock_path_for(&self.root, &self.key) }
+
+    /// The write locks, this computer's first. Before FORMAT 5 older builds,
+    /// which may have the library open too, lock `.quiet/.lock` (the top's
+    /// `.lock` in the old layout), so that one is held as well; FORMAT 5,
+    /// which they cannot open, no longer makes it.
+    fn lock_files(&self, v5: bool) -> Result<Vec<crate::vfs::File>> {
+        let mut held = vec![lock_file(&self.lock_path())?];
+        if !v5 { held.push(lock_file(&self.internal().join(".lock"))?); }
+        Ok(held)
+    }
 
     /// The name this computer's data about the library goes by.
     pub fn key(&self) -> &str { &self.key }
+
+    /// The devices that write this root's metadata (FORMAT 5), the latest
+    /// writer first; for 移除已停用的设备. Empty before FORMAT 5.
+    pub fn devices(&self) -> Vec<DeviceInfo> { if self.v5 { meta::devices(&self.root) } else { vec![] } }
+
+    /// 移除已停用的设备: device `id`'s fields that still win become this
+    /// device's, stamps unchanged, and its file goes; the merged view stays
+    /// as it was. This device cannot remove itself.
+    pub fn retire_device(&mut self, id: &str) -> Result<()> {
+        anyhow::ensure!(self.v5, "这个文档库还没有按设备记录元数据");
+        anyhow::ensure!(id != self.me.id, "不能移除当前设备");
+        let _lock = self.begin_write()?;
+        *self.merged.get_mut() = meta::retire(&self.root, &self.me, id, &mut vec![])?;
+        let before = std::mem::take(&mut self.index);
+        self.load_meta(&mut vec![]);
+        self.reclaim_open(before);
+        Ok(())
+    }
+
+    /// Copy the file at `src` into the library's attachments (sync.md 2.5),
+    /// named by a new UUID with `src`'s extension, so two devices inserting a
+    /// `截图.png` each never meet. Returns its path in the library
+    /// (`.assets/<uuid>.png`); the original name is the caller's to keep in `name=`.
+    pub fn import_attachment(&self, src: &Path) -> Result<String> {
+        anyhow::ensure!(src.fs_is_file(), "找不到要导入的文件：{}", src.display());
+        let dir = Self::assets_in(&self.root);
+        let ext = src.extension().and_then(|e| e.to_str()).filter(|e| !e.is_empty() && e.len() <= 16 && e.chars().all(|c| c.is_ascii_alphanumeric()));
+        let name = match ext { Some(e) => format!("{}.{e}", uuid::Uuid::new_v4()), None => uuid::Uuid::new_v4().to_string() };
+        crate::vfs::create_dir_all(&dir)?;
+        crate::vfs::copy(src, dir.join(&name))?;
+        Ok(format!("{}/{name}", dir.file_name().unwrap_or_default().to_string_lossy()))
+    }
 
     /// This computer's data about `root` named by its path (builds before
     /// root keys) goes by `key` from now on, unless `key` has some already.
@@ -1597,11 +1662,9 @@ impl Store {
     /// nothing the disk does not. A lock failure must never allow an unguarded write.
     fn begin_write(&mut self) -> Result<WriteLock> {
         // Inside a batch the lock is held and memory is what the disk will be.
-        if self.batch.lock.is_some() { return Ok(WriteLock(None)); }
+        if self.batch.lock.is_some() { return Ok(WriteLock(vec![])); }
         crate::vfs::create_dir_all(self.internal())?;
-        let f = crate::vfs::OpenOptions::new().create(true).truncate(false).write(true).open(self.internal().join(".lock"))?;
-        f.lock()?;
-        let lock = WriteLock(Some(f));
+        let lock = WriteLock(self.lock_files(self.v5)?);
         // Another copy moved it to the new layout meanwhile: nothing more is written here.
         anyhow::ensure!(!self.flat || !self.root.join(INTERNAL).join("format.json").fs_exists(), "文档库已升级到新格式，请重新打开 Quiet.md");
         let marker: FormatMarker = serde_json::from_slice(&crate::vfs::read(self.internal().join("format.json"))?)?;
@@ -2950,7 +3013,10 @@ impl Store {
             for (id, v) in &s.scroll_top { if was.scroll_top.get(id) != Some(v) { changes.push((id.clone(), "scroll".into(), serde_json::to_value(v)?)); } }
             for id in was.scroll_top.keys() { if !s.scroll_top.contains_key(id) { changes.push((id.clone(), "scroll".into(), serde_json::Value::Null)); } }
             if changes.is_empty() { return Ok(()) }
-            *self.merged.borrow_mut() = meta::commit(&self.root, &self.me, &self.clock, changes, &mut vec![])?;
+            // Not inside `begin_write`: the lock is taken here, so two copies never write this device's file at once.
+            let _lock = if self.batch.lock.is_some() { WriteLock(vec![]) } else { WriteLock(self.lock_files(true)?) };
+            let merged = meta::commit_over(&self.root, &self.me, &self.clock, &self.merged.borrow(), changes, &mut vec![])?;
+            *self.merged.borrow_mut() = merged;
             return Ok(())
         }
         let shared = Settings { window_origin: None, window_display: None, window_size: None, quick_note_size: None, ..s.clone() };
@@ -3529,8 +3595,8 @@ mod tests {
         let lib = Lib::new("lock-failure");
         let mut s = lib.open();
         let id = s.create_from(&doc("original")).unwrap();
-        crate::vfs::remove_file(lib.0.join(".quiet/.lock")).unwrap();
-        crate::vfs::create_dir(lib.0.join(".quiet/.lock")).unwrap();
+        crate::vfs::remove_file(s.lock_path()).unwrap();
+        crate::vfs::create_dir(s.lock_path()).unwrap();
         assert!(s.save(&id, &doc("lost")).is_err());
         assert_eq!(s.load(&id).unwrap().title.text, "original");
         assert!(s.create_from(&doc("new")).is_err());
@@ -3665,6 +3731,115 @@ mod tests {
     }
 
     fn dev(id: &str) -> Device { Device { id: id.into(), ..Default::default() } }
+
+    #[test]
+    fn the_write_lock_is_local_and_shared_by_the_key() {
+        let lib = Lib::new("local-lock");
+        let key = library_key(&lib.0);
+        let mut a = Store::open_as(lib.0.clone(), &key, device()).unwrap();
+        a.create_from(&doc("甲")).unwrap();
+        // FORMAT 5 makes no lock in the root: it would only travel to other devices.
+        assert!(a.lock_path().fs_is_file() && !lib.0.join(".quiet/.lock").fs_exists());
+        // A second copy on this computer (another window, the CLI) waits for the first.
+        a.begin_batch().unwrap();
+        let wrote = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let other = {
+            let (root, key, wrote) = (lib.0.clone(), key.clone(), wrote.clone());
+            std::thread::spawn(move || {
+                let mut b = Store::open_as(root, &key, device()).unwrap();
+                b.create_from(&doc("乙")).unwrap();
+                wrote.store(true, std::sync::atomic::Ordering::SeqCst);
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!wrote.load(std::sync::atomic::Ordering::SeqCst));
+        a.create_from(&doc("丙")).unwrap();
+        a.end_batch().unwrap();
+        other.join().unwrap();
+        assert!(wrote.load(std::sync::atomic::Ordering::SeqCst));
+        let mut titles: Vec<String> = a.list().into_iter().map(|e| e.title).collect();
+        titles.sort();
+        assert_eq!(titles, ["丙", "乙", "甲"]);
+    }
+
+    #[test]
+    fn the_merged_view_is_reread_only_when_a_device_file_changed() {
+        let lib = Lib::new("merged-cache");
+        let mut a = Store::open_as(lib.0.clone(), &library_key(&lib.0), dev("aaaa")).unwrap();
+        let x = a.create_from(&doc("共享")).unwrap();
+        let first = meta::cached(&lib.0, "aaaa", &meta::Merged::default(), &mut vec![]);
+        // Nothing changed: the same view without reading.
+        assert!(meta::cached(&lib.0, "aaaa", &first, &mut vec![]).get(&x, "path").is_some());
+        // Another device writes its file: the next write here sees it.
+        meta::commit(&lib.0, &dev("bbbb"), &Default::default(), vec![(x.clone(), "pinned".into(), true.into())], &mut vec![]).unwrap();
+        assert_eq!(meta::cached(&lib.0, "aaaa", &first, &mut vec![]).get(&x, "pinned"), Some(&serde_json::Value::Bool(true)));
+        a.set_starred(&x, true).unwrap();
+        let m = a.list().into_iter().find(|e| e.id == x).unwrap().meta;
+        assert!(m.pinned && m.starred > 0);
+        // Its own write keeps the view current, and a later one by another device still shows.
+        meta::commit(&lib.0, &dev("bbbb"), &Default::default(), vec![(x.clone(), "pinned".into(), false.into())], &mut vec![]).unwrap();
+        a.set_starred(&x, false).unwrap();
+        assert!(!a.list().into_iter().find(|e| e.id == x).unwrap().meta.pinned);
+    }
+
+    #[test]
+    fn devices_are_named_or_labelled() {
+        let d = Device { id: "9b2f0c1e".into(), name: String::new(), platform: "macos".into() };
+        assert_eq!(d.label(), "macOS 9b2f");
+        assert_eq!(Device { name: " Sida 的 MacBook ".into(), ..d.clone() }.label(), "Sida 的 MacBook");
+        assert_eq!(Device { platform: String::new(), ..d }.label(), "? 9b2f");
+        set_device_name("书房的 Mac");
+        assert_eq!(device().name, "书房的 Mac");
+        set_device_name("");
+    }
+
+    #[test]
+    fn retiring_a_device_keeps_the_merged_view() {
+        let lib = Lib::new("retire");
+        let mut a = Store::open_as(lib.0.clone(), &library_key(&lib.0), dev("aaaa")).unwrap();
+        let x = a.create_from(&doc("甲")).unwrap();
+        let y = a.create_from(&doc("乙")).unwrap();
+        let file = |d: &str| meta::dir(&lib.0).join(format!("{d}.json"));
+        // "eeee": wins x's pinned and y's width, loses x's starred to a later write here,
+        // and ties "dddd" on y's width (it wins that tie by its id).
+        let t = crate::time::now_ms();
+        crate::vfs::write(file("eeee"), serde_json::to_vec(&serde_json::json!({ "v": 1, "device": { "id": "eeee", "name": "旧电脑", "platform": "windows" },
+            "items": { (x.clone()): { "pinned": [true, t], "starred": [5, 1] }, (y.clone()): { "width": ["wide", t] } } })).unwrap()).unwrap();
+        crate::vfs::write(file("dddd"), serde_json::to_vec(&serde_json::json!({ "v": 1, "device": { "id": "dddd" },
+            "items": { (y.clone()): { "width": ["full", t] } } })).unwrap()).unwrap();
+        a.set_starred(&x, true).unwrap();
+        let view = || {
+            let m = meta::load(&lib.0, "aaaa", &mut vec![]);
+            m.items.into_iter().map(|(i, f)| (i, f.into_iter().map(|(k, w)| (k, w.v)).collect::<BTreeMap<_, _>>())).collect::<BTreeMap<_, _>>()
+        };
+        let before = view();
+        assert_eq!(before[&y]["width"], "wide");
+        let listed: Vec<String> = a.devices().into_iter().map(|d| d.device.id).collect();
+        assert!(listed.contains(&"eeee".to_string()) && listed.contains(&"aaaa".to_string()));
+        assert_eq!(a.devices().into_iter().find(|d| d.device.id == "eeee").unwrap().last, t);
+        assert!(a.retire_device("aaaa").is_err() && a.retire_device("ffff").is_err());
+        a.retire_device("eeee").unwrap();
+        assert_eq!(view(), before);
+        assert!(!file("eeee").fs_exists() && file("dddd").fs_exists());
+        assert!(!a.devices().iter().any(|d| d.device.id == "eeee"));
+        let m = a.list().into_iter().find(|e| e.id == x).unwrap().meta;
+        assert!(m.pinned && m.starred > 5);
+    }
+
+    #[test]
+    fn attachments_come_in_under_new_names() {
+        let lib = Lib::new("attach");
+        let s = lib.open();
+        let src = lib.0.with_extension("src");
+        crate::vfs::create_dir_all(&src).unwrap();
+        crate::vfs::write(src.join("截图.PNG"), b"png").unwrap();
+        let one = s.import_attachment(&src.join("截图.PNG")).unwrap();
+        let two = s.import_attachment(&src.join("截图.PNG")).unwrap();
+        assert!(one.starts_with(".assets/") && one.ends_with(".PNG") && one != two, "{one} {two}");
+        assert_eq!(crate::vfs::read(lib.0.join(&one)).unwrap(), b"png");
+        assert!(s.import_attachment(&src.join("没有.png")).is_err());
+        let _ = crate::vfs::remove_dir_all(&src);
+    }
 
     #[test]
     fn format_4_moves_to_device_files() {
