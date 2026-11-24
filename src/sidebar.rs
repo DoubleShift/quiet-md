@@ -66,6 +66,7 @@ pub(crate) fn footer_row(id: &'static str, glyph: &'static str, label: &'static 
         .hover(|s| s.bg(Theme::sidebar_hover()))
         .child(div().size(px(20.)).flex_none().flex().items_center().justify_center().mr(px(9.)).child(icon(glyph, ROW_ICON, Theme::icon())))
         .child(label)
+        .relative().children(crate::devtools::row_probe(label))
 }
 
 /// The footer's divider and padding around `row`.
@@ -100,6 +101,7 @@ impl Workspace {
         crate::home::sort_entries(&mut entries, self.home.order());
         self.more_bounds.borrow_mut().clear();
         self.settle_sidebar_drop(cx);
+        crate::devtools::rows_begin(window);
 
         let header = div()
             .h(px(crate::app::HEADER_H))
@@ -142,7 +144,8 @@ impl Workspace {
             .when(!on, |d| d.text_color(Theme::sidebar_text()).hover(|s| s.bg(Theme::sidebar_hover())))
             // Selected or not, the same outline: the row's fill marks the selection.
             .child(div().size(px(20.)).flex_none().flex().items_center().justify_center().mr(px(9.)).child(icon(glyph, ROW_ICON, Theme::icon())))
-            .child(label);
+            .child(label)
+            .relative().children(crate::devtools::row_probe(label));
         let nav = div().flex_none().pt(px(4.)).pb(px(4.)).px(px(SB_X)).flex().flex_col().gap(px(ROW_GAP))
             .child(item("nav-home", "home", crate::settings::tr("主页", "Home"), home_on).on_click(cx.listener(|w, _, _, cx| w.show_view(View::Home, cx))))
             .child(item("nav-add-folder", "folder-plus", crate::settings::tr("添加文件夹", "Add a folder"), false)
@@ -312,6 +315,7 @@ impl Workspace {
     /// 我的文档's is a row that opens its page, with 批量操作 and "+" on the
     /// right, laid out so the last one lines up with the rows' "…".
     fn section(&self, idx: usize, title: impl AsRef<str>, cx: &mut Context<Self>) -> Div {
+        let title = crate::settings::label(title);
         let group = SharedString::from(format!("section-{idx}"));
         let folded = self.folded[idx];
         let trigger = |id: &'static str, name: &'static str| Button::ghost(id).sized(ButtonSize::Xs).icon(name);
@@ -360,9 +364,10 @@ impl Workspace {
         if idx == 1 {
             return div().h(px(SECTION_H)).pt(px(SECTION_TOP)).flex().child(
                 div().id("section-library").flex_1().h(px(SECTION_H - SECTION_TOP - ROW_GAP)).pl(px(8.)).flex().items_center().rounded(px(ROW_R)).cursor_pointer()
+                    .relative().children(crate::devtools::row_probe(title.clone()))
                     .hover(|s| s.bg(Theme::sidebar_hover())).when(self.sidebar_drop_top(), |d| d.bg(Theme::sidebar_selected()))
                     .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 7.))
-                        .font_weight(FontWeight::SEMIBOLD).text_color(Theme::sidebar_section()).child(crate::settings::label(title)))
+                        .font_weight(FontWeight::SEMIBOLD).text_color(Theme::sidebar_section()).child(title))
                     .child(trigger("section-batch", "batch").tip(crate::settings::text("批量操作"), None)
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_click(cx.listener(|w, _, _, cx| {
@@ -381,6 +386,7 @@ impl Workspace {
             div()
                 // Keyed by state so the tooltip is rebuilt after a toggle.
                 .id(SharedString::from(format!("section-title-{idx}-{folded}")))
+                .relative().children(crate::devtools::row_probe(title.clone()))
                 .px(px(4.))
                 .h(px(22.))
                 .flex()
@@ -389,7 +395,7 @@ impl Workspace {
                 .cursor_pointer()
                 .hover(|s| s.bg(Theme::sidebar_hover()))
                 .tip(if folded { crate::settings::text("点击展开") } else { crate::settings::text("点击折叠") }, None)
-                .child(div().pr(px(4.)).text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 7.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::sidebar_section()).child(crate::settings::label(title)))
+                .child(div().pr(px(4.)).text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 7.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::sidebar_section()).child(title))
                 .child(
                     div()
                         .when(!folded, |d| d.opacity(0.).group_hover(group, |s| s.opacity(1.)))
@@ -634,6 +640,7 @@ impl Workspace {
             .h(px(DOC_ROW_H))
             .w_full()
             .relative()
+            .children(crate::devtools::row_probe(display_title(&e.title)))
             .flex()
             .items_center()
             // In 我的文档 the selection pill and the hover wash are drawn under the row (`sidebar_drag.rs`).

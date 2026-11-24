@@ -69,9 +69,9 @@ def script(tag):
     # 侧栏「+」› 画板, then a text (IME commit: Chinese), deselected
     return f"""move 700 700
 wait 1500
-click 251 106
+anchor create-sidebar
 wait 300
-click 295 208
+click 295 236
 wait 1200
 key t
 click 650 380

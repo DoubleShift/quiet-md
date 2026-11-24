@@ -45,6 +45,8 @@ Write one command per line. Lines beginning with `#` are comments. See the top o
 | `key <key>` | Send a key, e.g. `key cmd-b` or `key escape`. |
 | `type <text>` | Type text, including trailing spaces. |
 | `move x y` / `click x y` / `dclick x y` / `rclick x y` / `drag x1 y1 x2 y2` | Move, click, double-click, right-click or drag in window coordinates. |
+| `row <title>` / `rrow <title>` / `hoverrow <title>` | Click, right-click or hover the middle of the sidebar row showing that text, as drawn in the last frame: 主页, 我的文档, a document or folder, 设置, a page in 设置's own list. Use the interface language's text (`Home` in English). The topmost row wins if several match. If no such row is on screen, the run stops with exit code 3 and the log lists the rows it could see; `run.py` then exits with an error too. Prefer these to coordinates: the sidebar's rows move when it changes. |
+| `anchor <name>` | Click the middle of a control the app tracks by name, e.g. `anchor create-sidebar` (我的文档's "+"). A missing name stops the run like `row`. |
 | `down x y` / `dragto x y` / `dragby dx dy` / `up x y` | Press, drag to an absolute point, drag relative to the last point or release. Use `bench 30 dragby 4 0` to time individual steps. |
 | `mods shift cmd` / `mods none` | Hold these modifier keys (shift, cmd, alt, ctrl) for the mouse steps that follow; `none` lets go. |
 | `mdown x y` / `mdragto x y` / `mup x y` | Press, drag or release the middle (wheel) button. |

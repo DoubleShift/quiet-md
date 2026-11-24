@@ -4,9 +4,9 @@
 # python3 tools/harness/run.py tools/harness/examples/board_edit2.txt
 move 700 700
 wait 1500
-click 251 106
+anchor create-sidebar
 wait 300
-click 295 208
+click 295 236
 wait 1200
 # 分区：Enter 改名，双击名字再改，清空即回到默认名
 key f

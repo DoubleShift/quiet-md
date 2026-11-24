@@ -30,6 +30,8 @@ mod devtools {
     pub fn start(_: &mut gpui::Window, _: &mut gpui::App) {}
     pub fn take_pick() -> Option<Vec<std::path::PathBuf>> { None }
     pub fn file_drag() -> bool { false }
+    pub fn rows_begin(_: &gpui::Window) {}
+    pub fn row_probe(_: impl Into<gpui::SharedString>) -> Option<gpui::AnyElement> { None }
 }
 mod design;
 mod docinfo;

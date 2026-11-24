@@ -414,8 +414,9 @@ def nested_deferred():
     """A deferred inside a deferred (#327): the board's canvas background picker opens from the main menu.
     GPUI 0.2 asserted "cannot call defer_draw during deferred drawing" and the app aborted."""
     xml = "<title>Board host</title>\n<p>text</p>\n"
-    # sidebar + › Board (opens the new board in the note pane), the main menu, the picker's trigger
-    steps = ("click 251 106\nwait 300\nclick 295 208\nwait 1200\nclick 314 74\nwait 400\nshot n0\n"
+    # sidebar + › Board (opens the new board in the note pane), the main menu, the picker's trigger.
+    # Coordinates, not `anchor`: the reference build (FDL_REF_BIN) may predate it.
+    steps = ("click 250 136\nwait 300\nclick 295 236\nwait 1200\nclick 314 74\nwait 400\nshot n0\n"
              "move 497 239\nwait 1200\nclick 497 239\nwait 500\nshot n1\nwait 300")
     def check(folder):
         log = (folder / "log").read_text(errors="replace")

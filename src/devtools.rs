@@ -8,6 +8,10 @@
 //!   key press through AppKit, so the active input method sees it) |
 //!   activate (make the window key; takes focus) | quit |
 //!   pick <path>[|<path>...] (answers the next file dialog instead of showing it)
+//!   row <title> | rrow <title> | hoverrow <title> (click, right-click or hover the sidebar row
+//!   with that title: 主页, 我的文档, a document or folder, 设置, a page in 设置's list…; the
+//!   topmost if several; no row shown by that title ends the run with exit code 3) |
+//!   anchor <name> (click the middle of a tracked control, e.g. `create-sidebar`: 我的文档's "+")
 //!   filedrag x y <path>[|<path>...] / filedrop x y / fileleave (files dragged in from the Finder)
 //! For profiling: bench <n> <step> (runs the step n times, drawing a frame
 //!   synchronously after each, and prints step / frame / editor-render times) |
@@ -117,6 +121,33 @@ pub fn start(window: &mut Window, cx: &mut App) {
             let Some((handle, ns_view)) = CURRENT.with(|c| c.get()) else { break };
             let _ = ns_view;
             let (cmd, rest) = line.split_once(' ').unwrap_or((line, ""));
+            // `row` / `rrow` / `hoverrow <title>`, `anchor <name>`: the same step at that row's (or control's)
+            // middle, looked up in a fresh frame. Not there: stop rather than click into nothing.
+            let resolved;
+            let (cmd, rest) = match cmd {
+                "row" | "rrow" | "hoverrow" | "anchor" => {
+                    let name = rest.trim();
+                    let at = handle.update(cx, |root, window, cx| {
+                        if window.needs_draw() { window.draw(cx).clear(cx); }
+                        if cmd != "anchor" { return row_center(window, name); }
+                        let ws = root.downcast::<crate::app::Workspace>().map_err(|_| "no workspace window".to_string())?;
+                        let b = ws.read(cx).home.anchor(name).ok_or(format!("no anchor {name:?}"))?;
+                        Ok((f32::from(b.center().x).round(), f32::from(b.center().y).round()))
+                    }).unwrap_or_else(|e| Err(e.to_string()));
+                    match at {
+                        Ok((x, y)) => {
+                            eprintln!("devtools: {cmd} {name:?} at {x} {y}");
+                            resolved = format!("{x} {y}");
+                            (match cmd { "rrow" => "rclick", "hoverrow" => "move", _ => "click" }, resolved.as_str())
+                        }
+                        Err(e) => {
+                            eprintln!("devtools: {cmd}: {e}");
+                            std::process::exit(3);
+                        }
+                    }
+                }
+                _ => (cmd, rest),
+            };
             if cmd == "wait" {
                 // Draw invalidated frames ourselves: the display link stops
                 // while the screen is locked, and nothing would render.
@@ -326,6 +357,36 @@ pub fn start(window: &mut Window, cx: &mut App) {
         }
     })
     .detach();
+}
+
+thread_local! {
+    /// The sidebar rows drawn in each window's last frame: title, and the part of the row on screen.
+    static ROWS: std::cell::RefCell<std::collections::HashMap<WindowId, Vec<(String, Bounds<Pixels>)>>> = Default::default();
+}
+
+/// The sidebar is being built for a new frame: forget the last one's rows.
+pub fn rows_begin(window: &Window) { ROWS.with(|r| r.borrow_mut().insert(window.window_handle().window_id(), vec![])); }
+
+/// Put inside a (relative) sidebar row: records where `title`'s row is drawn, for `row` and friends.
+pub fn row_probe(title: impl Into<SharedString>) -> Option<AnyElement> {
+    let title = title.into();
+    Some(canvas(move |b, window, _| {
+        let shown = window.content_mask().bounds.intersect(&b);
+        if shown.size.width > px(2.) && shown.size.height > px(2.) {
+            ROWS.with(|r| r.borrow_mut().entry(window.window_handle().window_id()).or_default().push((title.to_string(), shown)));
+        }
+    }, |_, _, _, _| {}).absolute().inset_0().into_any_element())
+}
+
+/// The middle of the topmost sidebar row titled `title` in the window's last frame.
+fn row_center(window: &Window, title: &str) -> Result<(f32, f32), String> {
+    ROWS.with(|r| {
+        let r = r.borrow();
+        let rows = r.get(&window.window_handle().window_id()).map_or(&[][..], |v| &v[..]);
+        rows.iter().filter(|(t, _)| t == title).min_by(|a, b| a.1.origin.y.partial_cmp(&b.1.origin.y).unwrap())
+            .map(|(_, b)| (f32::from(b.center().x).round(), f32::from(b.center().y).round()))
+            .ok_or_else(|| format!("no sidebar row titled {title:?}; shown: {:?}", rows.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>()))
+    })
 }
 
 fn nums(s: &str) -> Vec<f32> {

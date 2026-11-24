@@ -4,9 +4,9 @@
 move 700 700
 wait 1500
 # 侧栏「+」› 画板（新建后直接打开整窗画板）
-click 251 106
+anchor create-sidebar
 wait 300
-click 295 208
+click 295 236
 wait 1200
 shot board-0-empty
 key r
@@ -69,6 +69,6 @@ wait 200
 key escape
 wait 600
 shot board-8-closed
-click 70 128
+row Untitled board
 wait 1200
 shot board-9-reopened

@@ -120,9 +120,9 @@ def with_prefs(lib, name, **kv):
 
 
 # window coordinates (points) of 设置 › 外观 › 文档字体 and its list
-OPEN_LIST = "key cmd-,\nwait 600\nclick 85 136\nwait 600\nclick 1050 461\nwait 600\n"
+OPEN_LIST = "key cmd-,\nwait 600\nrow 外观\nwait 600\nclick 1050 461\nwait 600\n"
 WENKAI_ROW, WENKAI_TRASH = (800, 565), (1058, 565)
-BACK = "key escape\nwait 300\nclick 62 775\nwait 800\n"
+BACK = "key escape\nwait 300\nrow 返回\nwait 800\n"
 
 
 def flow(url):
@@ -143,7 +143,7 @@ def flow(url):
 
     gone = work / "cache-gone"
     shutil.rmtree(gone, ignore_errors=True)
-    c = run("3-missing", "move 1250 780\nwait 2500\nshot 3a-article\n" + "key cmd-,\nwait 600\nclick 85 136\nwait 800\nshot 3b-settings\n", a / "lib", gone, url)
+    c = run("3-missing", "move 1250 780\nwait 2500\nshot 3a-article\n" + "key cmd-,\nwait 600\nrow 外观\nwait 800\nshot 3b-settings\n", a / "lib", gone, url)
     assert hits == [] and prefs(c / "lib")["doc_family"] == "LXGW WenKai", "kept, not fetched behind the reader's back"
 
     d = run("4-delete", "move 700 700\nwait 2500\n" + OPEN_LIST + f"click {WENKAI_TRASH[0]} {WENKAI_TRASH[1]}\nwait 800\nshot 4-deleted\n", a / "lib", cache, url)
