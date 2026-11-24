@@ -500,12 +500,14 @@ impl Conv<'_> {
     }
 
     /// `n`'s own attributes (命名, 别名, 备注, 书签, 标签, 自定义属性), for the
-    /// page's table; `label` says which block.
+    /// page's table, which a page without any does not get; `label` says which block.
     fn attributes(&mut self, n: &Value, label: &str) {
         // A copy an embed made: its attributes are listed on its own page.
         if self.depth > 0 { return }
         let Some(props) = n["Properties"].as_object() else { return };
-        let mut keys: Vec<&String> = props.keys().filter(|k| matches!(k.as_str(), "name" | "alias" | "memo" | "bookmark" | "tags") || (k.starts_with("custom-") && !k.starts_with("custom-sy-") && !k.starts_with("custom-riff-"))).collect();
+        // 思源's own `custom-` keys (a 日记's date, a block's databases, its internals) are not the writer's.
+        let own = |k: &str| ["custom-sy-", "custom-riff-", "custom-dailynote-"].iter().any(|p| k.starts_with(p)) || k == "custom-avs";
+        let mut keys: Vec<&String> = props.keys().filter(|k| matches!(k.as_str(), "name" | "alias" | "memo" | "bookmark" | "tags") || (k.starts_with("custom-") && !own(k))).collect();
         keys.sort_by_key(|k| (k.starts_with("custom-"), k.as_str()));
         for k in keys {
             let Some(v) = props[k].as_str().filter(|v| !v.is_empty()) else { continue };

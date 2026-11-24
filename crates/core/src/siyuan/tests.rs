@@ -203,6 +203,13 @@ fn attributes_icon_and_times() {
     }
     assert!(!xml.contains("sy-hidden"));
     assert_eq!(report.attributes, 4);
+    // Only a page with attributes of its writer's gets the section: none for 思源's own.
+    let mut daily = page("20240101000000-bbbbbbb", "2024-01-01", vec![json!({"ID": "20240101000001-qqqqqqq", "Type": "NodeParagraph",
+        "Properties": {"custom-avs": "20240101000700-avbooks", "custom-sy-av-view": "v1", "custom-riff-decks": "d"}, "Children": [text("一段")]})]);
+    daily["Properties"]["custom-dailynote-20240101"] = json!("20240101");
+    let (docs, report) = convert(vec![daily, page("20240101000000-ccccccc", "空", vec![para(vec![text("一段")])])], None);
+    for d in &docs { assert_eq!(body(d), "<p>一段</p>\n"); }
+    assert_eq!(report.attributes, 0);
     assert_eq!(time("20240102030405"), Some(crate::time::local_to_unix(2024, 1, 2, 3, 4) as u64 + 5));
     assert_eq!(time("20241302030405"), None);
 }

@@ -537,7 +537,7 @@ impl Workspace {
         if !self.save_before(cx, move |w, window, cx| w.import_paths(&again, retry.clone(), open, window, cx)) {
             return;
         }
-        let Some((key, mut writer)) = self.store.tree_writer(parent.as_deref()) else { return self.show_toast_kind(ToastKind::Error, &crate::shared_store::no_folder().to_string(), cx) };
+        let Some((_, mut writer)) = self.store.tree_writer(parent.as_deref()) else { return self.show_toast_kind(ToastKind::Error, &crate::shared_store::no_folder().to_string(), cx) };
         let Some(task_guard) = self.store.begin_file_task() else { return };
         let parent = self.store.real_parent(parent.as_deref()).map(str::to_string);
         let paths = paths.to_vec();
@@ -550,18 +550,14 @@ impl Workspace {
                 match import_file(&mut writer, p, parent.as_deref()) { Ok(id) => last = Some(id), Err(_) => failed = true }
             }
             if batch && writer.end_batch().is_err() { failed = true; }
-            let entries = writer.list();
-            (ImportedFiles { last, failed, changes: journal.take() }, entries)
+            ImportedFiles { last, failed, changes: journal.take() }
         });
         self.show_toast_kind(ToastKind::Info, crate::settings::tr("正在导入…", "Importing…"), cx);
         cx.spawn_in(window, async move |this, cx| {
-            let _task_guard = task_guard;
-            let (imported, entries) = task.await;
+            let imported = task.await;
+            drop(task_guard);
             let _ = this.update_in(cx, |w, window, cx| {
-                let entries = w.store.merge_entries(&key, entries);
-                w.sync_peers(cx, &entries, None);
-                w.entries = entries;
-                w.sort();
+                w.reread_after_import(cx);
                 w.remember_file_changes(imported.changes, crate::settings::tr("导入", "Import"));
                 if let Some(id) = imported.last.filter(|_| open) { w.open(&id, window, cx); }
                 if imported.failed { w.show_toast_kind(ToastKind::Error, crate::settings::text("导入失败，请检查文件格式"), cx); }
@@ -702,12 +698,12 @@ impl Workspace {
         // Scanning and writing hundreds of files takes seconds (an fsync each),
         // so it runs on its own store off the window's thread; the library
         // lock keeps it one write, as `tree_writer` does for drags.
-        let Some((key, mut writer)) = self.store.tree_writer(parent.as_deref()) else { return self.show_toast_kind(ToastKind::Error, &crate::shared_store::no_folder().to_string(), cx) };
+        let Some((_, mut writer)) = self.store.tree_writer(parent.as_deref()) else { return self.show_toast_kind(ToastKind::Error, &crate::shared_store::no_folder().to_string(), cx) };
         let Some(task_guard) = self.store.begin_file_task() else { return };
         let parent = self.store.real_parent(parent.as_deref()).map(str::to_string);
         let dir = dir.to_path_buf();
         let task = cx.background_executor().spawn(async move {
-            let imported = match scan_folder(&dir, 0) {
+            match scan_folder(&dir, 0) {
                 None => Imported::Empty { cloud: 0 },
                 Some(tree) if tree.files == 0 => Imported::Empty { cloud: tree.cloud },
                 Some(tree) if tree.files > IMPORT_FOLDER_LIMIT => Imported::TooMany(tree.files),
@@ -722,17 +718,13 @@ impl Workspace {
             let saved = if batch { writer.end_batch() } else { Ok(()) };
             Imported::Done { top, failed, cloud: tree.cloud, saved, changes: journal.take() }
                 }
-            };
-            match imported {
-                Imported::Empty { .. } | Imported::TooMany(_) => (imported, Vec::new()),
-                Imported::Done { .. } => (imported, writer.list()),
             }
         });
         self.show_toast_kind(ToastKind::Info, crate::settings::tr("正在导入…", "Importing…"), cx);
         cx.spawn_in(window, async move |this, cx| {
-            let _task_guard = task_guard;
-            let (imported, entries) = task.await;
-            let _ = this.update_in(cx, |w, window, cx| { let entries = if entries.is_empty() { entries } else { w.store.merge_entries(&key, entries) }; w.finish_import_folder(imported, entries, open, then, window, cx) });
+            let imported = task.await;
+            drop(task_guard);
+            let _ = this.update_in(cx, |w, window, cx| w.finish_import_folder(imported, open, then, window, cx));
         }).detach();
     }
 
@@ -759,15 +751,9 @@ impl Workspace {
         self.show_toast_kind(ToastKind::Info, crate::settings::tr("正在导入…", "Importing…"), cx);
         cx.spawn_in(window, async move |this, cx| {
             let (done, changes) = task.await;
-            // Written: let go before showing the result, which `open` would otherwise refuse.
             drop(task_guard);
             let _ = this.update_in(cx, |w, window, cx| {
-                // Read again, not the writer's list merged in: the window's library has to know
-                // the new pages before the report among them can open.
-                let entries = w.store.list();
-                w.sync_peers(cx, &entries, None);
-                w.entries = entries;
-                w.sort();
+                w.reread_after_import(cx);
                 w.remember_file_changes(changes, crate::settings::tr("导入思源笔记", "Import from SiYuan"));
                 match done {
                     Ok((top, report)) => {
@@ -782,7 +768,18 @@ impl Workspace {
         }).detach();
     }
 
-    fn finish_import_folder(&mut self, imported: Imported, entries: Vec<crate::store::Entry>, open: bool, then: Option<AfterImport>, window: &mut Window, cx: &mut Context<Self>) {
+    /// After an import written off the window's thread, its file task let go (`open` waits while
+    /// one runs): the library read again rather than the writer's list merged in, since the
+    /// window's copy learns of new pages only when it next reads the disk, and opening one
+    /// before that finds nothing. 2000 notes take about 90 ms.
+    fn reread_after_import(&mut self, cx: &mut Context<Self>) {
+        let entries = self.store.list();
+        self.sync_peers(cx, &entries, None);
+        self.entries = entries;
+        self.sort();
+    }
+
+    fn finish_import_folder(&mut self, imported: Imported, open: bool, then: Option<AfterImport>, window: &mut Window, cx: &mut Context<Self>) {
         let (top, failed, cloud, saved, changes) = match imported {
             Imported::Empty { cloud } => {
                 let msg = if cloud > 0 { cloud_skipped(cloud) } else { crate::settings::tr("这个文件夹里没有 Markdown 或 XML 文件", "This folder has no Markdown or XML files").to_string() };
@@ -795,9 +792,7 @@ impl Workspace {
             }
             Imported::Done { top, failed, cloud, saved, changes } => (top, failed, cloud, saved, changes),
         };
-        self.sync_peers(cx, &entries, None);
-        self.entries = entries;
-        self.sort();
+        self.reread_after_import(cx);
         self.remember_file_changes(changes, crate::settings::tr("导入文件夹", "Import folder"));
         if let Some(id) = top {
             if let Some(then) = then { then(self, &id); }

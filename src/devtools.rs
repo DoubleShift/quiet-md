@@ -12,6 +12,7 @@
 //!   with that title: 主页, 我的文档, a document or folder, 设置, a page in 设置's list…; the
 //!   topmost if several; no row shown by that title ends the run with exit code 3) |
 //!   anchor <name> (click the middle of a tracked control, e.g. `create-sidebar`: 我的文档's "+") |
+//!   showing <title> (the document or folder page in front has that title; else the run ends with exit code 3) |
 //!   origin board | origin window (the points of the mouse and file steps after it count from the open
 //!   画板's top-left corner, or again from the window's; no board open ends the run with exit code 3)
 //!   filedrag x y <path>[|<path>...] / filedrop x y / fileleave (files dragged in from the Finder)
@@ -165,6 +166,19 @@ pub fn start(window: &mut Window, cx: &mut App) {
                         Ok(o) => { eprintln!("devtools: origin {} at {} {}", rest.trim(), o.0, o.1); *ORIGIN.lock().unwrap() = o; continue }
                         Err(e) => { eprintln!("devtools: origin: {e}"); std::process::exit(3); }
                     }
+                }
+                // `showing <title>`: the document (or folder page) in front has that title; else stop as `row` does.
+                "showing" => {
+                    let want = rest.trim();
+                    let shown = handle.update(cx, |root, _, cx| {
+                        let ws = root.downcast::<crate::app::Workspace>().ok()?;
+                        let w = ws.read(cx);
+                        let id = match w.view { crate::app::View::Doc => w.current.as_deref()?, crate::app::View::Folder => w.folder_current.as_deref()?, _ => return None };
+                        w.entries.iter().find(|e| e.id == id).map(|e| e.title.trim().to_string())
+                    }).ok().flatten();
+                    if shown.as_deref() == Some(want) { eprintln!("devtools: showing {want:?}"); continue }
+                    eprintln!("devtools: showing: wanted {want:?}, in front: {shown:?}");
+                    std::process::exit(3);
                 }
                 _ => { resolved = shifted(cmd, rest); (cmd, resolved.as_str()) }
             };
