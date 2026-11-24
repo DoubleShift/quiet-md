@@ -51,6 +51,10 @@ struct Grab {
 }
 
 const TRIES: u8 = 8;
+/// How far beyond the window the page lays out rows (`ListState::new`): none
+/// while the thumb is held, where every frame lands somewhere new and rows
+/// nobody sees were most of the frame.
+pub(super) const OVERDRAW: f32 = 600.;
 /// How long the pointer rests before the page is aimed again.
 const REST: Duration = Duration::from_millis(80);
 
@@ -101,6 +105,7 @@ impl Editor {
                     } else if !g.down {
                         // Let go and settled: the estimate has the thumb again.
                         sb.held.set(None);
+                        list.set_overdraw(px(OVERDRAW));
                         grab = None;
                     }
                 }
@@ -113,7 +118,9 @@ impl Editor {
             move |bounds, state, window, _| {
                 let sb = sb2;
                 let Some((top, h, f, hitbox)) = state else {
-                    sb.held.set(None);
+                    if sb.held.take().is_some() {
+                        list2.set_overdraw(px(OVERDRAW));
+                    }
                     return;
                 };
                 window.set_cursor_style(CursorStyle::Arrow, &hitbox);
@@ -133,10 +140,11 @@ impl Editor {
                 window.paint_quad(fill(thumb, color).corner_radii(px(w / 2.)));
 
                 window.on_mouse_event({
-                    let (sb, hitbox) = (sb.clone(), hitbox.clone());
+                    let (sb, hitbox, list) = (sb.clone(), hitbox.clone(), list2.clone());
                     move |ev: &MouseDownEvent, phase, window, cx| {
                         if phase == DispatchPhase::Bubble && ev.button == MouseButton::Left && hitbox.is_hovered(window) {
                             sb.held.set(Some(Grab { dy: ev.position.y - top, h, f, tries: TRIES, moved: Instant::now(), down: true }));
+                            list.set_overdraw(px(0.));
                             cx.stop_propagation();
                             window.refresh();
                         }

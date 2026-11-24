@@ -430,7 +430,7 @@ impl Editor {
             focus: cx.focus_handle(),
             cache: Default::default(),
             block_bounds: Default::default(),
-            list: ListState::new(0, ListAlignment::Top, px(600.)),
+            list: ListState::new(0, ListAlignment::Top, px(super::scrollbar::OVERDRAW)),
             items: vec![],
             item_keys: vec![],
             items_key: None,
