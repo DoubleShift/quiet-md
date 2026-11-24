@@ -214,6 +214,8 @@ Cold first open (no parse cache), measured 2026-11-25 on the Mac mini above, [ha
 | Main-thread frame while loading, P50 | — | 1-7 ms | 0.6-1.2 ms |
 | Taking the result in (one frame) | — | 55-71 ms | 300-420 ms |
 
+An import (Markdown files, a folder, an Obsidian vault, 思源笔记) is written by a `tree_writer` off the main thread the same way; it now lists the library there too, and the window's store takes over the writer (`Store::adopt`) instead of reading the whole library again to find the new pages. Taking an import of 20 notes in, on the main thread (two runs each, against `b9c78d1`): 35-38 ms → 2-3 ms in a 2,000-note library, 173-206 ms → 15-18 ms in the 15,000-note one. `tools/harness/import_open.py` checks that what was imported is in front.
+
 Before, the 15,000-note window showed nothing for the 2.0 s of the `list` plus 1.1 s for the first folder's numbering. A file opened during loading costs one more `list` at the hand-back (264 ms for 60,000 notes). What the hand-back still takes is `begin_write` and `settings()` in opening the start folder, sorting the entries and the first frame laying out the rows.
 
 ### Reproduce

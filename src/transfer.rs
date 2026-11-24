@@ -35,7 +35,13 @@ pub(crate) type AfterImport = Box<dyn FnOnce(&mut Workspace, &str)>;
 
 /// What a background 导入文件夹 did.
 /// `cloud`: what was skipped as only in iCloud (`Scanned::cloud`).
-enum Imported { Empty { cloud: usize }, TooMany(usize), Done { top: Option<String>, failed: usize, cloud: usize, saved: anyhow::Result<()>, changes: Vec<crate::store::FileDelta> } }
+enum Imported { Empty { cloud: usize }, TooMany(usize), Done { top: Option<String>, failed: usize, cloud: usize, saved: anyhow::Result<()>, changes: Vec<crate::store::FileDelta>, listed: Listed } }
+
+/// An import's writer once it is done, with its library listed there too (`Workspace::take_import`).
+pub(crate) struct Listed { key: String, writer: crate::store::Store, entries: Vec<crate::store::Entry> }
+impl Listed {
+    fn of(key: String, mut writer: crate::store::Store) -> Self { let entries = writer.list(); Listed { key, writer, entries } }
+}
 struct ImportedFiles { last: Option<String>, failed: bool, changes: Vec<crate::store::FileDelta> }
 
 /// A folder to import: its documents and the sub-folders that hold some;
@@ -538,7 +544,7 @@ impl Workspace {
         if !self.save_before(cx, move |w, window, cx| w.import_paths(&again, retry.clone(), open, window, cx)) {
             return;
         }
-        let Some((_, mut writer)) = self.store.tree_writer(parent.as_deref()) else { return self.show_toast_kind(ToastKind::Error, &crate::shared_store::no_folder().to_string(), cx) };
+        let Some((key, mut writer)) = self.store.tree_writer(parent.as_deref()) else { return self.show_toast_kind(ToastKind::Error, &crate::shared_store::no_folder().to_string(), cx) };
         let Some(task_guard) = self.store.begin_file_task() else { return };
         let parent = self.store.real_parent(parent.as_deref()).map(str::to_string);
         let paths = paths.to_vec();
@@ -551,14 +557,14 @@ impl Workspace {
                 match import_file(&mut writer, p, parent.as_deref()) { Ok(id) => last = Some(id), Err(_) => failed = true }
             }
             if batch && writer.end_batch().is_err() { failed = true; }
-            ImportedFiles { last, failed, changes: journal.take() }
+            (ImportedFiles { last, failed, changes: journal.take() }, Listed::of(key, writer))
         });
         self.show_toast_kind(ToastKind::Info, crate::settings::tr("正在导入…", "Importing…"), cx);
         cx.spawn_in(window, async move |this, cx| {
-            let imported = task.await;
+            let (imported, listed) = task.await;
             drop(task_guard);
             let _ = this.update_in(cx, |w, window, cx| {
-                w.reread_after_import(cx);
+                w.take_import(listed, cx);
                 w.remember_file_changes(imported.changes, crate::settings::tr("导入", "Import"));
                 if let Some(id) = imported.last.filter(|_| open) { w.open(&id, window, cx); }
                 if imported.failed { w.show_toast_kind(ToastKind::Error, crate::settings::text("导入失败，请检查文件格式"), cx); }
@@ -700,7 +706,7 @@ impl Workspace {
         // Scanning and writing hundreds of files takes seconds (an fsync each),
         // so it runs on its own store off the window's thread; the library
         // lock keeps it one write, as `tree_writer` does for drags.
-        let Some((_, mut writer)) = self.store.tree_writer(parent.as_deref()) else { return self.show_toast_kind(ToastKind::Error, &crate::shared_store::no_folder().to_string(), cx) };
+        let Some((key, mut writer)) = self.store.tree_writer(parent.as_deref()) else { return self.show_toast_kind(ToastKind::Error, &crate::shared_store::no_folder().to_string(), cx) };
         let Some(task_guard) = self.store.begin_file_task() else { return };
         let parent = self.store.real_parent(parent.as_deref()).map(str::to_string);
         let dir = dir.to_path_buf();
@@ -718,7 +724,8 @@ impl Workspace {
             let batch = writer.begin_batch().is_ok();
             let top = import_tree(&mut writer, &tree, parent.as_deref(), &mut failed);
             let saved = if batch { writer.end_batch() } else { Ok(()) };
-            Imported::Done { top, failed, cloud: tree.cloud, saved, changes: journal.take() }
+            let changes = journal.take();
+            Imported::Done { top, failed, cloud: tree.cloud, saved, changes, listed: Listed::of(key, writer) }
                 }
             }
         });
@@ -739,7 +746,7 @@ impl Workspace {
         }
         let (again, retry) = (path.to_path_buf(), parent.clone());
         if !self.save_before(cx, move |w, window, cx| w.import_siyuan(&again, retry.clone(), window, cx)) { return; }
-        let Some((_, mut writer)) = self.store.tree_writer(parent.as_deref()) else { return self.show_toast_kind(ToastKind::Error, &crate::shared_store::no_folder().to_string(), cx) };
+        let Some((key, mut writer)) = self.store.tree_writer(parent.as_deref()) else { return self.show_toast_kind(ToastKind::Error, &crate::shared_store::no_folder().to_string(), cx) };
         let Some(task_guard) = self.store.begin_file_task() else { return };
         let parent = self.store.real_parent(parent.as_deref()).map(str::to_string);
         let path = path.to_path_buf();
@@ -748,14 +755,15 @@ impl Workspace {
             let batch = writer.begin_batch().is_ok();
             let done = crate::siyuan::import(&mut writer, &path, parent.as_deref());
             let saved = if batch { writer.end_batch() } else { Ok(()) };
-            (done.and_then(|d| saved.map(|_| d)), journal.take())
+            let changes = journal.take();
+            (done.and_then(|d| saved.map(|_| d)), changes, Listed::of(key, writer))
         });
         self.show_toast_kind(ToastKind::Info, crate::settings::tr("正在导入…", "Importing…"), cx);
         cx.spawn_in(window, async move |this, cx| {
-            let (done, changes) = task.await;
+            let (done, changes, listed) = task.await;
             drop(task_guard);
             let _ = this.update_in(cx, |w, window, cx| {
-                w.reread_after_import(cx);
+                w.take_import(listed, cx);
                 w.remember_file_changes(changes, crate::settings::tr("导入思源笔记", "Import from SiYuan"));
                 match done {
                     Ok((top, report)) => {
@@ -771,11 +779,12 @@ impl Workspace {
     }
 
     /// After an import written off the window's thread, its file task let go (`open` waits while
-    /// one runs): the library read again rather than the writer's list merged in, since the
-    /// window's copy learns of new pages only when it next reads the disk, and opening one
-    /// before that finds nothing. 2000 notes take about 90 ms.
-    fn reread_after_import(&mut self, cx: &mut Context<Self>) {
-        let entries = self.store.list();
+    /// one runs): the window's library takes over what the writer read and wrote (`Store::adopt`),
+    /// so opening a new page finds it, and the list the writer made there. Reading the library
+    /// again here instead held the window 90 ms for 2000 notes.
+    fn take_import(&mut self, listed: Listed, cx: &mut Context<Self>) {
+        let Listed { key, writer, entries } = listed;
+        let entries = self.store.adopt_listed(&key, writer, entries);
         self.sync_peers(cx, &entries, None);
         self.entries = entries;
         self.sort();
@@ -792,9 +801,8 @@ impl Workspace {
                 self.show_toast_kind(ToastKind::Error, &crate::localized_format!("文件夹里有 {} 个文件，一次最多导入 {} 个", "The folder has {} files; up to {} can be imported at once", files, IMPORT_FOLDER_LIMIT), cx);
                 return;
             }
-            Imported::Done { top, failed, cloud, saved, changes } => (top, failed, cloud, saved, changes),
+            Imported::Done { top, failed, cloud, saved, changes, listed } => { self.take_import(listed, cx); (top, failed, cloud, saved, changes) }
         };
-        self.reread_after_import(cx);
         self.remember_file_changes(changes, crate::settings::tr("导入文件夹", "Import folder"));
         if let Some(id) = top {
             if let Some(then) = then { then(self, &id); }

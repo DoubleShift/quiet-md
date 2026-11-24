@@ -178,6 +178,12 @@ impl SharedStore {
         std::mem::take(&mut sh.listed_meanwhile)
     }
     pub fn loading(&self) -> bool { self.0.borrow().loading }
+    /// A writer of top-level folder `key` done writing and listing (an import): its library
+    /// takes over what it read and wrote, and every top-level folder's entries with `entries` for `key`.
+    pub fn adopt_listed(&self, key: &str, writer: Store, entries: Vec<Entry>) -> Vec<Entry> {
+        if let Some(s) = self.0.borrow_mut().ws.store(key) { s.adopt(writer); }
+        self.merge_entries(key, entries)
+    }
     /// Whether top-level folders show as rows of the tree (two or more of them).
     pub fn top_rows(&self) -> bool { self.0.borrow().ws.folders.len() > 1 }
     /// `entries` as the window shows them: with two or more top-level folders, a row
