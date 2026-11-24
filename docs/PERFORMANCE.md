@@ -82,3 +82,25 @@ for lib in library tall; do
   grep -a bench /tmp/quiet-perf/drag-$lib/log
 done
 ```
+
+### Toward 120 Hz
+
+The same replay, aiming at 8.3 ms (one 120 Hz frame). A sampling profile of the drag (`sample`, main thread) put about 60% of the frame in `CTLineCreateWithAttributedString`, and most of that not in shaping but in CoreText setting up fonts: `TFont::InitShapingGlyphs`, `InitASCIIDataCache` and variable-font advances (`HVAR`), work CoreText keeps on each CTFont object. GPUI made a new sized CTFont for every run of every line, and CoreText made new fallback faces for the Chinese text of every line. Three changes:
+
+1. Each font is made once per size (vendor patch 0080 reuse-coretext-fonts). The ASCII and HVAR setup left the profile.
+2. The face CoreText fell back to for a CJK character is kept and set on that character in later lines (same patch), so CoreText no longer falls back, and makes new faces, line after line. Shaping went from about 415 to 105 samples in the same 10 s of dragging. It is the face CoreText chose itself: one picked with `CTFontCreateForString` instead lost a bold heading's weight.
+3. While the thumb is held the page lays out no rows beyond the window (`ListState::set_overdraw`, vendor patch 0081; 600 pt above and below otherwise), and goes back to 600 pt once the thumb is let go and the page has settled.
+
+Measured 2026-11-25 on the same Mac mini, but with another build of the app busy in the background (30-40% CPU) the whole time: main (c6498c2) ran 1.3-1.5× slower than in the table above, and single runs varied by up to 2×. Each build was therefore run three times, alternating with the other. Per quarter of the drag, over the three runs: frame mean, mean P95, and frames over 8.3 ms and over 16.7 ms (of 270):
+
+| Build | Document | Down 1 | Down 2 | Up 1 | Up 2 | Whole drag |
+|---|---|---|---|---|---|---|
+| main | as generated | 16.6 / 35.2 / 267 / 72 | 20.2 / 37.4 / 266 / 147 | 18.6 / 33.2 / 244 / 138 | 16.5 / 30.6 / 244 / 108 | mean 18.0 ms; 95% over 8.3, 43% over 16.7 |
+| this change | as generated | 6.1 / 14.5 / 55 / 10 | 4.7 / 9.0 / 44 / 0 | 6.2 / 10.9 / 94 / 0 | 4.6 / 8.8 / 34 / 0 | mean 5.4 ms; 21% over 8.3, 0.9% over 16.7 |
+| main | tall start | 14.3 / 27.8 / 247 / 62 | 20.4 / 32.1 / 270 / 184 | 18.9 / 28.1 / 260 / 162 | 18.2 / 28.3 / 244 / 159 | mean 17.9 ms; 95% over 8.3, 53% over 16.7 |
+| this change | tall start | 7.1 / 14.3 / 80 / 9 | 5.9 / 10.7 / 82 / 0 | 7.1 / 10.8 / 118 / 0 | 4.6 / 9.0 / 56 / 0 | mean 6.2 ms; 31% over 8.3, 0.8% over 16.7 |
+
+- Frames are about three times faster, and 60 Hz drops are nearly gone. The 120 Hz target is met on average but not yet at P95 (9-11 ms past the first quarter, on this busy machine). What is left is shaping characters seen for the first time (their fallback face too), taffy layout of the new rows and painting.
+- The thumb stays under the pointer, the end of the track is the end of the document, and letting go mid-drag leaves the thumb where it was, on both documents.
+- Rendering is unchanged: screenshots of the compilation (top and three wheel positions), the guides (Writing and formatting, Welcome, Playground), and a Chinese page with quotes in the default face, Songti SC, PingFang SC, Hiragino Sans GB and Heiti SC are identical to main's, pixel for pixel (`tools/harness/compare.py`).
+- Wheel scrolling did not slow down: five alternating runs of 300 steps of 40 pt each way, mean 3.48 / 2.90 ms (down / up) against main's 3.57 / 2.92, with fewer frames over 8.3 ms (65 against 160). Opening the compilation, first frame 30.8-34.0 ms against 33.2-35.8. Typing and backspacing ([readme-performance.txt](../tools/harness/examples/readme-performance.txt)) are unchanged within the noise.

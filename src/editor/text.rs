@@ -1716,6 +1716,33 @@ mod tests {
         }
     }
 
+    /// The face CoreText falls back to for a CJK character is kept and given
+    /// to later lines (vendor patch reuse-coretext-fonts). Those lines
+    /// must come out exactly as CoreText's own fallback has them on a fresh
+    /// text system: the same glyphs, places and outlines (bold staying bold
+    /// after regular text kept its faces), across runs of alternating sizes.
+    #[test]
+    fn kept_cjk_fallbacks_shape_like_coretext() {
+        use gpui::{FontRun, FontWeight, PlatformTextSystem, px};
+        let text = "他说“好”。用 Quiet.md 打开（文件），再按「保存」：完成！";
+        let split = text.char_indices().nth(9).unwrap().0;
+        let shape = |fonts: &gpui_apple::AppleTextSystem, weight, parts: usize| {
+            let id = fonts.font_id(&gpui::Font { weight, ..gpui::font(".SystemUIFont") }).unwrap();
+            let runs = if parts == 1 { vec![FontRun { font_id: id, len: text.len() }] } else { vec![FontRun { font_id: id, len: split }, FontRun { font_id: id, len: text.len() - split }] };
+            let layout = fonts.layout_line(text, px(16.), &runs);
+            layout.runs.iter().flat_map(|r| r.glyphs.iter().map(move |g| (g.id, g.index, g.position, fonts.glyph_outline(r.font_id, g.id)))).collect::<Vec<_>>()
+        };
+        let kept = gpui_apple::AppleTextSystem::new();
+        for weight in [FontWeight::NORMAL, FontWeight::BOLD] {
+            for parts in [1, 2] {
+                let fresh = shape(&gpui_apple::AppleTextSystem::new(), weight, parts);
+                for pass in 0..2 {
+                    assert!(shape(&kept, weight, parts) == fresh, "{weight:?}, {parts} runs, pass {pass}");
+                }
+            }
+        }
+    }
+
     /// #419: curly quotes are drawn in `QUOTE_FONT` whatever the run's weight
     /// and style, so it must be a family the platform has: a missing one
     /// resolves every weight and style to one regular fallback face.

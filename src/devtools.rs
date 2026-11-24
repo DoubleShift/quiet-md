@@ -172,8 +172,9 @@ pub fn start(window: &mut Window, cx: &mut App) {
                 };
                 let mean = samples.iter().map(|s| s.1).sum::<f64>() / samples.len().max(1) as f64;
                 let drops = samples.iter().filter(|s| s.1 > 1000. / 60.).count();
+                let drops120 = samples.iter().filter(|s| s.1 > 1000. / 120.).count();
                 eprintln!(
-                    "bench {step:?} x{}: frame mean {mean:.2} drops {drops}: step [{}] frame [{}] editor render [{}] ms",
+                    "bench {step:?} x{}: frame mean {mean:.2} drops {drops} over 8.3 {drops120}: step [{}] frame [{}] editor render [{}] ms",
                     samples.len(),
                     stat(|s| s.0),
                     stat(|s| s.1),
