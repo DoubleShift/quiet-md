@@ -2250,15 +2250,17 @@ fn download(url: &str, dest: &Path) -> bool {
         let _ = fdl_core::vfs::create_dir_all(d);
     }
     let tmp = dest.with_extension("part");
-    let fetched = std::process::Command::new("curl")
-        .args(["-fsSL", "--max-time", "60", "-o"])
+    let mut curl = std::process::Command::new("curl");
+    curl.args(["-fsSL", "--max-time", "60", "-o"])
         .arg(&tmp)
         .arg(url)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
+        .stderr(std::process::Stdio::null());
+    // No console window flashing up on Windows (#415).
+    #[cfg(target_os = "windows")]
+    { use std::os::windows::process::CommandExt; curl.creation_flags(0x0800_0000); }
+    let fetched = curl.status().is_ok_and(|s| s.success());
     let ok = fetched
         && image::ImageReader::open(&tmp).ok().and_then(|r| r.with_guessed_format().ok()).and_then(|r| r.into_dimensions().ok()).is_some()
         && fdl_core::vfs::rename(&tmp, dest).is_ok();

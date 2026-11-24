@@ -70,8 +70,11 @@ pub fn local_offset() -> i64 {
         #[cfg(target_family = "wasm")]
         return -(js_sys::Date::new_0().get_timezone_offset() as i64) * 60;
         // `date +%z` prints e.g. +0800.
-        std::process::Command::new("date")
-            .arg("+%z")
+        let mut date = std::process::Command::new("date");
+        // On Windows only a `date.exe` on PATH (Git's) answers: without a console window.
+        #[cfg(target_os = "windows")]
+        { use std::os::windows::process::CommandExt; date.creation_flags(0x0800_0000); }
+        date.arg("+%z")
             .output()
             .ok()
             .and_then(|o| String::from_utf8(o.stdout).ok())
