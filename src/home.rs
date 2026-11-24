@@ -843,11 +843,18 @@ impl Workspace {
                     .on_click(cx.listener(|w, _, _, cx| { w.batch = None; w.row_menu = None; cx.notify(); })))
         } else if phone {
             let sort_open = self.home.sort_menu;
+            // 我的文档 is the page; 收藏 is a star beside the sort button, named while it is shown.
+            let starred = self.home.tab == HomeTab::Starred;
             toolbar
-                .child(crate::design::Segmented::new().flex_1()
-                    .child(tab("home-tab-recent", crate::settings::text("我的文档"), HomeTab::Recent))
-                    .child(tab("home-tab-star", crate::settings::text("收藏"), HomeTab::Starred)))
-                .child(crate::design::Button::ghost("home-sort").relative().ml(px(8.)).icon("sort-down").selected(sort_open)
+                .when(starred, |d| d.child(div().text_size(px(13.)).line_height(px(20.)).text_color(Theme::text_caption()).child(crate::settings::text("收藏"))))
+                .child(div().flex_1())
+                .child(crate::design::Button::ghost("home-tab-star").icon("star").selected(starred)
+                    .on_click(cx.listener(move |w, _, _, cx| {
+                        w.home.tab = if starred { HomeTab::Recent } else { HomeTab::Starred };
+                        w.home.sort_menu = false;
+                        cx.notify();
+                    })))
+                .child(crate::design::Button::ghost("home-sort").relative().ml(px(4.)).icon("sort-down").selected(sort_open)
                     .child(self.home.track("home-sort"))
                     .on_mouse_down(MouseButton::Left, cx.listener(move |w, _, _, cx| { cx.stop_propagation(); w.home.sort_menu = !sort_open; cx.notify(); })))
         } else { // Menu state at render: the popover's outside-press handler clears it on mouse-down, before a click
