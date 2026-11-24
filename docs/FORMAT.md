@@ -27,7 +27,7 @@ Quiet.md/
     └── before-folders-4/   Pre-migration layout backup, removed after 30 days
 ```
 
-The scanner recursively finds `.md`, `.xml` and `.excalidraw` files, including files added in Finder. It skips names beginning with a dot, including `.quiet`, `.assets`, `.git` and `.obsidian`. Window dimensions belong to the device and live in local application data. Standalone whiteboards use official Excalidraw JSON and take their title from the filename. Older versions skip this extension. The write lock allows multiple app instances. It is local to the computer, in the application data folder (`quiet-md/locks/<root key>.lock`), and is held briefly for each write: a lock inside the library would only sync to other devices and lock nothing there. A FORMAT 4 library also takes `.quiet/.lock`, which older versions use.
+The scanner recursively finds `.md`, `.xml` and `.excalidraw` files, including files added in Finder. It skips names beginning with a dot, including `.quiet`, `.assets`, `.git` and `.obsidian`. Window dimensions belong to the device and live in local application data. Standalone whiteboards use official Excalidraw JSON and take their title from the filename. Older versions skip this extension. The write lock allows multiple app instances. It is local to the computer, in the application data folder (`quiet-md/locks/<library id>.lock`, the id in `format.json`, so every copy of the app and the CLI opening the folder share it), and is held briefly for each write: a lock inside the library would only sync to other devices and lock nothing there. A FORMAT 4 library also takes `.quiet/.lock`, which older versions use.
 
 ### Child pages: a folder's own document
 
