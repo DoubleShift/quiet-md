@@ -119,9 +119,12 @@ impl Editor {
         self.set_emoji_search_active(false, cx);
         self.menu = Some(Menu::Emoji { target, selected: 0 });
         // Keys go to the search box (typing must not reach the block), but it
-        // only looks focused once clicked or typed into.
-        let fh = self.emoji_field.read(cx).focus_handle(cx);
-        window.focus(&fh, cx);
+        // only looks focused once clicked or typed into. A phone's sheet
+        // keeps the keyboard down until the box is tapped: nothing has focus.
+        if crate::theme::compact(f32::from(self.pane_size().width)) { window.blur(cx); } else {
+            let fh = self.emoji_field.read(cx).focus_handle(cx);
+            window.focus(&fh, cx);
+        }
         cx.notify();
     }
 
@@ -195,19 +198,28 @@ impl Editor {
     pub(super) fn emoji_picker(&self, target: EmojiTarget, selected: usize, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let a = self.emoji_anchor(target)?;
         let tabs = target == EmojiTarget::DocIcon;
-        let h = if tabs { H + TABS_H - 10. } else { H };
+        let phone = crate::theme::compact(f32::from(self.pane_size().width));
+        let vp = window.viewport_size();
+        let ime = f32::from(window.insets().ime.bottom);
+        // A phone's sheet: the grid centred in the window's width, and as tall
+        // as half the window (less with the keyboard up).
+        let scroll_h = if phone { ((f32::from(vp.height) - ime) * 0.5).max(SCROLL_H) } else { SCROLL_H };
+        // A phone's cells share its width (eleven of the desktop's do not fit).
+        let cell_w = if phone { ((f32::from(vp.width) - 16.) / PER_LINE as f32 - 1.).floor().min(CELL) } else { CELL };
+        let row_x = if phone { ((f32::from(vp.width) - PER_LINE as f32 * (cell_w + 1.)) / 2.).max(4.) } else { INSET };
+        let h = if tabs { H + TABS_H - 10. } else { H } + scroll_h - SCROLL_H;
         let q = self.emoji_query(cx);
         let searching = !q.is_empty();
         let secs = sections(&q);
         let content_h = secs.last().map_or(0., |s| s.top + s.height());
-        let off = (-f32::from(self.emoji_scroll.offset().y)).clamp(0., (content_h - SCROLL_H).max(0.));
+        let off = (-f32::from(self.emoji_scroll.offset().y)).clamp(0., (content_h - scroll_h).max(0.));
 
         // Rows in view, positioned by hand inside a box of the full height.
         let mut content = div().relative().w_full().h(px(content_h));
         let current = secs.iter().rposition(|s| s.top <= off + 0.5).unwrap_or(0);
         let hover_bg = Theme::fill_hover_strong();
         for (si, s) in secs.iter().enumerate() {
-            if s.top > off + SCROLL_H || s.top + s.height() < off {
+            if s.top > off + scroll_h || s.top + s.height() < off {
                 continue;
             }
             // The current section's title is drawn stuck to the top instead.
@@ -216,10 +228,10 @@ impl Editor {
             }
             for (ri, row) in s.emojis.chunks(PER_LINE).enumerate() {
                 let y = s.top + s.title_h + ri as f32 * ROW_H;
-                if y > off + SCROLL_H || y + ROW_H < off {
+                if y > off + scroll_h || y + ROW_H < off {
                     continue;
                 }
-                let mut r = div().absolute().top(px(y)).left(px(INSET)).flex().gap(px(1.));
+                let mut r = div().absolute().top(px(y)).left(px(row_x)).flex().gap(px(1.));
                 for (ci, e) in row.iter().enumerate() {
                     let e: &'static Emoji = e;
                     let i = ri * PER_LINE + ci;
@@ -227,7 +239,8 @@ impl Editor {
                     r = r.child(
                         div()
                             .id(("emoji", si * 10_000 + i))
-                            .size(px(CELL))
+                            .w(px(cell_w))
+                            .h(px(CELL))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -260,9 +273,9 @@ impl Editor {
             let y = (next - off - TITLE_H).min(0.);
             title_el(s.title, TITLE_H).absolute().top(px(y)).left_0().bg(theme::ta(255, 255, 255, 0.8))
         });
-        let thumb = (content_h > SCROLL_H).then(|| {
-            let h = (SCROLL_H * SCROLL_H / content_h).max(THUMB_MIN);
-            let top = (SCROLL_H - h) * off / (content_h - SCROLL_H);
+        let thumb = (content_h > scroll_h && !phone).then(|| {
+            let h = (scroll_h * scroll_h / content_h).max(THUMB_MIN);
+            let top = (scroll_h - h) * off / (content_h - scroll_h);
             div().absolute().right_0().top(px(top)).w(px(7.)).h(px(h)).rounded(px(3.5)).group_hover("emoji-scroll", |s| s.bg(Theme::scrollbar_thumb()))
         });
         let scroll = div()
@@ -271,7 +284,7 @@ impl Editor {
             .relative()
             .flex_none()
             .mt(px(6.))
-            .h(px(SCROLL_H))
+            .h(px(scroll_h))
             .overflow_hidden()
             .child(div().id("emoji-scroll").size_full().overflow_y_scroll().track_scroll(&self.emoji_scroll).child(content))
             .children(sticky)
@@ -283,7 +296,8 @@ impl Editor {
         let search = Field::new("emoji-search")
             .focused(field_on)
             .relative()
-            .w(px(363.))
+            .when(!phone, |d| d.w(px(363.)))
+            .when(phone, |d| d.flex_1().min_w_0())
             .pl(px(39.))
             .pr(px(43.))
             .child(div().absolute().left(px(11.)).top(px(9.)).child(icon("search", 16., color::muted_foreground())))
@@ -356,7 +370,7 @@ impl Editor {
 
         let el = Popover::new("emoji-picker")
             .relative()
-            .w(px(W))
+            .when(!phone, |d| d.w(px(W)))
             .h(px(h))
             .flex()
             .flex_col()
@@ -382,13 +396,13 @@ impl Editor {
                         })),
                 )
             })
-            .child(div().flex_none().pt(px(if tabs { INSET - 10. } else { INSET })).pl(px(INSET)).flex().gap(px(7.)).child(search).child(random))
+            .child(div().flex_none().pt(px(if tabs { INSET - 10. } else { INSET })).pl(px(INSET)).when(phone, |d| d.pr(px(INSET))).flex().gap(px(7.)).child(search).child(random))
             .child(scroll)
             .child(nav);
 
+        if phone { return Some(self.emoji_sheet(el, window, cx)); }
         // bottomLeft, else right-start, whichever overflows the window less,
         // then shifted inside it (`boundaryPadding: 20`).
-        let vp = window.viewport_size();
         let (vw, vh) = (f32::from(vp.width), f32::from(vp.height));
         let (l, t, r, b) = (f32::from(a.left()), f32::from(a.top()), f32::from(a.right()), f32::from(a.bottom()));
         let over_below = (b + OFFSET + h - (vh - BOUNDARY)).max(0.);
@@ -401,6 +415,26 @@ impl Editor {
 }
 
 /// Category title: a 12pt semibold group name in the secondary colour, 24px in.
+impl Editor {
+    /// A phone's picker, as iOS presents one: a sheet up from the bottom
+    /// edge over a scrim, the window's width with its top corners round;
+    /// tapping the scrim closes it.
+    fn emoji_sheet(&self, picker: Popover, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let vp = window.viewport_size();
+        let insets = window.insets();
+        let (bottom, ime) = (f32::from(insets.safe_area.bottom), f32::from(insets.ime.bottom));
+        let (vw, vh) = (f32::from(vp.width), f32::from(vp.height) - ime);
+        deferred(anchored().position(point(px(0.), px(0.))).child(
+            div().id("emoji-sheet").relative().w(px(vw)).h(px(vh))
+                .child(div().id("emoji-scrim").absolute().inset_0().bg(color::overlay()).occlude()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|ed, _, window, cx| { cx.stop_propagation(); ed.close_menu_focus(window, cx); })))
+                .child(div().absolute().left_0().right_0().bottom_0().pb(px(if ime > 0. { 0. } else { bottom })).bg(color::popover())
+                    .rounded_t(px(crate::design::R + 6.)).shadow(crate::theme::shadow_panel()).occlude()
+                    .child(picker.w_full().rounded_none().rounded_t(px(crate::design::R + 6.)).shadow_none())),
+        )).with_priority(3).into_any_element()
+    }
+}
+
 fn title_el(t: &'static str, h: f32) -> Div {
     div()
         .w_full()
