@@ -1932,7 +1932,8 @@ impl Workspace {
                     .child(
                         seg("doc-search", "search")
                             .tip_label(crate::shortcuts::keys(crate::settings::text("搜索(⌘ + J)")).into(), TipSide::Below)
-                            .on_click(cx.listener(|_, _, window, cx| window.dispatch_action(Box::new(FocusSearch), cx))),
+                            // Opened here, not through the action: with nothing focused (an app just opened on iOS) the action reaches no one.
+                            .on_click(cx.listener(|w, _, window, cx| if w.search_open { w.close_search(window, cx); } else { w.open_search(window, cx); })),
                     )
                     .child(
                         // Straight to a new document: no 新建 menu, as 导入 is rare.

@@ -25,6 +25,9 @@ const SUMMARY_SEP: &str = "\u{a0}\u{a0}\u{a0}";
 const INFO_W: f32 = 474.;
 /// A hit row without a summary: padding 8 / 8, title 20, extra line 2 + 20.
 const ROW_H: f32 = 58.;
+/// A phone's results: how many, and each row's height (a title and one line).
+const PHONE_ROWS: usize = 200;
+const PHONE_ROW_H: f32 = 60.;
 
 /// Case-insensitive match position in `hay`, in `hay`'s own byte offsets.
 pub(crate) fn find_ci(hay: &str, needle_lower: &str) -> Option<Range<usize>> {
@@ -362,10 +365,13 @@ impl Workspace {
         self.doc_menu = false;
         self.doc_sub = None;
         let search = self.search.clone();
+        let phone = theme::compact(f32::from(window.viewport_size().width));
         search.update(cx, |s, cx| {
             // The dialog's query reads at body size, above the 13pt rows.
             s.size = 15.;
             s.line_height = 22.;
+            // A phone's field, as iOS sets it.
+            if phone { s.size = 16.; }
             s.set_text("", cx)
         });
         window.focus(&search.focus_handle(cx), cx);
@@ -500,6 +506,7 @@ impl Workspace {
         if !self.search_open {
             return None;
         }
+        if theme::compact(f32::from(window.viewport_size().width)) { return Some(self.render_search_page(window, cx)); }
         let q = self.query(cx);
         let has_text = !self.search.read(cx).text.is_empty();
         let results = self.search_rows(&q);
@@ -645,6 +652,65 @@ impl Workspace {
             .with_priority(3)
             .into_any_element(),
         )
+    }
+}
+
+impl Workspace {
+    /// A phone's search (`theme::compact`), as iOS searches: a page over the
+    /// whole window, the field at the top with 取消 beside it, and the results
+    /// below, each its title and one line (the hit in the text, or when it
+    /// was modified). No keyboard hints, no selection: a row is tapped.
+    fn render_search_page(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let size = window.viewport_size();
+        let insets = window.insets();
+        let (vw, vh) = (f32::from(size.width), f32::from(size.height));
+        let (top, bottom, keyboard) = (f32::from(insets.safe_area.top), f32::from(insets.safe_area.bottom), f32::from(insets.ime.bottom));
+        let q = self.query(cx);
+        let has_text = !self.search.read(cx).text.is_empty();
+        // Thousands of hits read no better on a phone; the first ones are what is looked at.
+        let results: Vec<usize> = self.search_rows(&q).into_iter().take(PHONE_ROWS).collect();
+        let field = div()
+            .flex_1().min_w_0().h(px(36.)).px(px(10.)).flex().items_center().gap(px(6.))
+            .rounded(px(10.)).bg(crate::design::color::muted())
+            .child(icon("search", 16., Theme::text_caption()).flex_none())
+            .child(div().flex_1().min_w_0().flex().child(self.search.clone()))
+            .when(has_text, |d| d.child(Button::ghost("search-clear").icon("search-clear").sized(ButtonSize::Xs).on_click(cx.listener(|w, _, window, cx| {
+                w.search.update(cx, |s, cx| s.set_text("", cx));
+                window.focus(&w.search.focus_handle(cx), cx);
+                w.search_scroll.set_offset(point(px(0.), px(0.)));
+                cx.notify();
+            }))));
+        let cancel = div().id("search-cancel").flex_none().h(px(36.)).pl(px(12.)).flex().items_center().cursor_pointer()
+            .text_size(px(16.)).text_color(Theme::link()).child(crate::settings::text("取消"))
+            .on_click(cx.listener(|w, _, window, cx| w.close_search(window, cx)));
+        let mut list = div().id("search-results").flex_1().min_h_0().flex().flex_col().overflow_y_scroll().track_scroll(&self.search_scroll).pb(px(if keyboard > 0. { 8. } else { bottom }));
+        if q.is_empty() && !results.is_empty() {
+            list = list.child(div().flex_none().px(px(16.)).pt(px(12.)).pb(px(4.)).text_size(px(13.)).text_color(Theme::text_caption()).child(crate::settings::tr("最近浏览", "Recently viewed")));
+        }
+        if results.is_empty() && !q.is_empty() {
+            list = list.child(div().flex_none().px(px(16.)).pt(px(16.)).text_size(px(14.)).line_height(px(20.)).text_color(Theme::text_caption()).child(crate::settings::text("没有找到匹配的结果，尝试其他关键词进行搜索")));
+        }
+        for (ix, &i) in results.iter().enumerate() {
+            let e = &self.entries[i];
+            let title = display_title(&e.title);
+            let title_hit = find_ci(&title, &q);
+            let line = (!q.is_empty()).then(|| snippet(&e.body, &q)).flatten().map(|(t, _)| t)
+                .unwrap_or_else(|| crate::localized_format!("我在 {}修改过", "Modified {}", format_visit(e.meta.modified)));
+            list = list.child(div().id(("search-hit", ix)).flex_none().h(px(PHONE_ROW_H)).pl(px(16.)).flex().items_center().gap(px(12.)).cursor_pointer()
+                .on_click(cx.listener(move |w, _, window, cx| w.pick_search(ix, window, cx)))
+                .child(entry_icon(e))
+                .child(div().flex_1().min_w_0().h_full().pr(px(16.)).flex().flex_col().justify_center().border_b_1().border_color(Theme::line_divider())
+                    .child(div().text_size(px(16.)).line_height(px(22.)).text_color(Theme::text()).overflow_hidden().whitespace_nowrap().text_ellipsis()
+                        .child(ui_text(title).hit(title_hit, Theme::link())))
+                    .child(div().text_size(px(13.)).line_height(px(18.)).text_color(Theme::text_caption()).overflow_hidden().whitespace_nowrap().text_ellipsis()
+                        .child(ui_text(line)))));
+        }
+        let page = div().id("search-page").w(px(vw)).h(px(vh - keyboard)).pt(px(top)).flex().flex_col().bg(Theme::bg_body())
+            .font_family(theme::ui_family())
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(div().flex_none().px(px(16.)).py(px(8.)).flex().items_center().child(field).child(cancel))
+            .child(list);
+        deferred(anchored().position(point(px(0.), px(0.))).child(page)).with_priority(3).into_any_element()
     }
 }
 
