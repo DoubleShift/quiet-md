@@ -406,7 +406,10 @@ impl Editor {
                 }
             };
             let open = id.clone();
+            // A long title ends in "…" at the panel's edge (narrow panes, a phone).
             div()
+                .w_full()
+                .min_w_0()
                 .flex()
                 .items_center()
                 .py(px(3.))
@@ -431,6 +434,7 @@ impl Editor {
                     div()
                         .id(("refs-doc", row))
                         .min_w_0()
+                        .flex_shrink(1.)
                         .h(px(26.))
                         .px(px(4.))
                         .rounded(px(ROW))

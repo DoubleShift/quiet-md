@@ -40,6 +40,30 @@ pub(crate) fn sub_item(id: &'static str, label: &'static str) -> MenuItem {
 fn divider() -> MenuSeparator { MenuSeparator::new() }
 
 impl Workspace {
+    /// A phone's path menu (`theme::compact`), as the Finder's title shows it:
+    /// the open document, then each page or folder holding it, then the
+    /// library at the bottom; any of them opens.
+    pub(crate) fn render_path_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.path_menu { return None; }
+        let id = self.current.clone()?;
+        let entry = self.entries.iter().find(|e| e.id == id)?;
+        let close = |w: &mut Workspace, cx: &mut Context<Workspace>| { w.path_menu = false; cx.notify(); };
+        let mut menu = Popover::new("path-menu").menu().min_w(px(200.)).max_w(px(320.))
+            .on_mouse_down_out(cx.listener(move |w, _, _, cx| close(w, cx)))
+            .child(MenuItem::new("path-current").icon("doc").label(display_title(&entry.title)).checked(true)
+                .on_click(cx.listener(move |w, _, _, cx| close(w, cx))));
+        for e in self.ancestors(&id).iter().rev().filter(|e| crate::shared_store::root_of_row(&e.id).is_none()) {
+            let to = e.id.clone();
+            menu = menu.child(MenuItem::new(SharedString::from(format!("path-{}", e.id))).icon("folder").label(display_title(&e.title))
+                .on_click(cx.listener(move |w, _, window, cx| { close(w, cx); w.open(&to, window, cx); })));
+        }
+        let root = if entry.meta.local() { crate::settings::tr("本机文件", "Files on this computer").to_string() } else { self.root_name(&entry.root) };
+        menu = menu.child(divider()).child(MenuItem::new("path-root").icon("library").label(root)
+            .on_click(cx.listener(move |w, _, _, cx| { close(w, cx); w.show_view(crate::app::View::Home, cx); })));
+        let at = self.path_btn_bounds.get().map_or(point(px(12.), px(60.)), |b| point(b.left(), b.bottom() + px(MENU_GAP)));
+        Some(deferred(anchored().anchor(Anchor::TopLeft).position(at).child(menu)).with_priority(2).into_any_element())
+    }
+
     fn close_doc_menu(&mut self, cx: &mut Context<Self>) {
         self.doc_menu = false;
         self.doc_sub = None;

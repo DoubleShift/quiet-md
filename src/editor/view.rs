@@ -234,6 +234,8 @@ pub struct Editor {
     pub(super) layout: super::catalogue::PageLayout,
     /// 文档目录 pinned open (per document).
     pub cat_pinned: bool,
+    /// A phone's outline, opened from the top bar over the text (not saved).
+    pub cat_float: bool,
     /// Child pages of the open document (kept current by the workspace).
     pub sub_pages: Vec<SubPage>,
     pub(super) cat_entries: Rc<Vec<super::catalogue::CatEntry>>,
@@ -481,6 +483,7 @@ impl Editor {
             page_width,
             layout: Default::default(),
             cat_pinned: false,
+            cat_float: false,
             sub_pages: vec![],
             cat_entries: Rc::default(),
             cat_generation: None,

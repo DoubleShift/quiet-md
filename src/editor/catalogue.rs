@@ -13,6 +13,8 @@ use std::rc::Rc;
 
 /// PAGE_MAIN_PADDING: the page's minimum side margin.
 const PAD: f32 = 66.;
+/// The side margin on a phone (`theme::compact`).
+const COMPACT_PAD: f32 = 20.;
 /// CATALOGUE_MAX_UNFOLD_WIDTH.
 const UNFOLD: f32 = 236.5;
 /// EDITOR_MIN_EXTRUDING_WIDTH: the narrowest text column beside a pinned catalogue.
@@ -55,6 +57,13 @@ pub struct PageLayout {
 }
 
 pub fn page_layout(o: f32, max: Option<f32>, has_cat: bool, pinned: bool) -> PageLayout {
+    // A phone (iOS, narrow pane): the text takes the width, with the system's
+    // usual side margin.
+    // The outline opens from the top bar's button instead, floating over the text.
+    if crate::theme::compact(o) {
+        let cat = if has_cat && pinned { CatMode::Forced } else { CatMode::None };
+        return PageLayout { ml: COMPACT_PAD, mr: COMPACT_PAD, content: o - 2. * COMPACT_PAD, cat };
+    }
     let centered = |cat| {
         let m = max.map_or(PAD, |w| ((o - w) / 2.).max(PAD));
         PageLayout { ml: m, mr: m, content: o - 2. * m, cat }
@@ -204,7 +213,8 @@ impl Editor {
             self.cat_entries = Rc::new(entries(&self.core.doc));
         }
         let o = f32::from(self.pane_size().width);
-        self.layout = page_layout(o, self.column_max(), !self.cat_entries.is_empty(), self.cat_pinned);
+        let pinned = if crate::theme::compact(o) { self.cat_float } else { self.cat_pinned };
+        self.layout = page_layout(o, self.column_max(), !self.cat_entries.is_empty(), pinned);
     }
 
     /// Scroll-spy: the last heading at most 90px below the viewport top. A
@@ -263,6 +273,13 @@ impl Editor {
         self.item_of(id).unwrap_or(0)
     }
 
+    /// A phone (`theme::compact`): the top bar's outline button, shown when
+    /// the document has headings, and whether the outline is open.
+    /// It has its own state, never saved: the document's pinned outline is the desktop's.
+    pub fn outline(&self) -> Option<bool> { (!self.cat_entries.is_empty()).then_some(self.cat_float) }
+
+    pub fn toggle_outline(&mut self, cx: &mut Context<Self>) { self.cat_float = !self.cat_float; cx.notify(); }
+
     fn set_cat_pinned(&mut self, pinned: bool, cx: &mut Context<Self>) {
         self.cat_pinned = pinned;
         cx.emit(EditorEvent::Catalogue(pinned));
@@ -270,6 +287,8 @@ impl Editor {
     }
 
     fn jump_to_heading(&mut self, id: BlockId, cx: &mut Context<Self>) {
+        // A phone's outline floats over the text: it closes once used.
+        if self.cat_float { self.cat_float = false; cx.notify(); }
         self.cat_active = Some(id);
         self.cat_jump = Some(id);
         if id == TITLE {
@@ -292,6 +311,7 @@ impl Editor {
         }
         let floating = mode == CatMode::Forced;
         let pinned = self.cat_pinned;
+        let compact = crate::theme::compact(f32::from(self.pane_size().width));
         let pin = crate::design::Button::ghost(SharedString::from(format!("cat-pin-{pinned}")))
             .sized(crate::design::ButtonSize::Xs)
             .absolute()
@@ -326,7 +346,8 @@ impl Editor {
                 .when(list_w.is_none(), |d| d.w(px(42.)).h(px(PIN_H)).pt_0())
                 .when(floating, |d| d.bg(theme::ta(255, 255, 255, 0.96)).rounded(px(8.)))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(pin)
+                .when(!compact, |d| d.child(pin))
+                .when(compact, |d| d.pt(px(8.)).bg(Theme::bg_body()).shadow(crate::theme::shadow_menu()))
                 .children(body)
                 .into_any_element(),
         )

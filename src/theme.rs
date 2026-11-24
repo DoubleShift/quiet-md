@@ -579,6 +579,9 @@ pub fn callout_border_swatch(name: &str) -> Option<Hsla> {
 
 /// The sidebar is 273pt wide plus its 7pt inset; the sunken
 /// sidebar keeps that footprint.
+/// A phone-sized pane on iOS: the page drops its wide margins and the top bar
+/// shows only the title. Desktop windows never count, however narrow.
+pub fn compact(width: f32) -> bool { cfg!(target_os = "ios") && width < 600. }
 pub const SIDEBAR_WIDTH: f32 = 280.0;
 pub const SIDEBAR_MIN: f32 = 240.0;
 pub const SIDEBAR_MAX: f32 = 800.0;

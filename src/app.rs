@@ -412,6 +412,9 @@ pub struct Workspace {
     pub more_bounds: Rc<RefCell<HashMap<String, Bounds<Pixels>>>>,
     /// Header "…" menu and its open submenu.
     pub doc_menu: bool,
+    /// A phone's top bar (`theme::compact`): the path menu beside the title, and where its button was.
+    pub path_menu: bool,
+    pub path_btn_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     pub doc_sub: Option<DocSub>,
     /// Last-frame bounds of the open submenu (clicks there keep the menu open).
     pub doc_sub_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -695,6 +698,8 @@ impl Workspace {
             file_history: Default::default(),
             more_bounds: Default::default(),
             doc_menu: false,
+            path_menu: false,
+            path_btn_bounds: Rc::new(Cell::new(None)),
             doc_sub: None,
             doc_sub_bounds: Rc::new(Cell::new(None)),
             doc_menu_w: Rc::new(Cell::new(None)),
@@ -1815,6 +1820,20 @@ impl Workspace {
                 sep(),
             ];
         }
+        // A phone: no path, only the title, with the path one tap away in a
+        // menu (as the Finder's title does) on the button before it.
+        let compact = theme::compact(pane_w);
+        if compact {
+            let record = self.path_btn_bounds.clone();
+            let open = self.path_menu;
+            crumbs = vec![
+                crate::design::Button::ghost("path-menu").no_drag().icon("folder").selected(open)
+                    .child(canvas(move |b, _, _| record.set(Some(b)), |_, _, _, _| {}).absolute().inset_0())
+                    .on_mouse_down(MouseButton::Left, cx.listener(move |w, _, _, cx| { cx.stop_propagation(); w.path_menu = !open; cx.notify(); }))
+                    .into_any_element(),
+                div().w(px(6.)).flex_none().into_any_element(),
+            ];
+        }
         let record_more = self.more_btn_bounds.clone();
         let doc_open = self.doc_menu;
         div()
@@ -1825,9 +1844,9 @@ impl Workspace {
             .items_center()
             .pr(px(crate::ui::header_right_inset()))
             // Clear of the traffic lights, which sit over the note when the sidebar is closed.
-            .pl(if self.sidebar_open { px(18.) } else { px(theme::TRAFFIC_LIGHTS_W) })
+            .pl(if compact { px(12.) } else if self.sidebar_open { px(18.) } else { px(theme::TRAFFIC_LIGHTS_W) })
             .title_bar()
-            .when(!self.sidebar_open, |d| {
+            .when(!self.sidebar_open && !compact, |d| {
                 d.child(
                     crate::design::Button::ghost("open-sidebar")
                         .no_drag()
@@ -1854,7 +1873,7 @@ impl Workspace {
                     .gap(px(12.))
                     .child(
                         div()
-                            .h(px(20.))
+                            .h(px(if compact { HEADER_ACTIONS_H } else { 20. }))
                             .min_w_0()
                             .overflow_hidden()
                             .flex()
@@ -1890,6 +1909,11 @@ impl Workspace {
                     .h(px(HEADER_ACTIONS_H)).flex_none()
                     .flex()
                     .items_center()
+                    // A phone: the outline opens from here (the page has no margin for its button).
+                    .when_some(compact.then(|| self.editor.as_ref().and_then(|e| e.read(cx).outline())).flatten(), |d, open| d.child(
+                        seg("doc-outline", "catalogue-list").selected(open)
+                            .on_click(cx.listener(|w, _, _, cx| if let Some(e) = w.editor.clone() { e.update(cx, |e, cx| e.toggle_outline(cx)); })),
+                    ))
                     .when(self.current.is_some(), |d| {
                         d.child(
                             // No tooltip while its dropdown is open; the menu hangs
@@ -1989,6 +2013,7 @@ impl Render for Workspace {
         let place_menu = self.render_place_menu(cx);
         let search = self.render_search(window, cx);
         let doc_menu = self.render_doc_menu(window, cx);
+        let path_menu = self.render_path_menu(cx);
         let doc_info = self.render_doc_info(cx);
         let history = self.render_history(cx);
         // a dialog holds the keyboard while open (Esc and ↩ go to it, not to the editor behind)
@@ -2182,6 +2207,7 @@ impl Render for Workspace {
             .children(crate::ui::window_controls(window))
             .children(row_menu)
             .children(doc_menu)
+            .children(path_menu)
             .children(mode_menu)
             .children(doc_info)
             .children(trash_menu)
