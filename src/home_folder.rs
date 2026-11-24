@@ -475,7 +475,7 @@ impl Workspace {
     }
 
     pub(crate) fn render_home_drag_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !matches!(self.view, crate::app::View::Home | crate::app::View::Folder) { self.home.folders.drag = None; return None; }
+        if !matches!(self.view, crate::app::View::Home | crate::app::View::Library | crate::app::View::Folder) { self.home.folders.drag = None; return None; }
         let folder_bounds = self.home.folders.drag.as_ref().and_then(|d| d.over.clone()).and_then(|f| self.home.folders.bounds.borrow().get(&f).copied());
         let d = self.home.folders.drag.as_mut().filter(|d| d.started)?;
         let now = Instant::now();
@@ -619,7 +619,7 @@ impl Workspace {
 
     /// `file_drag_move` from a position and the dragged paths (scripted runs too).
     pub(crate) fn file_drag_at(&mut self, at: Point<Pixels>, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
-        if !matches!(self.view, crate::app::View::Home | crate::app::View::Folder) { return; }
+        if !matches!(self.view, crate::app::View::Home | crate::app::View::Library | crate::app::View::Folder) { return; }
         let fresh = self.home.folders.file_drop.as_ref().is_none_or(|d| d.landed.is_some());
         if fresh { self.home.folders.file_drop = Some(FileDrop::new(paths)); }
         let shown = if self.view == crate::app::View::Folder { self.level_entries(self.folder_current.as_deref()) } else { self.home_entries() };
@@ -645,7 +645,7 @@ impl Workspace {
     }
 
     pub(crate) fn file_drop_paths(&mut self, paths: Vec<std::path::PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
-        if !matches!(self.view, crate::app::View::Home | crate::app::View::Folder) { return; }
+        if !matches!(self.view, crate::app::View::Home | crate::app::View::Library | crate::app::View::Folder) { return; }
         if self.home.folders.file_drop.is_none() { self.home.folders.file_drop = Some(FileDrop::new(paths)); }
         let page = if self.view == crate::app::View::Folder { self.folder_current.clone() } else { None };
         let Some(d) = self.home.folders.file_drop.as_mut() else { return };
@@ -674,7 +674,7 @@ impl Workspace {
 
     /// The veil and the tray, over the page while files are dragged in.
     pub(crate) fn render_file_drop(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !matches!(self.view, crate::app::View::Home | crate::app::View::Folder) { self.home.folders.file_drop = None; return None; }
+        if !matches!(self.view, crate::app::View::Home | crate::app::View::Library | crate::app::View::Folder) { self.home.folders.file_drop = None; return None; }
         let dragging = cx.has_active_drag() || crate::devtools::file_drag();
         let target_title = |w: &Self, id: Option<&String>| id.and_then(|id| w.entries.iter().find(|e| &e.id == id)).map(|e| display_title(&e.title))
             .unwrap_or_else(|| w.top_name());

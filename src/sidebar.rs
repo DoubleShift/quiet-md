@@ -161,18 +161,15 @@ impl Workspace {
             }
             list = list.child(div().h(px(GROUP_GAP - SECTION_TOP)));
         }
-        // Dropped from outside with no tree shown to open a slot in: the heading lights.
-        // 工作区: one root is headed by its folder's name (W5); several show
-        // as rows of the tree under 文件夹; none, a way to open one.
+        // 工作区: one root shows its contents under 我的文档; several show as rows
+        // of the tree there; none, a way to open one.
         let roots = self.store.roots();
         if roots.is_empty() {
             list = list.child(self.empty_roots(cx));
         } else {
-            let title = if roots.len() == 1 { roots[0].1.clone() } else { crate::settings::tr("文件夹", "Folders").to_string() };
-            list = list.child(self.section(1, title, cx).rounded(px(ROW_R)).when(self.sidebar_drop_top(), |d| d.bg(Theme::sidebar_selected())));
-            if !self.folded[1] {
-                list = list.child(self.render_folder_rows(window, cx));
-            }
+            // One root or several, the heading is 我的文档 (#421); it never folds.
+            list = list.child(self.section(1, crate::settings::text("我的文档"), cx));
+            list = list.child(self.render_folder_rows(window, cx));
         }
         // 本机文件: Markdown files and folders edited where they are, outside the
         // library. Files or folders from the Finder let go here open the same way.
@@ -311,9 +308,9 @@ impl Workspace {
         )
     }
 
-    /// Section header: the title folds the list (an
-    /// arrow appears on hover); 我的文档 has "+" and 批量操作 on the right,
-    /// laid out so the last one lines up with the rows' "…".
+    /// Section header: the title folds the list (an arrow appears on hover);
+    /// 我的文档's is a row that opens its page, with 批量操作 and "+" on the
+    /// right, laid out so the last one lines up with the rows' "…".
     fn section(&self, idx: usize, title: impl AsRef<str>, cx: &mut Context<Self>) -> Div {
         let group = SharedString::from(format!("section-{idx}"));
         let folded = self.folded[idx];
@@ -355,6 +352,31 @@ impl Workspace {
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(|w, ev: &ClickEvent, _, cx| { let pos = w.home.anchor("create-sidebar").map_or(ev.position(), |b| point(b.left(), b.bottom() + px(4.))); w.create_menu = if w.create_menu.is_some() { None } else { Some((None, pos)) }; cx.notify(); })));
         }
+        // 我的文档 (#421) does not fold: the heading is a row of its own, like a folder's, that
+        // opens the 我的文档 page (every root, or the one root's top level). Its 批量操作 and "+"
+        // keep their clicks to themselves.
+        if idx == 1 {
+            let on = self.view == View::Library;
+            return div().h(px(SECTION_H)).pt(px(SECTION_TOP)).flex().child(
+                div().id("section-library").flex_1().h_full().pl(px(8.)).flex().items_center().rounded(px(ROW_R)).cursor_pointer()
+                    .when(on, |d| d.bg(Theme::sidebar_selected()))
+                    .when(!on, |d| d.hover(|s| s.bg(Theme::sidebar_hover())).when(self.sidebar_drop_top(), |d| d.bg(Theme::sidebar_selected())))
+                    .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 7.))
+                        .font_weight(FontWeight::SEMIBOLD).text_color(if on { Theme::text() } else { Theme::sidebar_section() }).child(crate::settings::label(title)))
+                    .child(trigger("section-batch", "batch").tip(crate::settings::text("批量操作"), None)
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(|w, _, _, cx| {
+                            cx.stop_propagation();
+                            w.batch = Some(vec![]);
+                            w.row_menu = None;
+                            cx.notify();
+                        })))
+                    .child(trigger("section-add", "plus").ml(px(2.)).mr(px(4.)).child(self.home.track("create-sidebar")).selected(create_open).tip(crate::settings::tr("新建", "New"), None)
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(|w, ev: &ClickEvent, _, cx| { cx.stop_propagation(); let pos = w.home.anchor("create-sidebar").map_or(ev.position(), |b| point(b.left(), b.bottom() + px(4.))); w.create_menu = if w.create_menu.is_some() { None } else { Some((None, pos)) }; cx.notify(); })))
+                    .on_click(cx.listener(|w, _, _, cx| w.show_view(View::Library, cx))),
+            );
+        }
         row.child(
             div()
                 // Keyed by state so the tooltip is rebuilt after a toggle.
@@ -375,30 +397,15 @@ impl Workspace {
                 )
                 .on_click(cx.listener(move |w, _, _, cx| {
                     w.folded[idx] = !w.folded[idx];
-                    // Unfolding 我的文档 cascades its rows back in.
-                    if idx == 1 { w.folder_drag.reset(); }
                     cx.notify();
                 })),
         )
-        .child(div().flex_1())
-        .when(idx == 1, |d| {
-            d.child(trigger("section-batch", "batch").tip(crate::settings::text("批量操作"), None).on_click(cx.listener(|w, _, _, cx| {
-                w.batch = Some(vec![]);
-                w.folded[1] = false;
-                w.row_menu = None;
-                cx.notify();
-            })))
-            .child(trigger("section-add", "plus").ml(px(2.)).mr(px(4.)).child(self.home.track("create-sidebar")).selected(create_open).tip(crate::settings::tr("新建", "New"), None)
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(|w, ev: &ClickEvent, _, cx| { let pos = w.home.anchor("create-sidebar").map_or(ev.position(), |b| point(b.left(), b.bottom() + px(4.))); w.create_menu = if w.create_menu.is_some() { None } else { Some((None, pos)) }; cx.notify(); })))
-        })
     }
 
     /// Check or uncheck a 我的文档 row (entering 批量操作 if needed); false
     /// when the 50-page limit blocks it.
     pub(crate) fn toggle_check(&mut self, id: &str) -> bool {
         if crate::shared_store::root_of_row(id).is_some() { return false; }
-        self.folded[1] = false;
         let sel = self.batch.get_or_insert_with(Vec::new);
         if let Some(i) = sel.iter().position(|x| x == id) {
             sel.remove(i);

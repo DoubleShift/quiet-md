@@ -151,7 +151,6 @@ impl Workspace {
     /// The folder that took a drop opens and bounces.
     fn landed_in(&mut self, folder: Option<&str>) {
         if let Some(f) = folder { self.expanded.insert(f.to_string()); self.folder_drag.kick(f, 4.5); }
-        self.folded[1] = false;
     }
 
     /// Nothing is being dragged any more: forget the drop target.

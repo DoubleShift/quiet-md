@@ -292,6 +292,8 @@ pub struct RowMenu {
 pub enum View {
     Doc,
     Home,
+    /// 我的文档 (#421): the sidebar heading's page, the top level as 主页's 我的文档 tab lists it.
+    Library,
     Folder,
     Trash,
     Settings,
@@ -455,7 +457,7 @@ pub struct Workspace {
     /// The toast and when it appeared.
     pub toast: Option<(ToastKind, SharedString, Instant)>,
     toast_task: Option<Task<()>>,
-    /// Folded sidebar sections: 置顶, 我的文档.
+    /// Folded sidebar sections: 置顶, (unused: 我的文档 never folds, #421), 本机文件.
     pub folded: [bool; 3],
     /// Root folders folded shut in the sidebar, by key.
     pub folded_roots: std::collections::HashSet<String>,
@@ -2030,7 +2032,7 @@ impl Render for Workspace {
                         .children(self.render_shortcuts(cx)),
                 )
                 .into_any_element(),
-            View::Home => self.render_home(window, cx),
+            View::Home | View::Library => self.render_home(window, cx),
             View::Folder => self.render_folder(window, cx),
             View::Trash => self.render_trash(cx),
             View::Settings => self.render_settings(cx),
@@ -2045,7 +2047,7 @@ impl Render for Workspace {
         let page = if self.view == View::Doc { crate::editor_theme::Theme::bg_body() } else { Theme::bg_body() };
         let note = div().id("note").relative().flex_1().min_w_0().h_full().pt(px(inset_top)).flex().bg(page).shadow(theme::shadow_note()).child(main)
             // Files from the Finder dropped on 主页 or a folder's page are imported there.
-            .when(matches!(self.view, View::Home | View::Folder), |d| d
+            .when(matches!(self.view, View::Home | View::Library | View::Folder), |d| d
                 .on_drag_move(cx.listener(|w, ev: &DragMoveEvent<ExternalPaths>, _, cx| w.file_drag_move(ev, cx)))
                 .on_drop(cx.listener(|w, paths: &ExternalPaths, window, cx| w.file_dropped(paths, window, cx))))
             .children(file_drop)

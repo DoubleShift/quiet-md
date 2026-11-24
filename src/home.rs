@@ -442,11 +442,9 @@ impl Home {
         .inset_0()
     }
 
-    fn cols(&self) -> Vec<Col> {
-        match self.tab {
-            HomeTab::Recent => RECENT_COLS.to_vec(),
-            HomeTab::Starred => STARRED_COLS.to_vec(),
-        }
+    /// The list's columns: the library's (`library`: the top level is listed) or 收藏's.
+    fn cols(&self, library: bool) -> Vec<Col> {
+        if library { RECENT_COLS.to_vec() } else { STARRED_COLS.to_vec() }
     }
 
     /// The column drawn as sorted; 标题 and 手动排序 mark their own header.
@@ -554,6 +552,8 @@ impl Workspace {
     }
 
     pub(crate) fn home_entries(&self) -> Vec<Entry> {
+        // The sidebar's 我的文档 page lists what that tab does, without the tabs.
+        if self.view == crate::app::View::Library { return self.level_entries(None); }
         match self.home.tab {
             // 我的文档 is the library's top level.
             HomeTab::Recent => self.level_entries(None),
@@ -577,7 +577,9 @@ impl Workspace {
         true
     }
 
-    pub(crate) fn manual_home_sort(&self) -> bool { self.home.sort == HomeSort::Manual && self.home.tab == HomeTab::Recent }
+    pub(crate) fn manual_home_sort(&self) -> bool { self.home.sort == HomeSort::Manual && self.lists_library() }
+    /// The page shows the library's top level: 主页's 我的文档 tab, or the sidebar's 我的文档 page.
+    pub(crate) fn lists_library(&self) -> bool { self.view == crate::app::View::Library || self.home.tab == HomeTab::Recent }
 
     /// A list header: clicking it sorts by that column; clicking the sorted
     /// one flips the direction. Headers without an order are not clickable.
@@ -779,7 +781,8 @@ impl Workspace {
         // Too narrow for the search box: a search icon beside +, in the same style.
         let search = self.header_search(window, cx);
         let narrow = search.is_none();
-        let header = page_header(self, crate::settings::text("主页"), 26., cx).relative().children(search)
+        let library = self.view == crate::app::View::Library;
+        let header = page_header(self, crate::settings::text(if library { "我的文档" } else { "主页" }), 26., cx).relative().children(search)
             .when(narrow, |d| d.child(crate::ui::header_icon("home-search", "search").mr(px(4.))
                 .tip(crate::settings::tr("搜索文档", "Search documents"), Some(crate::shortcuts::hint("workspace::FocusSearch", "⌘ + J")))
                 .on_click(cx.listener(|w, _, window, cx| w.open_search(window, cx)))))
@@ -840,9 +843,9 @@ impl Workspace {
         } else { // Menu state at render: the popover's outside-press handler clears it on mouse-down, before a click
             // would fire, so toggle on mouse-down from this snapshot.
             let sort_open = self.home.sort_menu; toolbar
-            .child(crate::design::Segmented::new()
+            .when(!library, |d| d.child(crate::design::Segmented::new()
                 .child(tab("home-tab-recent", crate::settings::text("我的文档"), HomeTab::Recent))
-                .child(tab("home-tab-star", crate::settings::text("收藏"), HomeTab::Starred)))
+                .child(tab("home-tab-star", crate::settings::text("收藏"), HomeTab::Starred))))
             .child(div().flex_1())
             .child(text_btn("home-batch", "batch", crate::settings::text("批量管理"), true).mr(px(8.))
                 .on_click(cx.listener(|w, _, _, cx| { w.batch = Some(vec![]); w.row_menu = None; w.home.sort_menu = false; cx.notify(); })))
@@ -859,7 +862,7 @@ impl Workspace {
             return div().flex_1().min_w_0().h_full().flex().flex_col().child(header).child(self.empty_main(cx)).into_any_element();
         }
         let entries = self.home_entries();
-        let body = if entries.is_empty() && (self.home.grid || self.home.tab == HomeTab::Recent) {
+        let body = if entries.is_empty() && (self.home.grid || self.lists_library()) {
             empty_state("illus/empty-list.svg", crate::settings::text("当前列表暂无内容")).into_any_element()
         } else if self.home.grid {
             self.render_home_grid(&entries, false, window, cx)
@@ -880,7 +883,7 @@ impl Workspace {
 
     pub(crate) fn render_home_list(&self, entries: &[Entry], in_folder: bool, cx: &mut Context<Self>) -> AnyElement {
         let list_scroll = if in_folder { &self.home.folder_list_scroll } else { &self.home.list_scroll };
-        let cols = self.home.cols();
+        let cols = self.home.cols(self.lists_library());
         let sort = self.home.sort_col();
         // The title is sized at about three times a column.
         let title_cell = || div().flex_grow_1().flex_shrink_1().flex_basis(relative(0.)).min_w(px(200.));
@@ -1095,7 +1098,7 @@ impl Workspace {
     /// native menu row.
     pub(crate) fn render_home_menus(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut out = vec![];
-        if self.view != crate::app::View::Home {
+        if !matches!(self.view, crate::app::View::Home | crate::app::View::Library) {
             return out;
         }
         let place = |pos: Point<Pixels>, corner: Anchor, menu: Popover| {
