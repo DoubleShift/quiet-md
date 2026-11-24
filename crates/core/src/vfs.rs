@@ -117,6 +117,13 @@ pub fn file_times(path: &Path) -> Option<(u64, u64)> {
     #[cfg(target_family = "wasm")] { let _ = path; None }
 }
 
+/// When the file or folder at `path` was made, in unix seconds, where the
+/// system keeps that (macOS, Windows; Linux on file systems with statx).
+pub fn made_time(path: &Path) -> Option<u64> {
+    #[cfg(not(target_family = "wasm"))] { std::fs::metadata(path).ok()?.created().ok()?.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs()) }
+    #[cfg(target_family = "wasm")] { let _ = path; None }
+}
+
 /// Set the change time of the file at `path` to unix second `secs`, as a
 /// copy that keeps it (the web build keeps no times).
 pub fn set_modified(path: &Path, secs: u64) -> io::Result<()> {
