@@ -86,6 +86,18 @@ pub(crate) struct HomeDrag {
     over: Option<String>,
     returning: bool,
     last: Option<Instant>,
+    /// Picked up by a long press (touch): the finger carries it and the grid
+    /// scrolls when it nears the top or bottom.
+    touch: bool,
+}
+
+/// Touch: how near the grid's top or bottom edge a carried card scrolls it, and how fast.
+const EDGE: f32 = 48.;
+const EDGE_SPEED: f32 = 600.;
+
+/// Which way a carried card at `y` scrolls a list spanning `top`..`bottom`: -1 up, 1 down.
+fn edge_scroll(y: f32, top: f32, bottom: f32) -> f32 {
+    if y < top + EDGE { -1. } else if y > bottom - EDGE { 1. } else { 0. }
 }
 
 /// What lies on a paper: drawn lines, a real title over drawn lines, or real content.
@@ -409,7 +421,7 @@ impl Workspace {
         let Some(home) = self.home.folders.bounds.borrow().get(id).copied() else { return };
         let grab = (((at.x - home.left()) / home.size.width).clamp(0., 1.), ((at.y - home.top()) / home.size.height).clamp(0., 1.));
         let r = [f32::from(home.left()), f32::from(home.top()), f32::from(home.size.width), f32::from(home.size.height)];
-        self.home.folders.drag = Some(HomeDrag { id: id.to_string(), start: at, at, started: false, grab, home, rect: Spring::new(r), over: None, returning: false, last: None });
+        self.home.folders.drag = Some(HomeDrag { id: id.to_string(), start: at, at, started: false, grab, home, rect: Spring::new(r), over: None, returning: false, last: None, touch: false });
     }
 
     /// Before the drag starts the pointer is tracked by the home body.
@@ -422,6 +434,51 @@ impl Workspace {
             self.row_menu = None;
             cx.notify();
         }
+    }
+
+    /// Touch: a long press on a document card picks it up at once (there is
+    /// no pointer to move 5pt first). Returns whether it did.
+    fn touch_home_press(&mut self, id: &str, at: Point<Pixels>, cx: &mut Context<Self>) -> bool {
+        self.arm_home_drag(id, at, cx);
+        let Some(d) = self.home.folders.drag.as_mut() else { return false };
+        d.started = true;
+        d.touch = true;
+        log::info!("touch: home card {id} picked up at {at:?}");
+        self.row_menu = None;
+        cx.notify();
+        true
+    }
+
+    /// Touch: the rest of a long press that picked a card up.
+    fn on_home_long_press(&mut self, ev: &LongPressEvent, cx: &mut Context<Self>) {
+        if !self.home.folders.drag.as_ref().is_some_and(|d| d.touch) { return; }
+        match ev.phase {
+            TouchPhase::Started => {}
+            TouchPhase::Moved => self.move_home_drag(ev.position, cx),
+            TouchPhase::Ended => {
+                log::info!("touch: home card let go at {:?} over {:?}", ev.position, self.home.folders.drag.as_ref().and_then(|d| d.over.clone()));
+                self.move_home_drag(ev.position, cx);
+                self.end_home_drag(cx);
+            }
+            // Taken away (a system gesture): it flies back.
+            TouchPhase::Cancelled => {
+                log::info!("touch: home card drag cancelled");
+                if let Some(d) = self.home.folders.drag.as_mut() { d.over = None; }
+                self.end_home_drag(cx);
+            }
+        }
+    }
+
+    /// Touch: a document card's long press, which picks it up. The hitbox makes
+    /// a menu or the sidebar's drawer over the card take the press instead.
+    pub(crate) fn home_card_hold(&self, id: &str, cx: &mut Context<Self>) -> impl IntoElement {
+        let (id, ws) = (id.to_string(), cx.entity());
+        canvas(|b, window, _| window.insert_hitbox(b, HitboxBehavior::Normal), move |_, hitbox, window, _| {
+            window.on_mouse_event(move |ev: &LongPressEvent, phase, window, cx| {
+                if phase != DispatchPhase::Bubble || ev.phase != TouchPhase::Started || !hitbox.is_hovered(window) { return; }
+                if ws.update(cx, |w, cx| w.touch_home_press(&id, ev.position, cx)) { window.prevent_default(); cx.stop_propagation(); }
+            });
+        }).absolute().inset_0()
     }
 
     pub(crate) fn home_dragging(&self, id: &str) -> bool {
@@ -476,10 +533,21 @@ impl Workspace {
 
     pub(crate) fn render_home_drag_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !matches!(self.view, crate::app::View::Home | crate::app::View::Folder) { self.home.folders.drag = None; return None; }
+        let now = Instant::now();
+        let dt = self.home.folders.drag.as_ref().and_then(|d| d.last).map_or(1. / 120., |t| now.duration_since(t).as_secs_f32().min(0.032));
+        // Touch: held near the grid's top or bottom, the grid scrolls under the
+        // card, and the folder under it is looked for again.
+        if let Some(at) = self.home.folders.drag.as_ref().filter(|d| d.touch && d.started && !d.returning).map(|d| d.at) {
+            let scroll = self.home_grid_scroll(self.view == crate::app::View::Folder);
+            let (v, off, max) = (scroll.bounds(), scroll.offset(), scroll.max_offset());
+            let dir = edge_scroll(f32::from(at.y), f32::from(v.top()), f32::from(v.bottom()));
+            let y = (off.y - px(dir * EDGE_SPEED * dt)).clamp(-max.y, px(0.));
+            if y != off.y { scroll.set_offset(point(off.x, y)); }
+            self.move_home_drag(at, cx);
+        }
         let folder_bounds = self.home.folders.drag.as_ref().and_then(|d| d.over.clone()).and_then(|f| self.home.folders.bounds.borrow().get(&f).copied());
         let d = self.home.folders.drag.as_mut().filter(|d| d.started)?;
-        let now = Instant::now();
-        let dt = d.last.replace(now).map_or(1. / 120., |t| now.duration_since(t).as_secs_f32().min(0.032));
+        d.last = Some(now);
         if !d.returning {
             // The size a paper has inside a folder, from pickup to drop.
             let (mut x, mut y) = (f32::from(d.at.x) - d.grab.0 * MINI_W, f32::from(d.at.y) - d.grab.1 * MINI_H);
@@ -499,7 +567,13 @@ impl Workspace {
         // painted straight onto the GPU: nothing is laid out while it moves.
         let paper = Paper { cx: w / 2., cy: h / 2., w, h, rot: 0., seed: seed(&e.id) };
         let lines = canvas(|_, _, _| {}, move |b, _, window, _| paper.paint(b.origin, Face::Sketch, window)).absolute().inset_0();
-        let layer = div().id("home-drag-overlay").absolute().inset_0().occlude().cursor(CursorStyle::ClosedHand)
+        let ws = cx.entity();
+        let held = canvas(|_, _, _| {}, move |_, _, window, _| {
+            window.on_mouse_event(move |ev: &LongPressEvent, phase, _, cx| {
+                if phase == DispatchPhase::Bubble { ws.update(cx, |w, cx| w.on_home_long_press(ev, cx)); }
+            });
+        }).absolute().inset_0();
+        let layer = div().id("home-drag-overlay").absolute().inset_0().occlude().cursor(CursorStyle::ClosedHand).child(held)
             .on_mouse_move(cx.listener(|w, ev: &MouseMoveEvent, _, cx| {
                 if ev.pressed_button != Some(MouseButton::Left) { w.cancel_home_drag(cx); return; }
                 w.move_home_drag(ev.position, cx);
@@ -847,5 +921,20 @@ impl Workspace {
         })).absolute().inset_0();
         let veil = theme::raised(Theme::bg_body()).opacity(0.86 * d.veil.p.clamp(0., 1.));
         Some(div().absolute().inset_0().bg(veil).child(edge).flex().items_center().justify_center().child(middle).into_any_element())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::edge_scroll;
+
+    #[test]
+    fn a_carried_card_scrolls_the_grid_only_near_its_edges() {
+        assert_eq!(edge_scroll(110., 100., 900.), -1.);
+        assert_eq!(edge_scroll(500., 100., 900.), 0.);
+        assert_eq!(edge_scroll(880., 100., 900.), 1.);
+        // Past the edges (the finger on the toolbar above) it keeps going.
+        assert_eq!(edge_scroll(40., 100., 900.), -1.);
+        assert_eq!(edge_scroll(960., 100., 900.), 1.);
     }
 }

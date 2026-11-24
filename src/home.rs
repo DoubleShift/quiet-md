@@ -551,6 +551,12 @@ impl Workspace {
         Some(checkbox(if on { Check::On } else { Check::Off }, !on && sel.len() >= BATCH_LIMIT))
     }
 
+    /// The grid's scroll position, 主页's or a folder page's (a carried card scrolls it).
+    pub(crate) fn home_grid_scroll(&self, in_folder: bool) -> ScrollHandle {
+        let s = if in_folder { &self.home.folder_grid_scroll } else { &self.home.grid_scroll };
+        s.0.borrow().base_handle.clone()
+    }
+
     pub(crate) fn home_entries(&self) -> Vec<Entry> {
         match self.home.tab {
             // 我的文档 is the library's top level.
@@ -1084,6 +1090,7 @@ impl Workspace {
                     .id(SharedString::from(format!("home-card-{}", e.id)))
                     .when(check.is_none(), |d| d.on_mouse_down(MouseButton::Left, cx.listener(move |w, ev: &MouseDownEvent, _, cx| w.arm_home_drag(&arm, ev.position, cx))))
                     .child(self.record_home_card(&e.id))
+                    .when(check.is_none(), |d| d.child(self.home_card_hold(&e.id, cx)))
                     .w_full().min_w_0().h(px(card_h)).relative().group("home-card")
                     .flex_none()
                     // A loose sheet on the home page: squircle corners, a 0.5pt
