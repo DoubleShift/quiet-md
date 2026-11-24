@@ -235,7 +235,10 @@ fn images_and_attachments_are_copied() {
     assert!(src.ends_with("-图.png"), "{src}");
     assert_eq!((*width, caption.as_deref()), (Some(240.), Some("说明文字")));
     let f = b[3].text.runs[0].marks.inline.as_ref().and_then(|i| i.file()).unwrap();
-    assert!(f.src.ends_with("/说明.pdf") && f.name == "说明.pdf", "{f:?}");
+    // `.assets/files/<uuid>/说明.pdf`, with the platform's separator.
+    let src = Path::new(&f.src);
+    let dirs: Vec<String> = src.ancestors().skip(1).take(2).filter_map(|d| d.file_name()).map(|n| n.to_string_lossy().into_owned()).collect();
+    assert!(src.file_name().is_some_and(|n| n == "说明.pdf") && dirs.len() == 2 && dirs[0].len() == 36 && dirs[1] == "files" && f.name == "说明.pdf", "{f:?}");
     assert_eq!(report.missing_assets, ["assets/没有.png"]);
 }
 
@@ -276,13 +279,16 @@ fn snapshot(lib: &Path, report: &Report) -> String {
     files(lib, &mut pages);
     pages.sort();
     let random = regex::Regex::new(r"\.assets/(?:[0-9a-f]{8}-|files/[0-9a-f-]{36}/)").unwrap();
+    let in_library = regex::Regex::new(r#"<库>[^"]*"#).unwrap();
     let mut out = String::new();
     for p in pages {
         let xml = crate::vfs::read_to_string(&p).unwrap();
         // What the import wrote reads back to the same file.
         assert_eq!(crate::docxml::serialize(&crate::docxml::parse(&xml).unwrap()), xml, "{}", p.display());
+        // The library's own paths with `/` on every platform (Windows writes `\` in them today).
         let xml = xml.replace(&lib.to_string_lossy().to_string(), "<库>");
-        out.push_str(&format!("==== {}\n{}\n", p.strip_prefix(lib).unwrap().to_string_lossy(), random.replace_all(&xml, ".assets/…/")));
+        let xml = in_library.replace_all(&xml, |c: &regex::Captures| c[0].replace('\\', "/"));
+        out.push_str(&format!("==== {}\n{}\n", p.strip_prefix(lib).unwrap().to_string_lossy().replace('\\', "/"), random.replace_all(&xml, ".assets/…/")));
     }
     out.push_str(&format!("==== 报告\n笔记本 {}，文档 {}，失败 {:?}\n降级 {:?}\n块引用 {:?}\n失效引用 {:?}\n嵌入 {}，查询 {}\n数据库 {:?}\n缺失资源 {:?}\n属性 {}\n",
         report.notebooks, report.docs, report.failed, report.degraded, refs(&report.block_refs), refs(&report.broken_refs), report.embeds, report.queries, report.databases, report.missing_assets, report.attributes));
