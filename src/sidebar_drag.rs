@@ -237,14 +237,58 @@ impl Workspace {
         d.at = at;
         // A root's row is clicked, never dragged: roots don't move inside one another.
         if !d.started && crate::shared_store::root_of_row(&d.id).is_none() && (f32::from(at.x - d.start.x).hypot(f32::from(at.y - d.start.y)) >= 4.) {
-            d.started = true; d.lift.to = 1.;
-            self.folder_drag.icon_press = false;
-            self.folder_drag.icon_alt = false;
-            self.row_menu = None; self.create_menu = None;
-            window.focus(&self.focus, cx);
+            self.lift_folder_drag(window, cx);
         }
         self.project_folder_drop();
         cx.notify();
+    }
+
+    fn lift_folder_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(d) = self.folder_drag.active.as_mut() else { return };
+        d.started = true; d.lift.to = 1.;
+        self.folder_drag.icon_press = false;
+        self.folder_drag.icon_alt = false;
+        self.row_menu = None; self.create_menu = None;
+        window.focus(&self.focus, cx);
+    }
+
+    /// Touch: a long press on a row lifts it at once (as a press and a 4pt move
+    /// does with the mouse). Returns whether it did.
+    fn touch_row_press(&mut self, id: &str, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if crate::shared_store::root_of_row(id).is_some() { return false; }
+        self.arm_folder_drag(id, at, cx);
+        if self.folder_drag.active.is_none() { return false; }
+        log::info!("touch: sidebar row {id} picked up at {at:?}");
+        self.lift_folder_drag(window, cx);
+        self.project_folder_drop();
+        true
+    }
+
+    /// Touch: the rest of a long press that lifted a row.
+    fn on_row_long_press(&mut self, ev: &LongPressEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.folder_drag.active.as_ref().is_some_and(|d| d.started) { return; }
+        match ev.phase {
+            TouchPhase::Started => {}
+            TouchPhase::Moved => self.move_folder_drag(ev.position, window, cx),
+            TouchPhase::Ended => {
+                log::info!("touch: sidebar row let go at {:?}", ev.position);
+                self.move_folder_drag(ev.position, window, cx);
+                self.end_folder_drag(false, cx);
+            }
+            TouchPhase::Cancelled => { log::info!("touch: sidebar row drag cancelled"); self.end_folder_drag(true, cx); }
+        }
+    }
+
+    /// Touch: a row's long press, which lifts it. The hitbox keeps a menu over
+    /// the row from passing the press through.
+    pub(crate) fn sidebar_row_hold(&self, id: &str, cx: &mut Context<Self>) -> AnyElement {
+        let (id, ws) = (id.to_string(), cx.entity());
+        canvas(|b, window, _| window.insert_hitbox(b, HitboxBehavior::Normal), move |_, hitbox, window, _| {
+            window.on_mouse_event(move |ev: &LongPressEvent, phase, window, cx| {
+                if phase != DispatchPhase::Bubble || ev.phase != TouchPhase::Started || !hitbox.is_hovered(window) { return; }
+                if ws.update(cx, |w, cx| w.touch_row_press(&id, ev.position, window, cx)) { window.prevent_default(); cx.stop_propagation(); }
+            });
+        }).absolute().inset_0().into_any_element()
     }
 
     fn project_folder_drop(&mut self) {
@@ -875,7 +919,13 @@ impl Workspace {
 
     pub(crate) fn render_folder_drag_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let d = self.folder_drag.active.as_ref().filter(|d| d.started)?;
-        let mut layer = div().id("folder-drag-overlay").absolute().inset_0().occlude()
+        let ws = cx.entity();
+        let held = canvas(|_, _, _| {}, move |_, _, window, _| {
+            window.on_mouse_event(move |ev: &LongPressEvent, phase, window, cx| {
+                if phase == DispatchPhase::Bubble { ws.update(cx, |w, cx| w.on_row_long_press(ev, window, cx)); }
+            });
+        }).absolute().inset_0();
+        let mut layer = div().id("folder-drag-overlay").absolute().inset_0().occlude().child(held)
             .on_mouse_move(cx.listener(|w, ev: &MouseMoveEvent, window, cx| {
                 if ev.pressed_button != Some(MouseButton::Left) { w.end_folder_drag(true, cx); return; }
                 w.move_folder_drag(ev.position, window, cx);

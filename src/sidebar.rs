@@ -677,10 +677,13 @@ impl Workspace {
         let batch = self.batch.as_ref().filter(|_| key == "doc");
         let checked = batch.is_some_and(|b| b.contains(&e.id));
         let blocked = batch.is_some_and(|b| !checked && b.len() >= BATCH_LIMIT);
+        // Touch: a long press lifts a 我的文档 row, as a press and a move does with the mouse.
+        let hold = (key == "doc" && batch.is_none() && !renaming).then(|| self.sidebar_row_hold(&e.id, cx));
         self.row_base(e, key, cx)
             .h(px(DOC_ROW_H))
             .w_full()
             .relative()
+            .children(hold)
             .flex()
             .items_center()
             // In 我的文档 the selection pill and the hover wash are drawn under the row (`sidebar_drag.rs`).
