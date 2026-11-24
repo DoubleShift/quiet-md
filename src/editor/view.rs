@@ -1438,6 +1438,12 @@ impl Editor {
         }
         if extend && h.block != TITLE {
             drop(cache);
+            // Past a table cell's first / last line it selects that one cell (Feishu).
+            if let Some(s) = self.core.cell_edge_sel(h.block, down) {
+                self.core.select_cells(s);
+                self.goal_x = None;
+                return;
+            }
             let len = self.core.len_of(h.block);
             // At the edge of a block Shift+↑/↓ goes to the block edge first, then into block selection.
             if us[i].text && !down && h.offset > 0 {
@@ -2512,6 +2518,17 @@ impl Editor {
             return cx.notify();
         }
         let Some((pos, at_row_end)) = self.pos_at(ev.position) else { return };
+        // A press on a cell's left edge selects that one cell (Feishu).
+        if ev.click_count == 1
+            && !ev.modifiers.shift
+            && let Some(s) = self.cell_edge_at(pos.block, ev.position)
+        {
+            self.core.select_cells(s);
+            self.goal_x = None;
+            self.dragging = false;
+            self.restart_blink(window, cx);
+            return cx.notify();
+        }
         let eq = self.cache.borrow().get(&pos.block).and_then(|l| l.equation_at(ev.position));
         if let Some(ix) = eq
             && !ev.modifiers.shift
