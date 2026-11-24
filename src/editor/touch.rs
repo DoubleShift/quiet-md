@@ -10,7 +10,7 @@
 use super::core::{self, Pos, Selection};
 use super::keymap as k;
 use super::overlays::at;
-use super::view::Editor;
+use super::view::{BlockSub, Editor, Menu};
 use crate::design::toolbar::TOOLBAR_H;
 use crate::design::{Button, ButtonSize, Toolbar};
 use crate::feishu_theme::Theme;
@@ -92,6 +92,16 @@ impl Item {
             Item::SelectAll => crate::settings::text("全选"),
         }
     }
+}
+
+/// A tap on a block menu row that opens its submenu `s`, which a mouse opens
+/// by hovering. Out of touch mode it does nothing and lets the press through.
+pub(super) fn tap_sub(cx: &Context<Editor>, s: BlockSub) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
+    cx.listener(move |e: &mut Editor, _: &MouseDownEvent, _, cx| {
+        if !e.touch.on { return }
+        cx.stop_propagation();
+        if let Some(Menu::Block { sub, .. }) = &mut e.menu { *sub = Some(s); cx.notify() }
+    })
 }
 
 impl Editor {
@@ -185,7 +195,6 @@ impl Editor {
 
     /// Whether the format toolbar shows this frame (`overlays::toolbar`'s own test).
     fn toolbar_shown(&self, window: &Window) -> bool {
-        use super::view::Menu;
         let menu_ok = matches!(self.menu, None | Some(Menu::TurnInto | Menu::Align | Menu::Color | Menu::TbMore));
         menu_ok && !self.read_only && self.core.cell_sel.is_none() && !self.toolbar_hidden && !self.dragging && !self.core.sel.is_collapsed()
             && !self.core.in_block_mode() && self.slash.is_none() && self.focus.is_focused(window) && self.core.ordered().0.block != core::TITLE

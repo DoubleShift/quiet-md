@@ -177,7 +177,16 @@ fn add_below_row(open: bool, cx: &Context<Editor>) -> MenuItem {
                 cx.notify();
             }
         }))
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_mouse_down(MouseButton::Left, cx.listener(|e: &mut Editor, _: &MouseDownEvent, _, cx| {
+            cx.stop_propagation();
+            // No hover on a touch screen: a tap opens it.
+            if e.touch.on && let Some(Menu::Block { sub, .. }) = &mut e.menu && !matches!(sub, Some(BlockSub::Add(_))) {
+                *sub = Some(BlockSub::Add(usize::MAX));
+                e.size_pick = (0, 0);
+                e.slash_scroll.set_offset(Point::default());
+                cx.notify();
+            }
+        }))
 }
 
 /// Split the basic grid into rows of 6, a plain 6-column grid, so items
@@ -731,11 +740,12 @@ impl Editor {
         let (indent_icon, indent_label) = if shape == menus::MenuShape::Text && !self.markdown { ("indent-align", crate::settings::text("缩进和对齐")) } else { ("indent-increase", crate::settings::text("缩进")) };
         m = m.child(
             row("bm-indent", indent_icon, indent_label, true, sub == Some(BlockSub::Indent))
-                .on_mouse_move(set_sub(Some(BlockSub::Indent))),
+                .on_mouse_move(set_sub(Some(BlockSub::Indent)))
+                .on_mouse_down(MouseButton::Left, super::touch::tap_sub(cx, BlockSub::Indent)),
         );
         let colorable = shape == menus::MenuShape::Text && !self.markdown;
         if colorable {
-            m = m.child(row("bm-color", "palette", crate::settings::text("颜色"), true, sub == Some(BlockSub::Color)).on_mouse_move(set_sub(Some(BlockSub::Color))));
+            m = m.child(row("bm-color", "palette", crate::settings::text("颜色"), true, sub == Some(BlockSub::Color)).on_mouse_move(set_sub(Some(BlockSub::Color))).on_mouse_down(MouseButton::Left, super::touch::tap_sub(cx, BlockSub::Color)));
         }
         let adding = matches!(sub, Some(BlockSub::Add(_)));
         m = m
@@ -1749,7 +1759,7 @@ impl Editor {
         let m = Popover::new("block-menu")
             .menu()
             .w(px(MENU_W))
-            .child(row("bm-indent", "indent-align", crate::settings::text("缩进"), true, sub == Some(BlockSub::Indent)).on_mouse_move(set_sub(Some(BlockSub::Indent))))
+            .child(row("bm-indent", "indent-align", crate::settings::text("缩进"), true, sub == Some(BlockSub::Indent)).on_mouse_move(set_sub(Some(BlockSub::Indent))).on_mouse_down(MouseButton::Left, super::touch::tap_sub(cx, BlockSub::Indent)))
             .child(separator_h().on_mouse_move(set_sub(None)))
             .child(plain("bm-cut", "scissors", crate::settings::text("剪切"), BlockAct::Cut))
             .child(plain("bm-copy", "copy", crate::settings::text("复制"), BlockAct::Copy))
