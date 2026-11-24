@@ -1575,12 +1575,18 @@ impl Editor {
                         }
                     });
                 }
-                // Touch screens (iOS): long press to select.
+                // Touch screens (iOS): long press to select, selection handles.
                 {
                     let e = entity.clone();
                     window.on_mouse_event(move |ev: &LongPressEvent, phase, window, cx| {
                         if phase == DispatchPhase::Bubble && (ev.phase != TouchPhase::Started || bounds.contains(&ev.start_position)) {
                             e.update(cx, |ed, cx| ed.on_long_press(ev, window, cx));
+                        }
+                    });
+                    let e = entity.clone();
+                    window.on_mouse_event(move |ev: &TouchDragEvent, phase, window, cx| {
+                        if phase == DispatchPhase::Bubble && (ev.phase != TouchPhase::Started || bounds.contains(&ev.start_position)) {
+                            e.update(cx, |ed, cx| ed.on_touch_drag(ev, window, cx));
                         }
                     });
                 }

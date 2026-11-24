@@ -70,6 +70,7 @@ Write one command per line. Lines beginning with `#` are comments. See the top o
 - `FDL_NOPARK` keeps the window on screen.
 - `FDL_WINDOW_CAPTURE` uses the window server to capture system-drawn window controls.
 - `FDL_NOBLINK` disables caret blinking (set by `compare.py`).
+- `FDL_TOUCH` starts the editor in touch mode and keeps it there when the mouse moves (`src/editor/touch.rs`): selection handles, the edit menu after a double click or a second click on the caret, and a click's block handle instead of hover.
 - `FDL_RECORD_FPS` sets the recording frame rate (default 30).
 - `QUIET_MD_FONT_URL`, `QUIET_MD_FONT_DIR` and `QUIET_MD_TRIAL_FONTS` are passed through: downloadable fonts (the board's Xiaolai, document fonts) are fetched from that folder into that cache, a compiled-in Xiaolai is ignored, and the trial fonts are listed (docs/FONTS.md). `python3 tools/harness/board_font.py` checks the board's font and its download note, `python3 tools/harness/doc_fonts.py` the document font list (`--compare` shoots an article in every font).
 - `QUIET_MD_UPDATE_URL` is passed through: the updater reads that folder instead of download.quiet.md. To test forced updates see docs/UPDATES.md. Downloads land in `~/Library/Caches/com.s1dashu.quietmd` of the `HOME` the app sees.

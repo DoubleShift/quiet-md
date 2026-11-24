@@ -33,4 +33,5 @@ mod subpages;
 pub mod table;
 pub use fdl_core::editor::table_ops;
 pub mod text;
+mod touch;
 pub mod view;

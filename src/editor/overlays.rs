@@ -298,6 +298,7 @@ impl Editor {
             if let Some(Menu::Ctx { pos, kind: kind @ CtxKind::ReadOnly { .. }, sub }) = self.menu.clone() {
                 out.extend(self.ctx_menu(pos, kind, sub, cx));
             }
+            out.extend(self.touch_layers(window, cx));
             return out;
         }
         let menu_el = match self.menu.clone() {
@@ -329,6 +330,7 @@ impl Editor {
         out.extend(self.button_layers(window, cx));
         out.extend(self.reminder_layers(window, cx));
         out.extend(self.countdown_overlays(window, cx));
+        out.extend(self.touch_layers(window, cx));
         out
     }
 
@@ -344,6 +346,8 @@ impl Editor {
             // to drag anything.
             Some(Menu::Ctx { .. }) => None,
             Some(Menu::Block { block, .. }) | Some(Menu::Add { block, .. }) => Some(*block),
+            // No hover on a touch screen: the block a tap was in.
+            _ if self.touch.on => self.touch.handle.filter(|_| !self.typing),
             _ => self.hover.filter(|_| !self.hover_clipped && !self.typing),
         }
     }
