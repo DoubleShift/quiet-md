@@ -3,7 +3,8 @@ use crate::store::Entry;
 use crate::theme::{self, Theme};
 use crate::ui::{icon, ui_text};
 use gpui::{prelude::FluentBuilder, *};
-use std::{cell::Cell, collections::{HashMap, HashSet, VecDeque}, rc::Rc};
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::{cell::Cell, collections::{HashSet, VecDeque}, rc::Rc};
 use web_time::Instant;
 
 const PITCH: f32 = crate::sidebar::ROW_H + crate::sidebar::ROW_GAP;
@@ -13,8 +14,14 @@ const PITCH: f32 = crate::sidebar::ROW_H + crate::sidebar::ROW_GAP;
 fn animate_folding() -> bool { crate::settings::motion_high() }
 const INDENT: f32 = 18.;
 
+/// A row of the tree; its entry is shared with the cached rows (`RowCache`).
 #[derive(Clone)]
-struct Row { entry: Entry, depth: usize }
+struct Row { entry: Rc<Entry>, depth: usize }
+
+/// The tree's rows, kept while nothing they are made of changes: building them
+/// walks every entry, most of a frame in a vault of 15,000 notes.
+#[derive(Default)]
+struct RowCache { key: u64, order: Option<crate::home::Order>, expanded: HashSet<String>, rows: Vec<Row>, parents: HashSet<String> }
 
 /// A row whose middle a drop goes into: a plain folder. A document, one with child pages (#357)
 /// too, only opens a slot before or after it (#418): dropping on a page reorders, never nests.
@@ -160,13 +167,13 @@ struct PendingMove { id: String, parent: Option<String>, before: Option<String>,
 pub(crate) struct SidebarDrag {
     pub active: Option<Drag>,
     bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
-    springs: HashMap<String, Spring>,
+    springs: FxHashMap<String, Spring>,
     last_frame: Option<Instant>,
     pending: VecDeque<PendingMove>,
     saving: bool,
-    fx: HashMap<String, RowFx>,
+    fx: FxHashMap<String, RowFx>,
     shown: Vec<Row>,
-    leaving: HashMap<String, Leaving>,
+    leaving: FxHashMap<String, Leaving>,
     hovered: Option<String>,
     primed: bool,
     pill: Option<Pill>,
@@ -183,8 +190,8 @@ pub(crate) struct SidebarDrag {
     /// (its chevron), and whether ⌥ was down: that folds the whole subtree.
     pub icon_press: bool,
     pub icon_alt: bool,
-    /// Folders with something in them (they get a chevron), rebuilt each frame.
-    parents: HashSet<String>,
+    /// The tree's rows, and the folders with something in them (they get a chevron).
+    rows: std::cell::RefCell<RowCache>,
 }
 
 impl SidebarDrag {
@@ -192,7 +199,7 @@ impl SidebarDrag {
     pub(crate) fn reveal(&self, id: &str) -> f32 { self.fx.get(id).map_or(0., |f| f.hover.unit()) }
     /// The folder icon's scale (rests at 1, bounces when kicked).
     pub(crate) fn pop(&self, id: &str) -> f32 { self.fx.get(id).map_or(1., |f| f.pop.p.max(0.5)) }
-    pub(crate) fn has_children(&self, id: &str) -> bool { self.parents.contains(id) }
+    pub(crate) fn has_children(&self, id: &str) -> bool { self.rows.borrow().parents.contains(id) }
     /// How far the rename field on `id` has faded in (0–1).
     pub(crate) fn rename_in(&self, id: &str) -> f32 { self.rename_fx.as_ref().filter(|(r, _)| r == id).map_or(1., |(_, f)| f.unit()) }
     pub(crate) fn kick(&mut self, id: &str, v: f32) { if let Some(f) = self.fx.get_mut(id) { f.pop.v += v; } }
@@ -215,11 +222,20 @@ fn faded(shadows: Vec<BoxShadow>, a: f32) -> Vec<BoxShadow> {
     shadows.into_iter().map(|mut s| { s.color = s.color.opacity(a); s }).collect()
 }
 
+
 impl Workspace {
     fn drag_rows(&self) -> Vec<Row> {
-        crate::tree::Tree::with_order(&self.entries, Some(self.home.order())).rows(|id| self.expanded.contains(id)).into_iter()
-            .filter(|(e, _)| self.folder_drag.active.as_ref().is_none_or(|d| !d.started || !d.excluded.contains(&e.id)))
-            .map(|(e, depth)| Row { entry: e.clone(), depth }).collect()
+        let (key, order) = (crate::tree::shape_key(&self.entries), self.home.order());
+        let mut c = self.folder_drag.rows.borrow_mut();
+        if c.key != key || c.order != Some(order) || c.expanded != self.expanded {
+            c.rows = crate::tree::Tree::with_order(&self.entries, Some(order)).rows(|id| self.expanded.contains(id)).into_iter()
+                .map(|(e, depth)| Row { entry: Rc::new(crate::tree::face(e)), depth }).collect();
+            // A folder's 正文 is its own row, not something inside it.
+            let notes: HashSet<&str> = self.entries.iter().filter_map(|e| e.note.as_deref()).collect();
+            let parents = self.entries.iter().filter(|e| !notes.contains(e.id.as_str())).filter_map(|e| e.meta.parent.clone()).collect();
+            *c = RowCache { key, order: Some(order), expanded: self.expanded.clone(), rows: std::mem::take(&mut c.rows), parents };
+        }
+        c.rows.iter().filter(|r| self.folder_drag.active.as_ref().is_none_or(|d| !d.started || !d.excluded.contains(&r.entry.id))).cloned().collect()
     }
 
     pub(crate) fn arm_folder_drag(&mut self, id: &str, at: Point<Pixels>, cx: &mut Context<Self>) {
@@ -255,6 +271,8 @@ impl Workspace {
 
     fn project_folder_drop(&mut self) {
         let Some(bounds) = self.folder_drag.bounds.get() else { return };
+        // Each frame calls this: the rows are only built while a row is dragged.
+        if !self.folder_drag.active.as_ref().is_some_and(|d| d.started) { return }
         let rows = self.drag_rows();
         let Some(d) = self.folder_drag.active.as_mut().filter(|d| d.started) else { return };
         let y = f32::from(d.at.y - d.offset.y - bounds.top()) + crate::sidebar::ROW_H / 2.;
@@ -480,9 +498,6 @@ impl Workspace {
         let mut moving = false;
 
         let renaming = self.rename.as_ref().map(|r| r.id.clone());
-        // A folder's 正文 is its own row, not something inside it.
-        let notes: std::collections::HashSet<&str> = self.entries.iter().filter_map(|e| e.note.as_deref()).collect();
-        self.folder_drag.parents = self.entries.iter().filter(|e| !notes.contains(e.id.as_str())).filter_map(|e| e.meta.parent.clone()).collect();
         let high = crate::settings::motion_high();
         // The visible band in this list's coordinates, from last frame's layout. Both edges are
         // measured against the list itself (sections above it scroll too), and padded so a
@@ -494,7 +509,7 @@ impl Workspace {
         let vis_top = visible.map_or(f32::MIN, |b| f32::from(sb.top() - b.top()) - pad);
         // ---- Step every spring; nothing below this block mutates.
         let fd = &mut self.folder_drag;
-        let index: HashMap<&str, usize> = rows.iter().enumerate().map(|(i, r)| (r.entry.id.as_str(), i)).collect();
+        let index: FxHashMap<&str, usize> = rows.iter().enumerate().map(|(i, r)| (r.entry.id.as_str(), i)).collect();
         let targets: Vec<[f32; 3]> = rows.iter().enumerate().map(|(i, r)| {
             let y = (i + usize::from(slot.is_some_and(|(index, _)| i >= index))) as f32 * PITCH;
             let x = r.depth as f32 * INDENT;
@@ -515,7 +530,7 @@ impl Workspace {
                 let Some(&i) = index.get(f.as_str()) else { continue };
                 if under(&rows, i).is_empty() { continue; }
                 if !animate_folding() {
-                    instant.extend(under(&rows, i).into_iter().map(|r| r.entry.id));
+                    instant.extend(under(&rows, i).into_iter().map(|r| r.entry.id.clone()));
                     started = true;
                     continue;
                 }
@@ -560,7 +575,7 @@ impl Workspace {
             started = true;
         }
         // Rows that vanished without their folder closing fade out where they were.
-        let present: HashSet<&str> = rows.iter().map(|r| r.entry.id.as_str()).collect();
+        let present: FxHashSet<&str> = rows.iter().map(|r| r.entry.id.as_str()).collect();
         for r in std::mem::take(&mut fd.shown) {
             if present.contains(r.entry.id.as_str()) || dragged.as_ref() == Some(&r.entry.id) { continue; }
             let Some(pos) = fd.springs.remove(&r.entry.id) else { continue };
@@ -903,7 +918,7 @@ mod tests {
     fn row(kind: &str, depth: usize) -> Row {
         let meta = crate::store::Meta { folder: (kind != "doc").then(String::new), ..Default::default() };
         let note = (kind == "page").then(|| "note".to_string());
-        Row { entry: Entry { id: kind.into(), meta, title: String::new(), icon: None, body: "".into(), reminders: vec![], links: vec![], note, top: String::new() }, depth }
+        Row { entry: Entry { id: kind.into(), meta, title: String::new(), icon: None, body: "".into(), reminders: vec![], links: vec![], note, top: String::new() }.into(), depth }
     }
 
     /// #418: a drop on a document, one with child pages too, reorders; only a folder takes it in.

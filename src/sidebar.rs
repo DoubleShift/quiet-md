@@ -96,9 +96,6 @@ impl Workspace {
     }
 
     pub(crate) fn render_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let mut entries: Vec<Entry> = self.entries.clone();
-        // 置顶 follows the same order as the lists below it.
-        crate::home::sort_entries(&mut entries, self.home.order());
         self.more_bounds.borrow_mut().clear();
         self.settle_sidebar_drop(cx);
         crate::devtools::rows_begin(window);
@@ -154,7 +151,11 @@ impl Workspace {
 
         let mut list = div().flex().flex_col().px(px(SB_X)).pb(px(8.));
         // Pinned docs are shortcuts: they stay in 我的文档 too.
-        let pinned: Vec<&Entry> = entries.iter().filter(|e| e.meta.pinned).collect();
+        // 置顶 follows the same order as the lists below it. Only the pinned are
+        // sorted: copying and sorting every entry each frame cost 3 ms in a big library.
+        let order = self.home.order();
+        let mut pinned: Vec<&Entry> = self.entries.iter().filter(|e| e.meta.pinned).collect();
+        pinned.sort_by(|a, b| order.cmp(a, b));
         if !pinned.is_empty() {
             list = list.child(self.section(0, crate::settings::text("置顶"), cx));
             if !self.folded[0] {

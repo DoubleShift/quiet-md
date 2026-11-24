@@ -104,3 +104,89 @@ Measured 2026-11-25 on the same Mac mini, but with another build of the app busy
 - The thumb stays under the pointer, the end of the track is the end of the document, and letting go mid-drag leaves the thumb where it was, on both documents.
 - Rendering is unchanged: screenshots of the compilation (top and three wheel positions), the guides (Writing and formatting, Welcome, Playground), and a Chinese page with quotes in the default face, Songti SC, PingFang SC, Hiragino Sans GB and Heiti SC are identical to main's, pixel for pixel (`tools/harness/compare.py`).
 - Wheel scrolling did not slow down: five alternating runs of 300 steps of 40 pt each way, mean 3.48 / 2.90 ms (down / up) against main's 3.57 / 2.92, with fewer frames over 8.3 ms (65 against 160). Opening the compilation, first frame 30.8-34.0 ms against 33.2-35.8. Typing and backspacing ([readme-performance.txt](../tools/harness/examples/readme-performance.txt)) are unchanged within the noise.
+
+## Large libraries
+
+A user who imported an Obsidian vault of more than 15,000 Markdown notes found browsing almost unusable. This section measures that case before and after the fix on `perf/big-library`.
+
+### Environment
+
+| Item | Value |
+|---|---|
+| Date | 2026-11-25 |
+| Source | `ce2dd1d` (before) and `perf/big-library` on top of it (after), `cargo build --release --locked --features devtools` |
+| Machine | Mac mini, Apple M6 (2 performance and 4 efficiency cores), 16 GiB, macOS 27.2 |
+| Window | 1280 × 800 pt at 2× scale |
+| Library | `gen_library.py --vault 15000`: 15,000 Markdown notes in 174 folders up to three deep, one flat `Inbox` of 3,016 notes, 200 images, wiki links, relative Markdown links, tags and front matter, plus `.obsidian/` |
+
+### Method
+
+[big-library.txt](../tools/harness/examples/big-library.txt) opens the vault and times idle frames with `bench 60 noop` in seven views, each 4 seconds after getting there so that card previews have loaded. `Inbox` changed last, so the window opens on its page with `Inbox` open in the sidebar:
+
+| View | What is on screen |
+|---|---|
+| Inbox open | The `Inbox` page of 3,016 cards, `Inbox` open in the sidebar (about 3,500 rows) |
+| Inbox closed | The same page, `Inbox` closed in the sidebar (about 460 rows) |
+| Opened again | As the first |
+| Sidebar scrolled | The same, the sidebar scrolled |
+| Home | 主页 with the `Inbox` folder card |
+| Home scrolled | The same, 主页 scrolled |
+| Document | A note from `Inbox` |
+
+Each build ran the script five times, the two builds alternating (`ce2dd1d` has no `row` step yet, so both were driven by the same clicks given as coordinates). On this machine the main thread runs either on a performance core or, when those are busy, on an efficiency core, where every frame takes two to three times as long; a run can switch between the two at any point, and a library of 300 notes shows the same two levels. The frame table gives the best P50 of the five runs, which is the frame on a performance core, and the median of the five P50s.
+
+Because frame times move with the machine's load, four views were also profiled with `sample` for 8 seconds of `bench 1500 noop`: the main thread's share of samples in `Window::draw`, `Workspace::render` and `render_sidebar`, times the mean frame, is the time each of them takes in a frame. These numbers change much less from run to run.
+
+### Results
+
+Frame P50 in milliseconds, best of five runs (median of five):
+
+| View | Before | After | 300 notes, before |
+|---|---:|---:|---:|
+| Inbox open | 15.8 (16.0) | 9.5 (10.5) | 6.4 |
+| Inbox closed | 21.1 (28.7) | 10.1 (20.6) | 6.8 |
+| Opened again | 23.6 (29.7) | 7.2 (20.8) | 8.6 |
+| Sidebar scrolled | 24.6 (29.0) | 7.7 (22.6) | 10.3 |
+| Home | 29.5 (30.4) | 9.6 (23.9) | 8.4 |
+| Home scrolled | 27.2 (29.2) | 10.2 (22.1) | 13.5 |
+| Document | 24.8 (26.8) | 2.7 (11.3) | 7.3 |
+
+The last column is the same script on `gen_library.py --vault 300` (best of three). After the fix a frame in the 15,000-note vault costs about what it costs in a library of 300 notes.
+
+Main-thread time per frame in milliseconds, before → after (`sample`):
+
+| View | `Window::draw` | `Workspace::render` | of which `render_sidebar` |
+|---|---:|---:|---:|
+| Inbox open | 7.2 → 0.9 | 6.7 → 0.6 | 6.7 → 0.5 |
+| Inbox closed | 8.1 → 2.7 | 6.7 → 1.2 | 6.1 → 0.9 |
+| Home | 7.9 → 1.9 | 5.2 → 0.5 | 5.1 → 0.4 |
+| Document | 5.0 → 1.4 | 4.8 → 0.9 | 4.7 → 0.8 |
+
+Before the fix, most of each frame went to work that grows with the library and was redone on every frame, even with nothing changing:
+
+- The sidebar copied all 15,000 entries and sorted them to order the pinned ones, rebuilt the whole page tree, hashing every id, twice (once more for a drag that was not happening), and copied the entry of every row in the tree, links and reminders included.
+- A folder card on Home walked every entry once for each folder under it and copied every document below it, to paint the newest four.
+- Home and a folder's page copied and sorted their whole level, 3,016 entries for `Inbox`, and copied it once more for the grid.
+
+Now only the pinned entries are sorted, and the rest is built once and kept until something it shows changes (`tree::shape_key`, a hash of every field the rows and cards show or are sorted by), so an unchanged frame does none of it. The tree build itself looks up only the folders instead of every id. What is left of `render_sidebar` is mostly `shape_key` (about 0.25 ms a frame) and the rows' spring state. Screenshots of every view above, the row menu and `examples/menus.txt` are pixel-identical before and after (`compare.py`).
+
+### Still on the main thread
+
+These grow with the library too and are not changed yet, because they are in `store.rs` and `app.rs`. Times are for the 15,000-note vault, with a library of 300 notes in parentheses, taken directly from `Store`:
+
+| Operation | When | Time |
+|---|---|---:|
+| `Store::list`, the first time | Opening a library for the first time: every note is read | 2.0 s |
+| `Store::list` | Every time the window comes forward, and 2 s after files change on disk | 82 ms (3 ms) |
+| `Store::save_editor` | Every autosave while typing | 100 ms (20 ms) |
+
+About half of `list` and of each save is `Store::begin_write` merging every device's metadata again (`load_meta`); saving also compares the whole index before writing it (`meta::commit_over`). Starting with a parsed cache from an earlier launch adds about 0.2 s over a small library.
+
+### Reproduce
+
+```sh
+cargo build --release --locked --features devtools
+python3 tools/perf/gen_library.py --vault 15000 /tmp/quiet-big/vault
+python3 tools/harness/run.py tools/harness/examples/big-library.txt /tmp/quiet-big/vault /tmp/quiet-big/run
+grep -a bench /tmp/quiet-big/run/log
+```

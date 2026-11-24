@@ -395,7 +395,12 @@ pub struct Home {
     anchors: Rc<RefCell<HashMap<&'static str, Bounds<Pixels>>>>,
     /// Folder cards and dragging into them (`home_folder.rs`).
     pub(crate) folders: crate::home_folder::HomeFolders,
+    /// The level last shown, kept while nothing its cards show changed:
+    /// copying and sorting a folder of 3,000 notes took most of a frame.
+    level: RefCell<Option<Level>>,
 }
+
+struct Level { key: u64, parent: Option<String>, order: Order, entries: Rc<Vec<Entry>> }
 
 impl Default for Home {
     fn default() -> Self {
@@ -417,6 +422,7 @@ impl Default for Home {
             thumbs: Default::default(),
             anchors: Default::default(),
             folders: Default::default(),
+            level: Default::default(),
         }
     }
 }
@@ -551,19 +557,25 @@ impl Workspace {
         Some(checkbox(if on { Check::On } else { Check::Off }, !on && sel.len() >= BATCH_LIMIT))
     }
 
-    pub(crate) fn home_entries(&self) -> Vec<Entry> {
+    pub(crate) fn home_entries(&self) -> Rc<Vec<Entry>> {
         match self.home.tab {
             // 我的文档 is the library's top level.
             HomeTab::Recent => self.level_entries(None),
-            HomeTab::Starred => self.sorted_entries(self.entries.iter().filter(|e| e.meta.folder.is_none() && e.meta.starred > 0).cloned().collect()),
+            HomeTab::Starred => Rc::new(self.sorted_entries(self.entries.iter().filter(|e| e.meta.folder.is_none() && e.meta.starred > 0).cloned().collect())),
         }
     }
 
     /// One level of the tree as 主页 shows it (a folder's page uses it too).
-    pub(crate) fn level_entries(&self, parent: Option<&str>) -> Vec<Entry> {
+    /// Cards show no body, links or reminders: the entries come without them (`tree::face`).
+    pub(crate) fn level_entries(&self, parent: Option<&str>) -> Rc<Vec<Entry>> {
+        let (key, order) = (crate::tree::shape_key(&self.entries), self.home.order());
+        let mut level = self.home.level.borrow_mut();
+        if let Some(l) = level.as_ref().filter(|l| l.key == key && l.order == order && l.parent.as_deref() == parent) { return l.entries.clone(); }
         // A folder's 正文 is the folder's own card, not one inside it.
         let notes: std::collections::HashSet<&str> = self.entries.iter().filter_map(|e| e.note.as_deref()).collect();
-        self.sorted_entries(self.entries.iter().filter(|e| e.meta.parent.as_deref() == parent && !notes.contains(e.id.as_str())).cloned().collect())
+        let entries = Rc::new(self.sorted_entries(self.entries.iter().filter(|e| e.meta.parent.as_deref() == parent && !notes.contains(e.id.as_str())).map(crate::tree::face).collect()));
+        *level = Some(Level { key, parent: parent.map(str::to_string), order, entries: entries.clone() });
+        entries
     }
 
     pub(crate) fn prepare_manual_order(&mut self, cx: &mut Context<Self>) -> bool {
@@ -816,7 +828,7 @@ impl Workspace {
             .flex()
             .items_center();
         let toolbar = if let Some(sel) = &self.batch {
-            let ids: Vec<String> = self.home_entries().into_iter().take(crate::sidebar::BATCH_LIMIT).map(|e| e.id).collect();
+            let ids: Vec<String> = self.home_entries().iter().take(crate::sidebar::BATCH_LIMIT).map(|e| e.id.clone()).collect();
             let n = sel.len();
             let all = n > 0 && ids.iter().all(|id| sel.contains(id));
             use crate::sidebar::{Check, checkbox};
@@ -955,11 +967,11 @@ impl Workspace {
             .child(div().relative().flex_1().min_h_0().flex().flex_col().child(rows).child(self.home.list_scrollbar.render(list_scroll))).into_any_element()
     }
 
-    pub(crate) fn render_home_grid(&self, entries: &[Entry], in_folder: bool, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_home_grid(&self, entries: &Rc<Vec<Entry>>, in_folder: bool, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let grid_scroll = if in_folder { &self.home.folder_grid_scroll } else { &self.home.grid_scroll };
         let main_w = f32::from(window.viewport_size().width) - if self.sidebar_open { self.sidebar_w(window) } else { 0. };
         let avail = (main_w - 48.).max(1.);
-        let entries = entries.to_vec();
+        let entries = entries.clone();
         let mixed = entries.iter().any(|e| e.meta.folder.is_some() && e.note.is_none());
         // Folders spill past their cell (shadow, tab, the front flaring open), so
         // a level holding them gets more air between cells.
