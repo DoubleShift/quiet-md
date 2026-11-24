@@ -1,6 +1,6 @@
 # Vendored patches
 
-Quiet.md takes GPUI from the [Zed repository](https://github.com/zed-industries/zed). The tree in `vendor/zed` combines a pinned upstream snapshot and an ordered local patch series. `vendor/zed/upstream.toml` records the commit and selected crates. Numbered patches in `vendor/zed/patches` produce `vendor/zed/crates`, which the app consumes through Cargo path dependencies. Patched sites carry a `quiet.md:` comment.
+Quiet.md takes GPUI from the [Zed repository](https://github.com/zed-industries/zed). The tree in `vendor/zed` combines a pinned upstream snapshot and an ordered local patch series. `vendor/zed/upstream.toml` records the commit and selected crates. Numbered patches in `vendor/zed/patches`, applied in number order, produce `vendor/zed/crates`, which the app consumes through Cargo path dependencies. Patched sites carry a `quiet.md:` comment.
 
 Vendoring the selected crates avoids fetching the entire Zed repository for a contributor's first build or CI run.
 
@@ -24,15 +24,30 @@ The root Cargo.toml excludes the vendored crates from workspace tests and clippy
 # Define a shell function so the same commands work in sh and zsh.
 vendor_sync() { cargo run -q --manifest-path tools/vendor-sync/Cargo.toml -- "$@"; }
 vendor_sync check                       # Compare the tree against upstream plus all patches
-vendor_sync save <name> -m "<message>"  # Append a patch containing the current edits
-vendor_sync save <existing-name>        # Regenerate a patch, retain its message, move it last
+vendor_sync save <name> -m "<message>"  # New patch with the current edits, numbered highest + 1
+vendor_sync save <name> --number 0062 -m "<message>" # New patch with a number from your range
+vendor_sync save <existing-name>        # Regenerate a patch in place, retain its number and message
 vendor_sync sync                        # Rebuild vendor/zed/crates from upstream.toml
 vendor_sync sync --rev <commit-or-main> # Update the pinned revision and report failed patches
 vendor_sync sync --rev main --keep-going # Skip failed patches and write the remaining results
 vendor_sync refresh                     # Refresh diff line numbers and context at the current snapshot
 ```
 
-The tool keeps a blob-filtered Zed clone in `~/.cache/quiet-md/zed` (override with `QUIET_MD_ZED_DIR`) and sparsely checks out the selected crates. Intermediate files go in `target/vendor-sync`. Patches apply in order via `git apply --3way`, with one commit per patch.
+The tool keeps a blob-filtered Zed clone in `~/.cache/quiet-md/zed` (override with `QUIET_MD_ZED_DIR`) and sparsely checks out the selected crates. Intermediate files go in `target/vendor-sync`. Patches apply in number order via `git apply --3way`, with one commit per patch.
+
+## Patch numbers
+
+A patch keeps its number and file name for good: `save` and `refresh` never renumber the series, so gaps are normal. Branches that add patches at the same time take numbers from separate ranges, so their patches never collide when merged:
+
+| Range | Line of work |
+|---|---|
+| 0046–0059 | Component library (design system) |
+| 0060–0079 | Sync and iOS (mobile line) |
+| 0080 and up | Performance |
+
+Patches 0001–0045 came before the ranges were handed out. A new patch takes `--number <n>` from its line's range. Without `--number` it takes the highest number in the series + 1. `save` refuses a number that is already taken and never overwrites another patch, and it refuses to renumber an existing patch.
+
+A patch numbered before others is saved so that the later patches still apply after it: `save` takes the edits relative to every other patch, then removes the later patches' changes from the diff. If the edits touch the same lines as a later patch, `save` stops and writes nothing; save them with a number after that patch, or fold them into it. After writing, `save` rebuilds the series and confirms it reproduces `vendor/zed/crates`.
 
 For a new patch, edit files under `vendor/zed/crates` (use `Cargo.toml.orig` for manifest edits), run `vendor_sync save <name> -m "<message>"`, then `vendor_sync sync` to regenerate manifests and `vendor_sync check`. Save one related change at a time: each save includes all outstanding edits in the tree.
 
