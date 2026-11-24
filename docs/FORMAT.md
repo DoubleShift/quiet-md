@@ -20,14 +20,14 @@ Quiet.md/
     ├── index.json.v4       The FORMAT 4 index, kept after the move to 5
     ├── settings.json       Window UI settings, including sidebar width
     ├── preferences.json, shortcuts.json, emoji.json, themes/
-    ├── .lock               Write lock (flock), held briefly when updating the index
+    ├── .lock               Left by older versions; FORMAT 5 ignores it (the write lock is local, below)
     ├── trash/              Deleted files and an index.json mapping IDs to Trashed records
     ├── history/<id>/       Document body snapshots
     ├── history-trash/<id>/ Snapshots for trashed documents
     └── before-folders-4/   Pre-migration layout backup, removed after 30 days
 ```
 
-The scanner recursively finds `.md`, `.xml` and `.excalidraw` files, including files added in Finder. It skips names beginning with a dot, including `.quiet`, `.assets`, `.git` and `.obsidian`. Window dimensions belong to the device and live in local application data. Standalone whiteboards use official Excalidraw JSON and take their title from the filename. Older versions skip this extension. The write lock allows multiple app instances.
+The scanner recursively finds `.md`, `.xml` and `.excalidraw` files, including files added in Finder. It skips names beginning with a dot, including `.quiet`, `.assets`, `.git` and `.obsidian`. Window dimensions belong to the device and live in local application data. Standalone whiteboards use official Excalidraw JSON and take their title from the filename. Older versions skip this extension. The write lock allows multiple app instances. It is local to the computer, in the application data folder (`quiet-md/locks/<root key>.lock`), and is held briefly for each write: a lock inside the library would only sync to other devices and lock nothing there. A FORMAT 4 library also takes `.quiet/.lock`, which older versions use.
 
 ### Child pages: a folder's own document
 

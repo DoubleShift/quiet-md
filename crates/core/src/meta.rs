@@ -41,8 +41,36 @@ struct DeviceFile {
 pub(super) struct Won { pub v: Value, pub ts: u64, pub dev: String }
 
 /// Every device's file merged: per item and field, the latest value.
+/// `files`: the folder as it was when read, so a later read can tell
+/// nothing changed (`cached`).
 #[derive(Clone, Debug, Default)]
-pub(super) struct Merged { pub items: BTreeMap<String, BTreeMap<String, Won>>, pub max: u64 }
+pub(super) struct Merged { pub items: BTreeMap<String, BTreeMap<String, Won>>, pub max: u64, files: Option<Files> }
+
+/// Each device file's name, size, modification time and whether it is still
+/// only in iCloud (a placeholder keeps the size and time it will have).
+type Files = Vec<(String, u64, Option<web_time::SystemTime>, bool)>;
+
+fn files(root: &Path) -> Files {
+    let Ok(rd) = crate::vfs::read_dir(dir(root)) else { return vec![] };
+    let mut out: Files = rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).map(|p| {
+        let m = crate::vfs::metadata(&p).ok();
+        (p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), m.as_ref().map_or(0, |m| m.len()), m.and_then(|m| m.modified().ok()), crate::vfs::is_dataless(&p))
+    }).collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// `load`, or `last` again when no device file was added, removed or
+/// changed (by name, size and time) since it was read (sync.md 3.3). Any
+/// change reads everything again.
+pub(super) fn cached(root: &Path, me: &str, last: &Merged, warnings: &mut Vec<String>) -> Merged {
+    let now = files(root);
+    if last.files.as_ref() == Some(&now) { return last.clone() }
+    // Taken before reading: a file changing meanwhile makes the next look read again.
+    let mut merged = load(root, me, warnings);
+    merged.files = Some(now);
+    merged
+}
 
 impl Merged {
     fn put(&mut self, item: &str, field: &str, w: Won) {
@@ -172,25 +200,42 @@ pub(super) fn stamp(clock: &std::cell::Cell<u64>, seen: u64) -> u64 {
 /// Write `changes` as device `me`'s, over what every device's file says now;
 /// returns the merged result. Only the fields `me` still wins are kept.
 pub(super) fn commit(root: &Path, me: &Device, clock: &std::cell::Cell<u64>, changes: Vec<(String, String, Value)>, warnings: &mut Vec<String>) -> Result<Merged> {
-    let mut merged = load(root, &me.id, warnings);
+    commit_over(root, me, clock, &Merged::default(), changes, warnings)
+}
+
+/// `commit` over `last` when the device files are still as it read them.
+pub(super) fn commit_over(root: &Path, me: &Device, clock: &std::cell::Cell<u64>, last: &Merged, changes: Vec<(String, String, Value)>, warnings: &mut Vec<String>) -> Result<Merged> {
+    let mut merged = cached(root, &me.id, last, warnings);
     if !changes.is_empty() {
         let ts = stamp(clock, merged.max);
         for (item, field, v) in changes { merged.put(&item, &field, Won { v, ts, dev: me.id.clone() }); }
     }
+    write_own(root, me, &mut merged)?;
+    Ok(merged)
+}
+
+/// Write device `me`'s file from `merged`: the fields `me` wins there. Only
+/// this device writes its file, so when the others' files are as `merged`
+/// read them, the result stays good for `cached`.
+fn write_own(root: &Path, me: &Device, merged: &mut Merged) -> Result<()> {
     let mut items: BTreeMap<String, Fields> = BTreeMap::new();
     for (item, fields) in &merged.items {
         for (k, w) in fields { if w.dev == me.id { items.entry(item.clone()).or_default().insert(k.clone(), (w.v.clone(), w.ts)); } }
     }
     crate::vfs::create_dir_all(dir(root))?;
-    save_json(&dir(root).join(format!("{}.json", me.id)), &DeviceFile { v: 1, device: me.clone(), items })?;
-    Ok(merged)
+    let own = format!("{}.json", me.id);
+    save_json(&dir(root).join(&own), &DeviceFile { v: 1, device: me.clone(), items })?;
+    let others = |f: &Files| f.iter().filter(|e| e.0 != own).cloned().collect::<Files>();
+    let now = files(root);
+    merged.files = merged.files.as_ref().filter(|was| others(was) == others(&now)).map(|_| now);
+    Ok(())
 }
 
 /// This computer's id, made once and kept with its other local data; the
 /// same for every root (sync.md 3.6).
 pub fn device() -> Device {
     static DEVICE: std::sync::OnceLock<Device> = std::sync::OnceLock::new();
-    DEVICE.get_or_init(|| {
+    let mut d = DEVICE.get_or_init(|| {
         let path = local_base(Path::new("")).join("device.json");
         let mut d: Device = reread(&path).unwrap_or_default();
         if d.id.is_empty() {
@@ -201,12 +246,102 @@ pub fn device() -> Device {
         d.platform = std::env::consts::OS.to_string();
         if d.name.is_empty() { d.name = whoami_host(); }
         d
-    }).clone()
+    }).clone();
+    let named = NAME.read().unwrap_or_else(|e| e.into_inner());
+    if !named.is_empty() { d.name = named.clone(); }
+    d
 }
+
+/// The computer's name as the system shows it (macOS 电脑名称), handed in by
+/// the app at launch: the core does not ask the system. Set it before the
+/// first root opens; an empty name keeps the environment's.
+pub fn set_device_name(name: &str) { *NAME.write().unwrap_or_else(|e| e.into_inner()) = name.trim().to_string(); }
+static NAME: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
 
 /// A name for this computer, for 移除已停用的设备 later.
 fn whoami_host() -> String {
     std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_default()
+}
+
+impl Device {
+    /// What to show for this device: its name, else its platform and the
+    /// start of its id ("macOS 9b2f"), so two unnamed ones stay apart.
+    pub fn label(&self) -> String {
+        if !self.name.trim().is_empty() { return self.name.trim().to_string() }
+        let platform = match self.platform.as_str() {
+            "macos" => "macOS", "ios" => "iOS", "windows" => "Windows", "linux" => "Linux", "android" => "Android",
+            "" => "?", p => p,
+        };
+        format!("{platform} {}", self.id.chars().take(4).collect::<String>())
+    }
+}
+
+/// A device with a file in `.quiet/meta/`, for 移除已停用的设备.
+#[derive(Clone, Debug)]
+pub struct DeviceInfo {
+    pub device: Device,
+    /// The latest stamp in its file (milliseconds): when it last wrote here.
+    pub last: u64,
+}
+
+/// Every device with a file under `root`, the latest writer first. A file
+/// that does not parse, or is still only in iCloud, is left out.
+pub(super) fn devices(root: &Path) -> Vec<DeviceInfo> {
+    let mut by_id: BTreeMap<String, DeviceInfo> = BTreeMap::new();
+    for (_, f) in device_files(root) {
+        let last = f.items.values().flat_map(|fields| fields.values().map(|(_, ts)| *ts)).max().unwrap_or(0);
+        let e = by_id.entry(f.device.id.clone()).or_insert(DeviceInfo { device: f.device.clone(), last: 0 });
+        if last >= e.last { *e = DeviceInfo { device: f.device, last }; }
+    }
+    let mut out: Vec<DeviceInfo> = by_id.into_values().collect();
+    out.sort_by(|a, b| (b.last, &a.device.id).cmp(&(a.last, &b.device.id)));
+    out
+}
+
+/// The device files there are, each with the device it is (`<id> 2.json`, a
+/// sync's copy, is still `<id>`'s).
+fn device_files(root: &Path) -> Vec<(PathBuf, DeviceFile)> {
+    let Ok(rd) = crate::vfs::read_dir(dir(root)) else { return vec![] };
+    let mut paths: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
+    paths.sort();
+    paths.into_iter().filter(|p| !crate::vfs::is_dataless(p)).filter_map(|p| {
+        let mut f: DeviceFile = serde_json::from_slice(&crate::vfs::read(&p).ok()?).ok()?;
+        if f.device.id.is_empty() { f.device.id = p.file_stem()?.to_string_lossy().into_owned(); }
+        Some((p, f))
+    }).collect()
+}
+
+/// 移除已停用的设备: what device `gone` still wins becomes `me`'s, with the
+/// same stamp, and its files go. The merged view stays as it was; only when
+/// a third device holds a field at the very same stamp, and would now win
+/// the tie, is the stamp moved on by one to keep the old winner.
+pub(super) fn retire(root: &Path, me: &Device, gone: &str, warnings: &mut Vec<String>) -> Result<Merged> {
+    anyhow::ensure!(gone != me.id, "不能移除当前设备");
+    let all = load(root, &me.id, warnings);
+    let files = device_files(root);
+    anyhow::ensure!(files.iter().any(|(_, f)| f.device.id == gone), "没有这台设备");
+    // Every file but `gone`'s, as `load` reads them (this device's own may come from its `.bak`).
+    let own = dir(root).join(format!("{}.json", me.id));
+    let mut rest = Merged::default();
+    let mine: DeviceFile = load_json(&own, "文档索引", warnings);
+    for (dev, f) in files.iter().filter(|(p, f)| f.device.id != gone && *p != own).map(|(_, f)| (&f.device.id, f)).chain([(&me.id, &mine)]) {
+        for (item, fields) in &f.items {
+            for (k, (v, ts)) in fields { rest.put(item, k, Won { v: v.clone(), ts: *ts, dev: dev.clone() }); }
+        }
+    }
+    for (item, fields) in &all.items {
+        for (k, w) in fields.iter().filter(|(_, w)| w.dev == gone) {
+            let slot = rest.items.entry(item.clone()).or_default();
+            // `gone` beat everyone, so only a tie at its stamp can come out differently.
+            let ts = match slot.get(k) { Some(o) if o.dev != me.id && (o.ts, &o.dev) >= (w.ts, &me.id) => o.ts + 1, _ => w.ts };
+            rest.max = rest.max.max(ts);
+            slot.insert(k.clone(), Won { v: w.v.clone(), ts, dev: me.id.clone() });
+        }
+    }
+    // This device's file first: a crash before the others go loses nothing.
+    write_own(root, me, &mut rest)?;
+    for (p, f) in files { if f.device.id == gone { crate::vfs::remove_file(&p)?; } }
+    Ok(rest)
 }
 
 /// The id of a file found on disk with no entry yet: the same on every

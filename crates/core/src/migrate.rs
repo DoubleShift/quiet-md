@@ -158,9 +158,8 @@ pub(super) fn restore(root: &Path) -> Result<RestoreReport> {
     let internal = root.join(INTERNAL);
     let backup = internal.join(BACKUP);
     anyhow::ensure!(internal.join("format.json").fs_is_file() && (backup.join("format.json").fs_is_file() || backup.join("index.json").fs_is_file()), "没有可恢复的迁移前备份");
-    let new = crate::vfs::OpenOptions::new().create(true).truncate(false).write(true).open(internal.join(".lock"))?;
-    new.lock()?;
-    let _new = WriteLock(Some(new));
+    // A FORMAT 4 library: older builds lock `.quiet/.lock`.
+    let _new = WriteLock(vec![lock_file(&internal.join(".lock"))?]);
     let since = reread::<BackupInfo>(&internal.join(BACKUP_INFO)).map_or(0, |i| if i.done_ms > 0 { i.done_ms } else { i.created as u128 * 1000 });
     let kept = internal.join(format!("{AFTER}-{}", now()));
     crate::vfs::create_dir_all(&kept)?;
@@ -234,12 +233,10 @@ pub(super) fn run(root: &Path, warnings: &mut Vec<String>) -> Result<MigrationRe
     let internal = root.join(INTERNAL);
     crate::vfs::create_dir_all(&internal)?;
     // Old builds take the lock at the top, this one in `.quiet/`: hold both.
-    let old = crate::vfs::OpenOptions::new().create(true).truncate(false).write(true).open(root.join(".lock"))?;
-    old.lock()?;
-    let _old = WriteLock(Some(old));
-    let new = crate::vfs::OpenOptions::new().create(true).truncate(false).write(true).open(internal.join(".lock"))?;
-    new.lock()?;
-    let _new = WriteLock(Some(new));
+    // FORMAT 4 builds and this one (`Store::lock_files` before 5) also
+    // take `.quiet/.lock`, so the move runs once whoever comes second.
+    let _old = WriteLock(vec![lock_file(&root.join(".lock"))?]);
+    let _new = WriteLock(vec![lock_file(&internal.join(".lock"))?]);
     // Another copy may have finished while this one waited.
     let report = |docs, folders| MigrationReport { docs, folders, backup: internal.join(BACKUP) };
     if internal.join("format.json").fs_is_file() { finish(root, warnings); return Ok(report(0, 0)); }
