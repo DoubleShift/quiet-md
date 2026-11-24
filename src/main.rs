@@ -53,6 +53,7 @@ mod native_header;
 mod mermaid;
 mod printing;
 mod search;
+mod siyuan;
 #[cfg(not(target_family = "wasm"))]
 mod selftest;
 #[cfg(target_family = "wasm")]

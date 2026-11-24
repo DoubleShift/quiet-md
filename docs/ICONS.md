@@ -82,7 +82,7 @@ Checked 2026-11-24 against the official packages `nucleo-ui-outline-18` 1.5.0 an
 | `whiteboard.svg` | UI Essential Outline 18 | Shapes | identical to the package |
 | `x.svg` | UI Outline 18 | Xmark | identical to the package |
 
-The 16 project-drawn icons in this folder (MIT) are listed in THIRD_PARTY.md; each opens with a comment saying so.
+The 17 project-drawn icons in this folder (MIT) are listed in THIRD_PARTY.md; each opens with a comment saying so.
 
 ## `assets/editor-icons/`: 174 icons
 

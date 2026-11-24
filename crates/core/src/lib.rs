@@ -17,6 +17,7 @@ pub mod model;
 pub mod palette;
 pub mod paste;
 pub mod remote;
+pub mod siyuan;
 pub mod spacing;
 pub mod store;
 pub mod sync_base;
