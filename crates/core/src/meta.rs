@@ -9,6 +9,9 @@
 use super::*;
 use serde_json::Value;
 
+/// How long a 彻底删除 tombstone (`purged`) stays in its device's file.
+pub(super) const PURGED_KEPT_MS: u64 = 30 * 86_400_000;
+
 /// The folder in `.quiet/` holding one file per device.
 pub(super) const META: &str = "meta";
 /// The item holding the root's own settings (history limit, look …).
@@ -93,7 +96,7 @@ impl Merged {
             if id == ROOT_ITEM { continue; }
             if let Some(Value::String(p)) = fields.get("path").map(|w| &w.v) && !p.is_empty() { by_path.entry(p.clone()).or_default().push(id); }
         }
-        let mut disk = DiskIndex::new();
+        let mut objs = vec![];
         for (path, mut ids) in by_path {
             let first = |id: &String| self.items[id].values().map(|w| w.ts).min().unwrap_or(0);
             ids.sort_by(|a, b| (first(a), *a).cmp(&(first(b), *b)));
@@ -107,9 +110,20 @@ impl Merged {
             let mut obj = serde_json::Map::new();
             for (k, w) in fields { if KNOWN.contains(&k) && !w.v.is_null() { obj.insert(k.to_string(), w.v.clone()); } }
             obj.insert("id".into(), Value::String(ids[0].clone()));
+            objs.push((path, obj));
+        }
+        to_ranks(&mut objs);
+        let mut disk = DiskIndex::new();
+        for (path, obj) in objs {
             if let Ok(a) = serde_json::from_value::<Attached>(Value::Object(obj)) { disk.insert(path, a); }
         }
         disk
+    }
+
+    /// FORMAT 6's 回收站: what is trashed (and not purged), by id, as written.
+    pub fn trash(&self) -> BTreeMap<String, Value> {
+        self.items.iter().filter(|(_, f)| !f.get("purged").is_some_and(|w| !w.v.is_null()))
+            .filter_map(|(id, f)| Some((id.clone(), f.get("trashed").map(|w| &w.v).filter(|v| !v.is_null())?.clone()))).collect()
     }
 
     /// The root's settings under `prefix` (`look.` …) as one object.
@@ -120,6 +134,110 @@ impl Merged {
         }
         Value::Object(obj)
     }
+}
+
+/// Which field holds a page's place: `root_order` at the top of the root,
+/// `order` inside a folder (a path ending in `/` is a folder).
+fn place_field(path: &str) -> (&'static str, &'static str) {
+    if path.trim_end_matches('/').contains('/') { ("order", "root_order") } else { ("root_order", "order") }
+}
+
+/// The folder `path` is in ("" for the top), for telling siblings apart.
+fn parent_of(path: &str) -> &str { path.trim_end_matches('/').rsplit_once('/').map_or("", |p| p.0) }
+
+/// FORMAT 6 keeps a page's place among its siblings as a fractional index
+/// ("a0V", sync.md 3.3), so a move writes the moved page only; the store
+/// works with ranks (1, 2 …) as before. Keys become ranks per folder, equal
+/// keys in id order so every device sees one order. Numbers (FORMAT 5 and
+/// before) stay as they are.
+fn to_ranks(objs: &mut [(String, serde_json::Map<String, Value>)]) {
+    let mut groups: BTreeMap<String, Vec<(String, String, usize)>> = BTreeMap::new();
+    for (n, (path, obj)) in objs.iter().enumerate() {
+        let (field, _) = place_field(path);
+        if let Some(Value::String(key)) = obj.get(field) {
+            let id = obj.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
+            groups.entry(parent_of(path).to_string()).or_default().push((key.clone(), id, n));
+        }
+    }
+    for mut g in groups.into_values() {
+        g.sort();
+        for (rank, (_, _, n)) in g.into_iter().enumerate() {
+            let (field, other) = place_field(&objs[n].0);
+            let obj = &mut objs[n].1;
+            obj.insert(field.into(), Value::from(rank as u64 + 1));
+            // The other field is the store's as it left it (a number); never a key.
+            if obj.get(other).is_some_and(Value::is_string) { obj.remove(other); }
+        }
+    }
+}
+
+/// What `to_ranks` read back: each page's key, by id (`fields` as `by_id` has them).
+pub(super) fn keys_of(fields: &HashMap<String, BTreeMap<String, Value>>) -> HashMap<String, String> {
+    fields.iter().filter_map(|(id, f)| {
+        let path = f.get("path")?.as_str()?;
+        Some((id.clone(), f.get(place_field(path).0)?.as_str()?.to_string()))
+    }).collect()
+}
+
+/// The store's ranks as FORMAT 6 keys, against `keys`, what was read: the
+/// longest run of siblings still in their read order keeps its keys, and
+/// only the others get new ones between their neighbours. A move thus
+/// changes the moved page alone; when nothing fits between two equal keys
+/// (or a key cannot be read), the folder gets fresh keys throughout.
+pub(super) fn to_keys(fields: &mut HashMap<String, BTreeMap<String, Value>>, keys: &HashMap<String, String>) {
+    use crate::board::fractional_index::{generate_n_keys_between, validate_order_key};
+    let mut groups: BTreeMap<String, Vec<(u64, String)>> = BTreeMap::new();
+    for (id, f) in fields.iter_mut() {
+        let Some(path) = f.get("path").and_then(Value::as_str).map(str::to_string) else { continue };
+        let field = place_field(&path).0;
+        let rank = f.get(field).and_then(Value::as_u64).unwrap_or(0);
+        f.remove(field);
+        if rank > 0 { groups.entry(parent_of(&path).to_string()).or_default().push((rank, id.clone())); }
+    }
+    for (_, mut g) in groups {
+        g.sort();
+        let ids: Vec<&String> = g.iter().map(|(_, id)| id).collect();
+        let old: Vec<Option<&str>> = ids.iter().map(|id| keys.get(*id).map(String::as_str).filter(|k| validate_order_key(k).is_ok())).collect();
+        let keep = longest_run(&ids, &old);
+        let mut new: Vec<Option<String>> = old.iter().zip(&keep).map(|(k, keep)| if *keep { k.map(str::to_string) } else { None }).collect();
+        let filled = (|| -> Option<()> {
+            let mut i = 0;
+            while i < new.len() {
+                if new[i].is_some() { i += 1; continue; }
+                let end = (i..new.len()).find(|&j| new[j].is_some()).unwrap_or(new.len());
+                let (a, b) = (i.checked_sub(1).and_then(|p| new[p].clone()), new.get(end).cloned().flatten());
+                if a.is_some() && a == b { return None; }
+                let made = generate_n_keys_between(a.as_deref(), b.as_deref(), end - i).ok()?;
+                for (j, k) in made.into_iter().enumerate() { new[i + j] = Some(k); }
+                i = end;
+            }
+            Some(())
+        })();
+        if filled.is_none() { new = generate_n_keys_between(None, None, ids.len()).unwrap_or_default().into_iter().map(Some).collect(); }
+        for (id, key) in ids.iter().zip(new) {
+            let f = fields.get_mut(*id).unwrap();
+            let path = f.get("path").and_then(Value::as_str).unwrap_or_default().to_string();
+            if let Some(key) = key { f.insert(place_field(&path).0.into(), Value::String(key)); }
+        }
+    }
+}
+
+/// Which of `old` (keys, `None`: none) to keep: a longest run increasing by
+/// (key, id), the order `to_ranks` reads them in.
+fn longest_run(ids: &[&String], old: &[Option<&str>]) -> Vec<bool> {
+    let at: Vec<usize> = (0..old.len()).filter(|&i| old[i].is_some()).collect();
+    let less = |a: usize, b: usize| (old[a], ids[a]) < (old[b], ids[b]);
+    // Patience sorting: `tails[l]` ends the best run of length l + 1.
+    let (mut tails, mut prev): (Vec<usize>, Vec<Option<usize>>) = (vec![], vec![None; old.len()]);
+    for &i in &at {
+        let l = tails.partition_point(|&t| less(t, i));
+        prev[i] = l.checked_sub(1).map(|p| tails[p]);
+        if l == tails.len() { tails.push(i) } else { tails[l] = i }
+    }
+    let mut keep = vec![false; old.len()];
+    let mut cur = tails.last().copied();
+    while let Some(i) = cur { keep[i] = true; cur = prev[i]; }
+    keep
 }
 
 /// An index entry as fields; defaults are left out, like on disk.
@@ -219,6 +337,13 @@ pub(super) fn commit_over(root: &Path, me: &Device, clock: &std::cell::Cell<u64>
 /// read them, the result stays good for `cached`.
 fn write_own(root: &Path, me: &Device, merged: &mut Merged) -> Result<()> {
     let mut items: BTreeMap<String, Fields> = BTreeMap::new();
+    // A page purged here 30 days ago: every device has had time to see it go,
+    // so this device's fields about it are dropped (others drop their own).
+    let expired = crate::time::now_ms().saturating_sub(PURGED_KEPT_MS);
+    for fields in merged.items.values_mut() {
+        if fields.get("purged").is_some_and(|w| w.dev == me.id && !w.v.is_null() && w.ts < expired) { fields.retain(|_, w| w.dev != me.id); }
+    }
+    merged.items.retain(|_, f| !f.is_empty());
     for (item, fields) in &merged.items {
         for (k, w) in fields { if w.dev == me.id { items.entry(item.clone()).or_default().insert(k.clone(), (w.v.clone(), w.ts)); } }
     }
@@ -382,7 +507,72 @@ pub(super) fn upgrade(root: &Path, me: &Device, warnings: &mut Vec<String>) -> R
     commit(root, me, &std::cell::Cell::new(0), changes, warnings)?;
     let marker = internal.join("format.json");
     let id = reread::<FormatMarker>(&marker).map(|m| m.id).unwrap_or_default();
-    write_atomic(&marker, &serde_json::to_vec_pretty(&FormatMarker { format: FORMAT, id: if id.is_empty() { uuid::Uuid::new_v4().to_string() } else { id } })?)?;
+    write_atomic(&marker, &serde_json::to_vec_pretty(&FormatMarker { format: 5, id: if id.is_empty() { uuid::Uuid::new_v4().to_string() } else { id } })?)?;
     if internal.join("index.json").fs_exists() { let _ = crate::vfs::rename(internal.join("index.json"), internal.join("index.json.v4")); }
+    Ok(())
+}
+
+/// A 回收站 record as FORMAT 6's `trashed` field: where it was (`from`,
+/// a folder's ending in `/`), when (`at`, seconds), the folder it was in
+/// (`parent`) and the page it went with (`root`), and what the index knew
+/// about it (`meta`; nothing of this computer's own, like 最近打开).
+pub(super) fn trashed_value(t: &Trashed) -> Value {
+    let folder = t.meta.folder.is_some();
+    let mut fields = fields_of("", &Attached::of("", &t.meta));
+    fields.remove("path");
+    let mut v = serde_json::json!({ "from": if folder { format!("{}/", t.meta.rel) } else { t.meta.rel.clone() }, "at": t.deleted, "meta": fields });
+    if let Some(p) = &t.meta.parent { v["parent"] = Value::String(p.clone()); }
+    if let Some(r) = &t.root { v["root"] = Value::String(r.clone()); }
+    v
+}
+
+/// `trashed_value` read back; `None` for what this build cannot read.
+pub(super) fn trashed_of(v: &Value) -> Option<Trashed> {
+    let from = v.get("from")?.as_str()?;
+    let mut obj = v.get("meta").and_then(Value::as_object).cloned().unwrap_or_default();
+    obj.insert("id".into(), Value::String(String::new()));
+    let mut meta = serde_json::from_value::<Attached>(Value::Object(obj)).ok()?.meta();
+    meta.rel = from.trim_end_matches('/').to_string();
+    if from.ends_with('/') { meta.folder = Some(String::new()); }
+    // Its name and kind follow from where it was, as in the index.
+    let mut one = HashMap::from([(String::new(), meta)]);
+    derive_tree(&mut one);
+    let mut meta = one.remove("").unwrap_or_default();
+    meta.parent = v.get("parent").and_then(Value::as_str).map(str::to_string);
+    Some(Trashed { meta, deleted: v.get("at")?.as_u64()?, root: v.get("root").and_then(Value::as_str).map(str::to_string) })
+}
+
+/// FORMAT 5 → 6 (sync.md 3.3): the 回收站's `trash/index.json` becomes this
+/// device's `trashed` fields, and the hand order (`order`, `root_order`)
+/// fractional indices in the order it had. This device's file is written
+/// first, the marker next and `trash/index.json` is kept as
+/// `index.json.v5` last, so a crash midway redoes it to the same result.
+pub(super) fn upgrade6(root: &Path, me: &Device, warnings: &mut Vec<String>) -> Result<()> {
+    let internal = root.join(INTERNAL);
+    let merged = load(root, &me.id, warnings);
+    let read = by_id(&merged.disk_index());
+    // Keys a crash left behind are kept: the same order comes out again.
+    let raw: HashMap<String, BTreeMap<String, Value>> = merged.items.iter().map(|(id, f)| (id.clone(), f.iter().filter(|(_, w)| !w.v.is_null()).map(|(k, w)| (k.clone(), w.v.clone())).collect())).collect();
+    let mut keyed = read.clone();
+    to_keys(&mut keyed, &keys_of(&raw));
+    let mut changes = vec![];
+    for (id, f) in &keyed {
+        for k in ["order", "root_order"] {
+            let (was, now) = (raw.get(id).and_then(|r| r.get(k)), f.get(k));
+            if was != now { changes.push((id.clone(), k.to_string(), now.cloned().unwrap_or(Value::Null))); }
+        }
+    }
+    let index = internal.join("trash").join("index.json");
+    let trash: HashMap<String, Trashed> = load_json(&index, "回收站索引", warnings);
+    for (id, t) in &trash {
+        let v = trashed_value(t);
+        if raw.get(id).and_then(|r| r.get("trashed")) != Some(&v) { changes.push((id.clone(), "trashed".into(), v)); }
+    }
+    changes.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+    commit(root, me, &std::cell::Cell::new(0), changes, warnings)?;
+    let marker = internal.join("format.json");
+    let id = reread::<FormatMarker>(&marker).map(|m| m.id).unwrap_or_default();
+    write_atomic(&marker, &serde_json::to_vec_pretty(&FormatMarker { format: 6, id: if id.is_empty() { uuid::Uuid::new_v4().to_string() } else { id } })?)?;
+    if index.fs_exists() { crate::vfs::rename(&index, internal.join("trash").join("index.json.v5"))?; }
     Ok(())
 }
