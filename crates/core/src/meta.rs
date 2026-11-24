@@ -45,33 +45,64 @@ pub(super) struct Won { pub v: Value, pub ts: u64, pub dev: String }
 
 /// Every device's file merged: per item and field, the latest value.
 /// `files`: the folder as it was when read, so a later read can tell
-/// nothing changed (`cached`).
+/// nothing changed (`refresh`). `read`: which read this is, a number no
+/// other read had, so the store can tell it has taken in what this one found.
 #[derive(Clone, Debug, Default)]
-pub(super) struct Merged { pub items: BTreeMap<String, BTreeMap<String, Won>>, pub max: u64, files: Option<Files> }
+pub(super) struct Merged { pub items: BTreeMap<String, BTreeMap<String, Won>>, pub max: u64, files: Option<Files>, pub read: u64 }
 
-/// Each device file's name, size, modification time and whether it is still
-/// only in iCloud (a placeholder keeps the size and time it will have).
-type Files = Vec<(String, u64, Option<web_time::SystemTime>, bool)>;
+static READS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-fn files(root: &Path) -> Files {
+/// Each device file's name, size, modification time, `written` and whether
+/// it is still only in iCloud (a placeholder keeps the size and time it will have).
+pub(super) type Files = Vec<(String, u64, Option<web_time::SystemTime>, u64, bool)>;
+
+pub(super) fn files(root: &Path) -> Files {
     let Ok(rd) = crate::vfs::read_dir(dir(root)) else { return vec![] };
     let mut out: Files = rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).map(|p| {
         let m = crate::vfs::metadata(&p).ok();
-        (p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), m.as_ref().map_or(0, |m| m.len()), m.and_then(|m| m.modified().ok()), crate::vfs::is_dataless(&p))
+        let dataless = crate::vfs::is_dataless(&p);
+        (p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), m.as_ref().map_or(0, |m| m.len()), m.as_ref().and_then(|m| m.modified().ok()), written(&p, m.as_ref(), dataless), dataless)
     }).collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out
 }
 
-/// `load`, or `last` again when no device file was added, removed or
-/// changed (by name, size and time) since it was read (sync.md 3.3). Any
-/// change reads everything again.
-pub(super) fn cached(root: &Path, me: &str, last: &Merged, warnings: &mut Vec<String>) -> Merged {
+/// What changes whenever a file is written, though its size and time may not:
+/// a sync (iCloud, a git checkout, rsync) can put back the time a file had on
+/// the device that wrote it, and two writes can land on the same size. On
+/// Unix the inode and change time (ctime), which a write or a replacing
+/// rename always moves and nothing can set back; elsewhere a hash of the
+/// contents (a placeholder's are not read: they would download).
+pub(super) fn written(p: &Path, m: Option<&crate::vfs::Metadata>, dataless: bool) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = rustc_hash::FxHasher::default();
+    #[cfg(unix)]
+    { let _ = (p, dataless); use std::os::unix::fs::MetadataExt; if let Some(m) = m { (m.ino(), m.ctime(), m.ctime_nsec()).hash(&mut h); } }
+    #[cfg(all(not(unix), not(target_family = "wasm")))]
+    { let _ = m; if !dataless && let Ok(b) = crate::vfs::read(p) { b.hash(&mut h); } }
+    // The web build's files change only through this process.
+    #[cfg(target_family = "wasm")]
+    { let _ = (p, m, dataless); }
+    h.finish()
+}
+
+/// `merged` read again unless no device file was added, removed or changed
+/// (by name, size, time and `written`) since it was read (sync.md 3.3). Any
+/// change reads everything again. Whether it was read again.
+pub(super) fn refresh(root: &Path, me: &str, merged: &mut Merged, warnings: &mut Vec<String>) -> bool {
     let now = files(root);
-    if last.files.as_ref() == Some(&now) { return last.clone() }
+    if merged.files.as_ref() == Some(&now) { return false }
     // Taken before reading: a file changing meanwhile makes the next look read again.
-    let mut merged = load(root, me, warnings);
+    *merged = load(root, me, warnings);
     merged.files = Some(now);
+    merged.read = READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    true
+}
+
+/// `refresh` on a copy of `last`.
+pub(super) fn cached(root: &Path, me: &str, last: &Merged, warnings: &mut Vec<String>) -> Merged {
+    let mut merged = last.clone();
+    refresh(root, me, &mut merged, warnings);
     merged
 }
 
@@ -120,6 +151,14 @@ impl Merged {
         disk
     }
 
+    /// `keys_of` these fields as read, without copying them first.
+    pub fn keys(&self) -> HashMap<String, String> {
+        self.items.iter().filter_map(|(id, f)| {
+            let path = f.get("path")?.v.as_str()?;
+            Some((id.clone(), f.get(place_field(path).0)?.v.as_str()?.to_string()))
+        }).collect()
+    }
+
     /// FORMAT 6's 回收站: what is trashed (and not purged), by id, as written.
     pub fn trash(&self) -> BTreeMap<String, Value> {
         self.items.iter().filter(|(_, f)| !f.get("purged").is_some_and(|w| !w.v.is_null()))
@@ -143,7 +182,7 @@ fn place_field(path: &str) -> (&'static str, &'static str) {
 }
 
 /// The folder `path` is in ("" for the top), for telling siblings apart.
-fn parent_of(path: &str) -> &str { path.trim_end_matches('/').rsplit_once('/').map_or("", |p| p.0) }
+pub(super) fn parent_of(path: &str) -> &str { path.trim_end_matches('/').rsplit_once('/').map_or("", |p| p.0) }
 
 /// FORMAT 6 keeps a page's place among its siblings as a fractional index
 /// ("a0V", sync.md 3.3), so a move writes the moved page only; the store
@@ -318,18 +357,21 @@ pub(super) fn stamp(clock: &std::cell::Cell<u64>, seen: u64) -> u64 {
 /// Write `changes` as device `me`'s, over what every device's file says now;
 /// returns the merged result. Only the fields `me` still wins are kept.
 pub(super) fn commit(root: &Path, me: &Device, clock: &std::cell::Cell<u64>, changes: Vec<(String, String, Value)>, warnings: &mut Vec<String>) -> Result<Merged> {
-    commit_over(root, me, clock, &Merged::default(), changes, warnings)
+    let mut merged = Merged::default();
+    commit_over(root, me, clock, &mut merged, changes, warnings)?;
+    Ok(merged)
 }
 
-/// `commit` over `last` when the device files are still as it read them.
-pub(super) fn commit_over(root: &Path, me: &Device, clock: &std::cell::Cell<u64>, last: &Merged, changes: Vec<(String, String, Value)>, warnings: &mut Vec<String>) -> Result<Merged> {
-    let mut merged = cached(root, &me.id, last, warnings);
+/// `commit` over `merged`, read again first unless the device files are
+/// still as it read them. Not written: `merged` holds changes the disk does
+/// not, so the next look reads everything again.
+pub(super) fn commit_over(root: &Path, me: &Device, clock: &std::cell::Cell<u64>, merged: &mut Merged, changes: Vec<(String, String, Value)>, warnings: &mut Vec<String>) -> Result<()> {
+    refresh(root, &me.id, merged, warnings);
     if !changes.is_empty() {
         let ts = stamp(clock, merged.max);
         for (item, field, v) in changes { merged.put(&item, &field, Won { v, ts, dev: me.id.clone() }); }
     }
-    write_own(root, me, &mut merged)?;
-    Ok(merged)
+    write_own(root, me, merged).inspect_err(|_| merged.files = None)
 }
 
 /// Write device `me`'s file from `merged`: the fields `me` wins there. Only

@@ -172,15 +172,28 @@ Now only the pinned entries are sorted, and the rest is built once and kept unti
 
 ### Still on the main thread
 
-These grow with the library too and are not changed yet, because they are in `store.rs` and `app.rs`. Times are for the 15,000-note vault, with a library of 300 notes in parentheses, taken directly from `Store`:
+These grow with the library too. Times are for the 15,000-note vault, with a library of 300 notes in parentheses, taken directly from `Store` ([store_bench.rs](../crates/core/examples/store_bench.rs), median of 15):
 
-| Operation | When | Time |
-|---|---|---:|
-| `Store::list`, the first time | Opening a library for the first time: every note is read | 2.0 s |
-| `Store::list` | Every time the window comes forward, and 2 s after files change on disk | 82 ms (3 ms) |
-| `Store::save_editor` | Every autosave while typing | 100 ms (20 ms) |
+| Operation | When | Before | After |
+|---|---|---:|---:|
+| `Store::list`, the first time | Opening a library for the first time: every note is read | 2.0 s | 2.0 s |
+| `Store::list` | Every time the window comes forward (`app.rs`, window activation), and 2 s after files change on disk | 70-78 ms (4 ms) | 38-44 ms (3 ms) |
+| `Store::save_editor` | Every autosave while typing | 52-57 ms (8 ms) | 12 ms (8 ms) |
 
-About half of `list` and of each save is `Store::begin_write` merging every device's metadata again (`load_meta`); saving also compares the whole index before writing it (`meta::commit_over`). Starting with a parsed cache from an earlier launch adds about 0.2 s over a small library.
+Measured 2026-11-25 on the Mac mini above, five runs alternating between `86317e7` and `perf/meta-cache`. Saving waits on the disk (the note and this device's 4.5 MB metadata file, each written with a backup and `fsync`): with other builds busy on the same disk it took 64-143 ms before and 20-79 ms after.
+
+Before, every `list` and every save started with `Store::begin_write` merging every device's metadata again (`load_meta`: a copy of the merged view, the index rebuilt from it, every entry turned into JSON fields and compared), and every save compared the whole index before writing (`save_meta`): about half of `list` and most of a save. In a loop of `list` and save, `begin_write` took 2,083 of 5,093 samples before and 91 of about 5,000 after.
+
+Now memory is known to be what the disk says while nothing has changed since this store last read or wrote it, and then nothing is read again:
+
+- No device file in `.quiet/meta/` was added, removed or rewritten: each is compared by name, size, modification time and, since a sync (iCloud, a git checkout, `rsync -t`) can put a file back with the time it had where it was written, its inode and change time (ctime), which every write or replacing rename moves and nothing sets back. Windows has no change time, so a hash of each file's contents stands in (a placeholder still in the cloud is not read). Any difference reads every file again, as before.
+- No read on the way took in another device's write that memory has not (a setting saved outside `begin_write` merges what it finds).
+- This computer's file about the library, the index, the entries kept for others and the 回收站 are as they were when last read or written; a change not written (a failed write) reads everything again.
+- `list` left nothing out: an entry whose file is not here (another device's, still on its way) is kept on disk but not in memory, so the next write reads everything again and the file keeps its settings when it arrives. A library with such entries is as fast as before, not faster.
+
+A save compares only the entries that changed since the last write and the folders they left or went to (their order keys), not the whole index. Tests check both against the old way: in the test build every skipped read is compared with reading everything again, and every save with comparing the whole index.
+
+What is left of `list` is finding the files (`layout::scan` and a `stat` for each note, most of its 40 ms); of a save, writing this device's metadata file whole, as FORMAT 6 keeps it. The first `list` of a new library still reads every note on the main thread.
 
 ### Reproduce
 
@@ -189,4 +202,7 @@ cargo build --release --locked --features devtools
 python3 tools/perf/gen_library.py --vault 15000 /tmp/quiet-big/vault
 python3 tools/harness/run.py tools/harness/examples/big-library.txt /tmp/quiet-big/vault /tmp/quiet-big/run
 grep -a bench /tmp/quiet-big/run/log
+# list and save: on a copy, opened once by the app or by the first run
+cp -R /tmp/quiet-big/vault /tmp/quiet-big/store
+QUIET_MD_HOME=/tmp/quiet-big/store cargo run --release -p fdl_core --example store_bench /tmp/quiet-big/store
 ```

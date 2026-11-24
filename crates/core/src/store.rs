@@ -26,7 +26,7 @@ use layout::{parent_rel, base_name, stem_of, join_rel};
 pub use meta::{Device, DeviceInfo, device, set_device_name};
 pub use migrate::{MigrationState, ConsentReason, DeviceHint, MigrationReport, RestoreReport, SyncService, sync_of, set_ubiquity_probe};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Meta {
     /// A folder, by its name on disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -284,7 +284,7 @@ impl Settings {
 }
 
 /// A document in the 回收站, as kept in `.quiet/trash/index.json`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Trashed {
     pub meta: Meta,
     pub deleted: u64,
@@ -384,6 +384,25 @@ pub struct Store {
     seen_trash: std::cell::RefCell<HashMap<String, serde_json::Value>>,
     /// Pages leaving the 回收站 for good: written as `purged`, not restored.
     purging: std::cell::RefCell<HashSet<String>>,
+    /// FORMAT 5: the library as `load_meta` last took it in or `save_meta`
+    /// last wrote it (`None`: since then not known).
+    synced: std::cell::RefCell<Option<Synced>>,
+}
+
+/// What `load_meta` would take in again is already in memory while no device
+/// file has been read again since (`meta::Merged::read`), this computer's
+/// file is as it was, and the index, the entries kept for others and the
+/// 回收站 are as they were: every change is written through, so nothing was
+/// written meanwhile. Reading 15,000 entries again costs about 40 ms.
+struct Synced {
+    read: u64,
+    local: Option<(u64, Option<web_time::SystemTime>, u64)>,
+    index: HashMap<String, Meta>,
+    foreign: DiskIndex,
+    trash: HashMap<String, Trashed>,
+    /// Read, not written, since: `seen` is what the files said, which the
+    /// index need not say back field for field, so the next write compares all.
+    whole: bool,
 }
 
 /// What switching documents remembers in memory only: each write of it is an
@@ -512,7 +531,7 @@ struct FormatMarker {
 
 /// An entry of `.quiet/index.json`, keyed by the path relative to the
 /// library (folders end in `/`): what the files cannot say.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Attached {
     #[serde(default)]
     id: String,
@@ -1354,13 +1373,14 @@ impl Store {
         let v5 = !flat && Self::format_at(&root) >= 5;
         let v6 = v5 && Self::format_at(&root) >= 6;
         let mut store = Store { file_changes: vec![], top_dir: root, index: HashMap::new(), foreign: DiskIndex::new(), trash, flat, warnings, migrated: None, loaded: Default::default(), copied: Default::default(), parsed: HashMap::new(), batch: Default::default(), view: Default::default(),
-            v5, me, clock: Default::default(), seen: Default::default(), merged: Default::default(), key: key.to_string(), place_by_hand: true, v6, seen_trash: Default::default(), purging: Default::default() };
+            v5, me, clock: Default::default(), seen: Default::default(), merged: Default::default(), key: key.to_string(), place_by_hand: true, v6, seen_trash: Default::default(), purging: Default::default(), synced: Default::default() };
         if flat {
             store.index = load_json(&base.join("index.json"), "文档索引", &mut store.warnings);
             store.flat_folders()?;
         } else if v5 {
             let mut warnings = vec![];
             store.load_meta(&mut warnings);
+            store.mark_synced(true);
             store.warnings.extend(warnings);
             store.load_parsed();
         } else {
@@ -1416,7 +1436,10 @@ impl Store {
     /// FORMAT 5: the index from every device's file (sync.md 3.3). Entries
     /// whose files are not here (yet) come along and `list` passes them over.
     fn load_meta(&mut self, warnings: &mut Vec<String>) {
-        let merged = meta::cached(&self.top_dir, &self.me.id, self.merged.get_mut(), warnings);
+        #[cfg(test)]
+        META_LOADS.with(|n| n.set(n.get() + 1));
+        meta::refresh(&self.top_dir, &self.me.id, self.merged.get_mut(), warnings);
+        let merged = std::mem::take(self.merged.get_mut());
         self.clock.set(self.clock.get().max(merged.max));
         let mut disk = merged.disk_index();
         self.foreign = foreign_of(&disk);
@@ -1427,8 +1450,7 @@ impl Store {
         let mut seen = meta::by_id(&disk);
         if self.v6 {
             // As the keys were read: `to_ranks` kept their order, so none changes here.
-            let raw = merged.items.iter().map(|(id, f)| (id.clone(), f.iter().map(|(k, w)| (k.clone(), w.v.clone())).collect())).collect();
-            meta::to_keys(&mut seen, &meta::keys_of(&raw));
+            meta::to_keys(&mut seen, &merged.keys());
             let trash = merged.trash();
             self.trash = trash.iter().filter_map(|(id, v)| Some((id.clone(), meta::trashed_of(v)?))).collect();
             *self.seen_trash.get_mut() = trash.into_iter().collect();
@@ -1437,19 +1459,141 @@ impl Store {
         *self.merged.get_mut() = merged;
     }
 
+    /// Whether `load_meta` has nothing to take in: no device file changed
+    /// and memory is as the disk was last read or written (`Synced`).
+    fn meta_held(&mut self) -> bool {
+        let read = meta::refresh(&self.top_dir, &self.me.id, self.merged.get_mut(), &mut vec![]);
+        let held = !read && self.synced.borrow().as_ref().is_some_and(|s| self.holds(s));
+        #[cfg(test)]
+        if held { self.check_held(); }
+        held
+    }
+
+    /// Whether memory is still as `s` found it (`Synced`).
+    fn holds(&self, s: &Synced) -> bool {
+        s.read == self.merged.borrow().read && s.local == self.local_stamp() && s.index == self.index && s.foreign == self.foreign && s.trash == self.trash
+    }
+
+    /// `holds` checked against reading everything again: the same entries by
+    /// path, in the same order in each folder (reading numbers places 1, 2 …).
+    #[cfg(test)]
+    fn check_held(&self) {
+        let merged = self.merged.borrow();
+        let mut disk = merged.disk_index();
+        disk.retain(|k, _| listed(k));
+        let mut fresh = self.from_disk(&disk, &self.read_local());
+        // `begin_write` puts back the times not written yet either way.
+        for (id, t) in &self.view.borrow().opened { if let Some(m) = fresh.get_mut(id) { m.opened = m.opened.max(*t); } }
+        let shape = |index: &HashMap<String, Meta>| {
+            let key = |m: &Meta| if m.folder.is_some() { format!("{}/", m.rel) } else { m.rel.clone() };
+            let path_of = |id: &Option<String>| id.as_ref().and_then(|p| index.get(p)).map(key);
+            let mut rows: Vec<(String, Option<String>, Meta)> = index.values().filter(|m| !m.local()).map(|m| (key(m), path_of(&m.parent), m.clone())).collect();
+            rows.sort_by(|a, b| (&a.1, a.2.top_order.unwrap_or(0), a.2.order, &a.0).cmp(&(&b.1, b.2.top_order.unwrap_or(0), b.2.order, &b.0)));
+            let mut place: HashMap<Option<String>, u64> = HashMap::new();
+            rows.into_iter().map(|(k, parent, mut m)| {
+                let n = place.entry(parent.clone()).or_default();
+                *n += 1;
+                let placed = m.top_order.is_some() || m.order > 0;
+                (m.top_order, m.order, m.parent) = (None, if placed { *n } else { 0 }, None);
+                (k, (parent, m))
+            }).collect::<BTreeMap<_, _>>()
+        };
+        assert_eq!(shape(&self.index), shape(&fresh), "load_meta skipped, but reading again differs");
+    }
+
+    /// Memory and the disk agree now: `whole` after reading, not after writing.
+    fn mark_synced(&self, whole: bool) {
+        let read = self.merged.borrow().read;
+        *self.synced.borrow_mut() = Some(Synced { read, local: self.local_stamp(), index: self.index.clone(), foreign: self.foreign.clone(), trash: self.trash.clone(), whole });
+    }
+
+    /// This computer's file about the library as `meta::files` tells a device file.
+    fn local_stamp(&self) -> Option<(u64, Option<web_time::SystemTime>, u64)> {
+        let p = self.local_file();
+        let m = crate::vfs::metadata(&p).ok()?;
+        Some((m.len(), m.modified().ok(), meta::written(&p, Some(&m), false)))
+    }
+
     /// FORMAT 5's `save_index`: what changed since the index was read,
     /// stamped as this device's.
     fn save_meta(&self) -> Result<()> {
+        // Not known again until written.
+        let synced = self.synced.borrow_mut().take();
+        let (now, gone, changes) = match synced.as_ref().filter(|s| !s.whole && s.foreign == self.foreign) {
+            Some(s) => self.meta_changes(s),
+            None => {
+                let now = self.meta_now();
+                let changes = meta::diff(&self.seen.borrow(), &now);
+                (now, None, changes)
+            }
+        };
+        #[cfg(test)]
+        if let Some(gone) = &gone {
+            // The part has to come out as the whole would.
+            let whole = self.meta_now();
+            assert_eq!(changes, meta::diff(&self.seen.borrow(), &whole), "incremental save_meta");
+            let mut seen = self.seen.borrow().clone();
+            if !changes.is_empty() { for id in gone { seen.remove(id); } seen.extend(now.clone()); }
+            assert!(changes.is_empty() || seen == whole, "incremental seen");
+        }
+        if !changes.is_empty() {
+            let read = self.merged.borrow().read;
+            meta::commit_over(&self.top_dir, &self.me, &self.clock, &mut self.merged.borrow_mut(), changes, &mut vec![])?;
+            let mut seen = self.seen.borrow_mut();
+            match gone { Some(gone) => { for id in gone { seen.remove(&id); } seen.extend(now); } None => *seen = now }
+            drop(seen);
+            // Read again on the way (another device wrote meanwhile): `load_meta` takes it in.
+            if self.merged.borrow().read != read { return self.save_local(&self.local_state()) }
+        }
+        self.save_local(&self.local_state())?;
+        self.mark_synced(false);
+        Ok(())
+    }
+
+    /// What the index says now, by id, as the device files keep it.
+    fn meta_now(&self) -> HashMap<String, BTreeMap<String, serde_json::Value>> {
         let mut now = meta::by_id(&self.disk_index());
         // FORMAT 6: ranks back to keys, a new one only for what moved.
         if self.v6 { meta::to_keys(&mut now, &meta::keys_of(&self.seen.borrow())); }
-        let changes = meta::diff(&self.seen.borrow(), &now);
-        if !changes.is_empty() {
-            let merged = meta::commit_over(&self.top_dir, &self.me, &self.clock, &self.merged.borrow(), changes, &mut vec![])?;
-            *self.merged.borrow_mut() = merged;
-            *self.seen.borrow_mut() = now;
+        now
+    }
+
+    /// `meta_now` and its `diff` from `seen` for only what changed since `s`
+    /// was written, and the folders it left or went to: every other entry
+    /// is as `seen` has it. Returns the entries worked out, those of them to
+    /// leave `seen`, and the changes.
+    #[allow(clippy::type_complexity)]
+    fn meta_changes(&self, s: &Synced) -> (HashMap<String, BTreeMap<String, serde_json::Value>>, Option<Vec<String>>, Vec<(String, String, serde_json::Value)>) {
+        let key = |m: &Meta| if m.folder.is_some() { format!("{}/", m.rel) } else { m.rel.clone() };
+        let changed: HashSet<&str> = self.index.iter().filter(|(id, m)| s.index.get(*id) != Some(*m)).map(|(id, _)| id.as_str())
+            .chain(s.index.keys().filter(|id| !self.index.contains_key(*id)).map(String::as_str)).collect();
+        if changed.is_empty() { return (HashMap::new(), Some(vec![]), vec![]) }
+        let seen = self.seen.borrow();
+        let path_seen = |id: &str| seen.get(id).and_then(|f| f.get("path")).and_then(|v| v.as_str()).map(str::to_string);
+        // The folders whose pages are placed anew: where each changed one was and is.
+        let mut folders: HashSet<String> = HashSet::new();
+        for id in &changed {
+            if let Some(m) = self.index.get(*id) { folders.insert(meta::parent_of(&key(m)).to_string()); }
+            if let Some(p) = path_seen(id) { folders.insert(meta::parent_of(&p).to_string()); }
         }
-        self.save_local(&self.local_state())
+        let inside = |k: &str| folders.contains(meta::parent_of(k));
+        // `disk_index` for those entries, in the order it takes them (the same one wins a shared path).
+        let mut disk: DiskIndex = self.index.iter().filter(|(_, m)| !m.local() && !m.rel.is_empty())
+            .filter(|(id, m)| changed.contains(id.as_str()) || inside(&key(m)))
+            .map(|(id, m)| (key(m), Attached::of(id, m))).collect();
+        for (k, a) in self.foreign.iter().filter(|(k, _)| inside(k)) { disk.entry(k.clone()).or_insert_with(|| a.clone()); }
+        let mut now = meta::by_id(&disk);
+        if self.v6 {
+            let keys: HashMap<String, BTreeMap<String, serde_json::Value>> = now.keys().filter_map(|id| Some((id.clone(), seen.get(id)?.clone()))).collect();
+            meta::to_keys(&mut now, &meta::keys_of(&keys));
+        }
+        // What `seen` had there, and what changed wherever it is now.
+        let before: HashMap<String, BTreeMap<String, serde_json::Value>> = seen.iter()
+            .filter(|(id, f)| now.contains_key(*id) || changed.contains(id.as_str()) || f.get("path").and_then(|v| v.as_str()).is_some_and(inside))
+            .map(|(id, f)| (id.clone(), f.clone())).collect();
+        let gone = before.keys().filter(|id| !now.contains_key(*id)).cloned().collect();
+        let changes = meta::diff(&before, &now);
+        (now, Some(gone), changes)
     }
 
     /// Where the library keeps its own files: `.quiet/`, the top in the old layout.
@@ -1498,6 +1642,7 @@ impl Store {
         let before = std::mem::take(&mut self.index);
         self.load_meta(&mut vec![]);
         self.reclaim_open(before);
+        self.mark_synced(true);
         Ok(())
     }
 
@@ -1750,10 +1895,14 @@ impl Store {
         anyhow::ensure!((self.v5 || marker.format < 5) && (self.v6 || marker.format < 6), "文档库已升级到新格式，请重新打开 Quiet.md");
         // An unreadable index is not judged here (that is `open`'s job): the
         // version in memory is written back unchanged.
+        // Memory as the disk is already (`Synced`): nothing to take in.
+        let read = self.v5 && !self.meta_held();
         if self.v5 {
-            let before = std::mem::take(&mut self.index);
-            self.load_meta(&mut vec![]);
-            self.reclaim_open(before);
+            if read {
+                let before = std::mem::take(&mut self.index);
+                self.load_meta(&mut vec![]);
+                self.reclaim_open(before);
+            }
         } else if self.flat {
             if let Some(index) = reread(&self.index_file()) { self.index = index; }
         } else if let Some(disk) = reread::<DiskIndex>(&self.index_file()) {
@@ -1765,6 +1914,7 @@ impl Store {
         }
         if !self.v6 && let Some(trash) = reread(&self.trash_index_file()) { self.trash = trash; }
         self.apply_pending_opened();
+        if read { self.mark_synced(true); }
         Ok(lock)
     }
 
@@ -2127,7 +2277,8 @@ impl Store {
             let seen = self.seen.get_mut();
             disk.retain(|k, a| keys.contains(k) || { seen.remove(&a.id); false });
         }
-        let mut dirty = disk.len() != before;
+        let disk_left_out = disk.len() != before;
+        let mut dirty = disk_left_out;
         for key in &keys {
             if disk.contains_key(key) { continue; }
             let t = crate::vfs::metadata(self.abs(key.trim_end_matches('/'))).ok().and_then(|m| m.modified().ok())
@@ -2201,6 +2352,10 @@ impl Store {
         if dirty && _lock.is_some() {
             let _ = self.save_index();
         }
+        // Entries for files not here are left out of memory but not of the
+        // disk: the next write reads them back in (a file arriving then keeps
+        // what its device set), so memory and the disk differ until then.
+        if disk_left_out { *self.synced.get_mut() = None; }
         out
     }
 
@@ -2743,9 +2898,8 @@ impl Store {
         }
         if changes.is_empty() { return Ok(()) }
         changes.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
-        let merged = meta::commit_over(&self.top_dir, &self.me, &self.clock, &self.merged.borrow(), changes, &mut vec![])?;
+        meta::commit_over(&self.top_dir, &self.me, &self.clock, &mut self.merged.borrow_mut(), changes, &mut vec![])?;
         *self.seen_trash.borrow_mut() = trash.iter().map(|(id, t)| (id.clone(), meta::trashed_value(t))).collect();
-        *self.merged.borrow_mut() = merged;
         Ok(())
     }
 
@@ -3126,8 +3280,7 @@ impl Store {
             if changes.is_empty() { return Ok(()) }
             // Not inside `begin_write`: the lock is taken here, so two copies never write this device's file at once.
             let _lock = if self.batch.lock.is_some() { WriteLock(vec![]) } else { WriteLock(self.lock_files(true)?) };
-            let merged = meta::commit_over(&self.top_dir, &self.me, &self.clock, &self.merged.borrow(), changes, &mut vec![])?;
-            *self.merged.borrow_mut() = merged;
+            meta::commit_over(&self.top_dir, &self.me, &self.clock, &mut self.merged.borrow_mut(), changes, &mut vec![])?;
             return Ok(())
         }
         let shared = Settings { window_origin: None, window_display: None, window_size: None, quick_note_size: None, ..s.clone() };
@@ -3222,6 +3375,8 @@ thread_local! {
     pub(crate) static SYNCED_WRITES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Documents `list` read and parsed (not taken from its cache).
     pub(crate) static DOC_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Times `load_meta` took the device files in again.
+    pub(crate) static META_LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(not(test))]
@@ -4003,6 +4158,90 @@ mod tests {
         assert!(!a.list().into_iter().find(|e| e.id == x).unwrap().meta.pinned);
     }
 
+    fn loads() -> usize { META_LOADS.with(|n| n.get()) }
+    fn pinned(s: &mut Store, id: &str) -> bool { s.list().into_iter().find(|e| e.id == id).unwrap().meta.pinned }
+    fn other_pins(lib: &Lib, by: &str, id: &str, on: bool) {
+        meta::commit(&lib.0, &dev(by), &Default::default(), vec![(id.into(), "pinned".into(), on.into())], &mut vec![]).unwrap();
+    }
+
+    #[test]
+    fn nothing_is_read_again_until_a_device_file_changes() {
+        let lib = Lib::new("meta-held");
+        let mut a = Store::open_as(lib.0.clone(), &library_key(&lib.0), dev("aaaa")).unwrap();
+        let x = a.create_from(&doc("共享")).unwrap();
+        a.list();
+        let n = loads();
+        a.list();
+        a.list();
+        assert_eq!(loads(), n, "nothing changed: nothing read again");
+        // This device's own writes keep memory and the disk together.
+        a.set_starred(&x, true).unwrap();
+        assert!(a.list().into_iter().find(|e| e.id == x).unwrap().meta.starred > 0);
+        assert_eq!(loads(), n, "its own write: nothing read again");
+        // Another device writes: the next look reads again, and only that once.
+        other_pins(&lib, "bbbb", &x, true);
+        assert!(pinned(&mut a, &x));
+        assert_eq!(loads(), n + 1);
+        a.list();
+        assert_eq!(loads(), n + 1);
+    }
+
+    #[test]
+    fn another_devices_write_reaches_list_and_saving() {
+        let lib = Lib::new("meta-other");
+        let mut a = Store::open_as(lib.0.clone(), &library_key(&lib.0), dev("aaaa")).unwrap();
+        let x = a.create_from(&doc("甲")).unwrap();
+        a.list();
+        other_pins(&lib, "bbbb", &x, true);
+        assert!(pinned(&mut a, &x), "list sees it");
+        // Written there while this device saves without listing first: the save
+        // takes it in and does not put the old value back.
+        other_pins(&lib, "bbbb", &x, false);
+        a.set_starred(&x, true).unwrap();
+        let merged = meta::load(&lib.0, "aaaa", &mut vec![]);
+        assert_eq!(merged.get(&x, "pinned"), Some(&serde_json::Value::Bool(false)));
+        assert!(merged.get(&x, "starred").is_some());
+        let m = a.list().into_iter().find(|e| e.id == x).unwrap().meta;
+        assert!(!m.pinned && m.starred > 0);
+        // And a change by this device afterwards still goes on top of it.
+        a.set_pinned(&x, true).unwrap();
+        assert_eq!(meta::load(&lib.0, "aaaa", &mut vec![]).get(&x, "pinned"), Some(&serde_json::Value::Bool(true)));
+    }
+
+    #[test]
+    fn a_device_file_removed_or_added_is_noticed() {
+        let lib = Lib::new("meta-files");
+        let mut a = Store::open_as(lib.0.clone(), &library_key(&lib.0), dev("aaaa")).unwrap();
+        let x = a.create_from(&doc("甲")).unwrap();
+        a.list();
+        other_pins(&lib, "bbbb", &x, true);
+        assert!(pinned(&mut a, &x));
+        crate::vfs::remove_file(meta::dir(&lib.0).join("bbbb.json")).unwrap();
+        assert!(!pinned(&mut a, &x), "its file gone, so is what it said");
+        other_pins(&lib, "cccc", &x, true);
+        assert!(pinned(&mut a, &x), "a new device's file");
+    }
+
+    #[test]
+    fn a_rewrite_with_the_same_size_and_time_is_noticed() {
+        // A sync (iCloud, a git checkout, rsync -t) may put a file back with the
+        // time it had where it was written, and a change may keep its size.
+        let lib = Lib::new("meta-same-time");
+        let mut a = Store::open_as(lib.0.clone(), &library_key(&lib.0), dev("aaaa")).unwrap();
+        let x = a.create_from(&doc("甲")).unwrap();
+        other_pins(&lib, "bbbb", &x, true);
+        assert!(pinned(&mut a, &x));
+        let path = meta::dir(&lib.0).join("bbbb.json");
+        let was = crate::vfs::metadata(&path).unwrap();
+        let text = crate::vfs::read_to_string(&path).unwrap();
+        assert_eq!(text.matches("true").count(), 1);
+        crate::vfs::write(&path, text.replace("true", "null")).unwrap();
+        crate::vfs::File::options().write(true).open(&path).unwrap().set_modified(was.modified().unwrap()).unwrap();
+        let now = crate::vfs::metadata(&path).unwrap();
+        assert_eq!((now.len(), now.modified().unwrap()), (was.len(), was.modified().unwrap()));
+        assert!(!pinned(&mut a, &x));
+    }
+
     #[test]
     fn devices_are_named_or_labelled() {
         let d = Device { id: "9b2f0c1e".into(), name: String::new(), platform: "macos".into() };
@@ -4305,6 +4544,9 @@ mod tests {
         let x = a.create_from(&doc("触发写入")).unwrap();
         a.set_pinned(&x, true).unwrap();
         assert!(!a.list().iter().any(|e| e.id == "late"));
+        // Listed again with nothing changed: still read back in, not forgotten.
+        a.list();
+        assert!(!a.list().iter().any(|e| e.id == "late"));
         crate::vfs::write(lib.0.join("晚到.xml"), "<title>晚到</title>\n").unwrap();
         let late = a.list().into_iter().find(|e| e.id == "late").unwrap();
         assert!(late.meta.pinned);
@@ -4530,7 +4772,7 @@ mod tests {
         let index = crate::vfs::read(trash.join("index.json")).unwrap();
         crate::vfs::rename(&trash, lib.0.join(".quiet/trash-away")).unwrap();
         crate::vfs::write(&trash, b"").unwrap();
-        let mut s = Store { file_changes: vec![], top_dir: lib.0.clone(), index: HashMap::new(), foreign: DiskIndex::new(), flat: false, migrated: None, trash: serde_json::from_slice(&index).unwrap(), warnings: vec![], loaded: Default::default(), copied: Default::default(), parsed: HashMap::new(), batch: Default::default(), view: Default::default(), v5: false, me: device(), clock: Default::default(), seen: Default::default(), merged: Default::default(), key: library_key(&lib.0), place_by_hand: true, v6: false, seen_trash: Default::default(), purging: Default::default() };
+        let mut s = Store { file_changes: vec![], top_dir: lib.0.clone(), index: HashMap::new(), foreign: DiskIndex::new(), flat: false, migrated: None, trash: serde_json::from_slice(&index).unwrap(), warnings: vec![], loaded: Default::default(), copied: Default::default(), parsed: HashMap::new(), batch: Default::default(), view: Default::default(), v5: false, me: device(), clock: Default::default(), seen: Default::default(), merged: Default::default(), key: library_key(&lib.0), place_by_hand: true, v6: false, seen_trash: Default::default(), purging: Default::default(), synced: Default::default() };
         assert_eq!(s.list_trash().len(), 1);
         assert_eq!(s.trash.len(), 1);
     }

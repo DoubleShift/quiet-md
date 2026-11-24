@@ -77,7 +77,7 @@ What the files cannot say is split by device so a synced library never has two c
 - **Files found on disk** with no entry get the id derived from their NFC relative path (`meta::path_id`), the same on every device. Two ids claiming one path merge into the older one.
 - **`_root`** holds the folder's own settings (one top-level folder on 主页; the name is from before the rename and stays on disk; `meta::FOLDER_ITEM` in code): `history_limit` and the folder's look (`look.theme`, `look.feishu`, `look.doc_family`, …), each field on its own. `scroll` (the reading position) is a field of its document. Fields this build does not know are kept.
 - **Moving from FORMAT 4.** `Store::open_at` writes `index.json` and the folder-level parts of `settings.json` as this device's file, every field stamped at that moment, then `format.json` (last, so a crash redoes it), and renames `index.json` to `index.json.v4`. A library in a synced folder (`migrate::sync_of`) stays FORMAT 4 for now, since another computer may still run a build that cannot open 5; asking first is left to the sync work. A FORMAT 4 store still open when another copy moves the library to 5 stops writing.
-- **The merged view is cached** in memory with each device file's name, size and modification time; a write re-reads only when one of them changed.
+- **The merged view is cached** in memory with each device file's name, size, modification time and a mark of each write (inode and change time on Unix, a hash of the contents on Windows: a sync can put back the time a file had where it was written); a write or a listing re-reads only when one of them changed. While none did, and memory is as this device last read or wrote it, the index is not rebuilt either.
 
 ### Deletions and hand order (FORMAT 6)
 
