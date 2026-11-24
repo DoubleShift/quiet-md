@@ -843,10 +843,11 @@ impl Workspace {
                     .on_click(cx.listener(|w, _, _, cx| { w.batch = None; w.row_menu = None; cx.notify(); })))
         } else if phone {
             let sort_open = self.home.sort_menu;
-            // 我的文档 is the page; 收藏 is a star beside the sort button, named while it is shown.
+            // The list shown names the row (我的文档, or 收藏 from the star beside the sort button).
             let starred = self.home.tab == HomeTab::Starred;
             toolbar
-                .when(starred, |d| d.child(div().text_size(px(13.)).line_height(px(20.)).text_color(Theme::text_caption()).child(crate::settings::text("收藏"))))
+                .child(div().text_size(px(15.)).line_height(px(22.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text())
+                    .child(if starred { crate::settings::text("收藏") } else { crate::settings::text("我的文档") }))
                 .child(div().flex_1())
                 .child(crate::design::Button::ghost("home-tab-star").icon("star").selected(starred)
                     .on_click(cx.listener(move |w, _, _, cx| {
