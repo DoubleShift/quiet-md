@@ -283,8 +283,10 @@ fn apply(p: Preferences) {
 /// families once so one that has been uninstalled since falls back to the
 /// default face (`fonts::store`) instead of GPUI's last resort, and note which
 /// punctuation it draws itself (`fonts::probe`). Without one, fonts stay
-/// unenumerated.
+/// unenumerated; only whether the Chinese punctuation face is here is
+/// looked up (`fonts::check_cjk_punct`).
 pub fn check_fonts(cx: &App) {
+    crate::fonts::check_cjk_punct(cx);
     let p = prefs();
     if p.ui_family.trim().is_empty() && p.doc_family.trim().is_empty() { return }
     crate::fonts::families(cx);

@@ -710,7 +710,7 @@ fn span_color(spec: &TextSpec, m: &Marks) -> Hsla {
     if m.strike && !crate::settings::feishu() { c.opacity(c.a * 0.65) } else { c }
 }
 
-use crate::editor_ui::{CJK_PUNCT_FONT, is_cjk_punct};
+use crate::editor_ui::{cjk_punct_font, is_cjk_punct};
 
 /// A family the platform has: a missing one resolves to GPUI's last-resort
 /// face in its regular style, so quotes in bold or italic text lost theirs (#419).
@@ -835,13 +835,16 @@ pub fn build_runs(
                 let own = crate::fonts::own_glyphs(&font.family);
                 if text.text[a..b].chars().all(is_quote) {
                     // Cut one by one, so `a` is the quote.
-                    if chinese_quotes.binary_search(&a).is_ok() {
-                        if !own.cjk_punct { font.family = CJK_PUNCT_FONT.into(); }
-                    } else if !own.quotes {
-                        font.family = QUOTE_FONT.into();
+                    // In Chinese text the Chinese face's; without one (not
+                    // installed here), as in Latin text.
+                    match (chinese_quotes.binary_search(&a).is_ok(), own.cjk_punct, cjk_punct_font()) {
+                        (true, true, _) => {}
+                        (true, false, Some(f)) => font.family = f.into(),
+                        _ if !own.quotes => font.family = QUOTE_FONT.into(),
+                        _ => {}
                     }
-                } else if !own.cjk_punct && text.text[a..b].chars().all(is_cjk_punct) {
-                    font.family = CJK_PUNCT_FONT.into();
+                } else if !own.cjk_punct && text.text[a..b].chars().all(is_cjk_punct) && let Some(f) = cjk_punct_font() {
+                    font.family = f.into();
                 }
             }
             if hl_italic {
