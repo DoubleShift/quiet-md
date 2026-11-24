@@ -965,7 +965,11 @@ impl Store {
         let internal = if Self::flat_at(root) { root.to_path_buf() } else { root.join(INTERNAL) };
         if Self::format_at(root) >= 5 {
             // Each field on its own: a theme picked here and a font picked there both stay.
-            let was = serde_json::to_value(Self::look_at(root))?;
+            // Compared with what the devices' files hold, not with `look_at`'s fallbacks: the
+            // first save writes every field. (Against the old preferences.json, which under
+            // QUIET_MD_HOME is the one just saved, a new font looked unchanged and was left
+            // out; the look then had fields, so the next launch read only those.)
+            let was = meta::load(root, &device().id, &mut vec![]).root_object("look.");
             let now = serde_json::to_value(look)?;
             let mut keys: BTreeMap<String, ()> = BTreeMap::new();
             for v in [&was, &now] { if let Some(o) = v.as_object() { keys.extend(o.keys().map(|k| (k.clone(), ()))); } }
@@ -4653,6 +4657,20 @@ mod tests {
         meta::commit(&lib.0, &dev("other"), &Default::default(), vec![(meta::FOLDER_ITEM.into(), "look.doc_family".into(), "黑体".into())], &mut vec![]).unwrap();
         let look = Store::look_at(&lib.0);
         assert_eq!((look.theme.as_deref(), look.doc_family.as_deref()), (Some("纸"), Some("黑体")));
+    }
+
+    /// The first look saved where the old preferences.json already says the same
+    /// (it is the settings file the app just wrote, under QUIET_MD_HOME) keeps
+    /// every field: the next launch reads only the saved look.
+    #[test]
+    fn first_look_saved_keeps_fields_the_old_preferences_share() {
+        let lib = Lib::new("look-first");
+        lib.open();
+        let look = FolderLook { theme: Some("notion".into()), feishu: Some(false), doc_family: Some("LXGW WenKai".into()), doc_size: Some(String::new()) };
+        crate::vfs::write(lib.0.join(INTERNAL).join("preferences.json"), r#"{"theme":"notion","feishu":false,"doc_family":"LXGW WenKai"}"#).unwrap();
+        Store::save_look_at(&lib.0, &look).unwrap();
+        crate::vfs::write(lib.0.join(INTERNAL).join("preferences.json"), "{}").unwrap();
+        assert_eq!(Store::look_at(&lib.0), look);
     }
 
     #[test]
