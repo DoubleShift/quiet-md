@@ -2021,7 +2021,7 @@ impl Render for Workspace {
         self.dialog_focus.sync(self.export_md.is_some() || self.doc_info.is_some(), window, cx);
         let confirm = self.render_confirm(cx);
         let trash_menu = self.render_trash_menu(cx);
-        let home_menus = self.render_home_menus(cx);
+        let home_menus = self.render_home_menus(window, cx);
         let theme_menu = self.render_theme_menu(cx);
         let lang_menu = self.render_lang_menu(cx);
         let pref_menu = self.render_pref_menu(cx);

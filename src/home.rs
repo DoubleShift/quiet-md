@@ -804,15 +804,19 @@ impl Workspace {
         };
         // 批量管理: the sidebar's 批量操作 selection, entered and shown here
         // too, with a toolbar of its own.
+        // A phone: the row has the width for 我的文档 / 收藏 and one button; the rest
+        // goes into that button's menu, and 批量管理's actions are glyphs.
+        let phone = crate::theme::compact(f32::from(window.viewport_size().width));
         let text_btn = |id: &'static str, ic: &'static str, label: &'static str, enabled: bool| {
-            crate::design::Button::ghost(id).icon(ic).label(crate::settings::label(label)).disabled(!enabled)
+            let b = crate::design::Button::ghost(id).icon(ic).disabled(!enabled);
+            if phone { b } else { b.label(crate::settings::label(label)) }
         };
         let toolbar = div()
             .mt(px(12.))
             .h(px(28.))
             .flex_none()
-            .pl(px(24.))
-            .pr(px(24.))
+            .pl(px(if phone { 16. } else { 24. }))
+            .pr(px(if phone { 16. } else { 24. }))
             .flex()
             .items_center();
         let toolbar = if let Some(sel) = &self.batch {
@@ -837,6 +841,15 @@ impl Workspace {
                 .child(text_btn("home-batch-exit", "x", crate::settings::text("退出"), true).ml(px(8.))
                     .tip(crate::settings::text("退出批量操作"), None)
                     .on_click(cx.listener(|w, _, _, cx| { w.batch = None; w.row_menu = None; cx.notify(); })))
+        } else if phone {
+            let sort_open = self.home.sort_menu;
+            toolbar
+                .child(crate::design::Segmented::new().flex_1()
+                    .child(tab("home-tab-recent", crate::settings::text("我的文档"), HomeTab::Recent))
+                    .child(tab("home-tab-star", crate::settings::text("收藏"), HomeTab::Starred)))
+                .child(crate::design::Button::ghost("home-sort").relative().ml(px(8.)).icon("sort-down").selected(sort_open)
+                    .child(self.home.track("home-sort"))
+                    .on_mouse_down(MouseButton::Left, cx.listener(move |w, _, _, cx| { cx.stop_propagation(); w.home.sort_menu = !sort_open; cx.notify(); })))
         } else { // Menu state at render: the popover's outside-press handler clears it on mouse-down, before a click
             // would fire, so toggle on mouse-down from this snapshot.
             let sort_open = self.home.sort_menu; toolbar
@@ -1093,7 +1106,7 @@ impl Workspace {
 
     /// 显示设置 and the sort dropdown: the menu panel; the sort item is a
     /// native menu row.
-    pub(crate) fn render_home_menus(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    pub(crate) fn render_home_menus(&self, window: &Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut out = vec![];
         if self.view != crate::app::View::Home {
             return out;
@@ -1105,6 +1118,17 @@ impl Workspace {
             && let Some(b) = self.home.anchor("home-sort") {
                 let mut menu = Popover::new("sort-menu").menu().min_w(px(200.))
                     .on_mouse_down_out(cx.listener(|w, _, _, cx| { w.home.sort_menu = false; cx.notify(); }));
+                // A phone's toolbar has only this button: 批量管理 and the view come first.
+                if crate::theme::compact(f32::from(window.viewport_size().width)) {
+                    let grid = self.home.grid;
+                    menu = menu
+                        .child(MenuItem::new("home-menu-batch").icon("batch").label(crate::settings::label(crate::settings::text("批量管理")))
+                            .on_click(cx.listener(|w, _, _, cx| { w.batch = Some(vec![]); w.row_menu = None; w.home.sort_menu = false; cx.notify(); })))
+                        .child(MenuItem::new("home-menu-view").icon(if grid { "view-list" } else { "view-grid" })
+                            .label(if grid { crate::settings::text("切换为列表视图") } else { crate::settings::text("切换为宫格视图") })
+                            .on_click(cx.listener(move |w, _, _, cx| { w.home.grid = !grid; w.save_home(); w.home.sort_menu = false; cx.notify(); })))
+                        .child(MenuSeparator::new());
+                }
                 for (index, order) in [HomeSort::Manual, HomeSort::Visited, HomeSort::Modified, HomeSort::Created, HomeSort::Title].into_iter().enumerate() {
                     let g = SharedString::from(format!("home-order-{index}"));
                     menu = menu.child(MenuItem::new(g).label(crate::settings::label(order.label())).checked(self.home.sort == order)
