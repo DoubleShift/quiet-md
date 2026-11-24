@@ -123,34 +123,31 @@ impl Workspace {
             .child(div().flex_1())
             .children(crate::settings::update_pill(cx));
 
-        // The nav is just 主页: 36px items, a blue tint when selected. Its
-        // icon column (x 17) is shared with 搜索 and the doc rows.
+        // The nav: 主页, then 添加文件夹 (another folder beside the default one, as
+        // 文件 › 打开文件夹… does). 36px items, a tint when selected. Their icon
+        // column (x 17) is shared with 搜索 and the doc rows.
         let home_on = self.view == View::Home;
-        let nav = div().flex_none().pt(px(4.)).pb(px(4.)).px(px(SB_X)).child(
-            div()
-                .id("nav-home")
-                .h(px(ROW_H))
-                .pl(px(6.))
-                .pr(px(4.))
-                .flex()
-                .items_center()
-                .rounded(px(ROW_R))
-                .cursor_pointer()
-                .text_size(px(theme::ui_font()))
-                .line_height(px(20.))
-                .when(home_on, |d| d.bg(Theme::sidebar_selected()).text_color(Theme::text()))
-                .when(!home_on, |d| d.text_color(Theme::sidebar_text()).hover(|s| s.bg(Theme::sidebar_hover())))
-                .child(
-                    // Selected or not, the same outline: the row's fill marks the selection.
-                    div().size(px(20.)).flex_none().flex().items_center().justify_center().mr(px(9.)).child(icon(
-                        "home",
-                        ROW_ICON,
-                        Theme::icon(),
-                    )),
-                )
-                .child(crate::settings::tr("主页", "Home"))
-                .on_click(cx.listener(|w, _, _, cx| w.show_view(View::Home, cx))),
-        );
+        let item = |id: &'static str, glyph: &'static str, label: &'static str, on: bool| div()
+            .id(id)
+            .h(px(ROW_H))
+            .pl(px(6.))
+            .pr(px(4.))
+            .flex()
+            .items_center()
+            .rounded(px(ROW_R))
+            .cursor_pointer()
+            .text_size(px(theme::ui_font()))
+            .line_height(px(20.))
+            .when(on, |d| d.bg(Theme::sidebar_selected()).text_color(Theme::text()))
+            .when(!on, |d| d.text_color(Theme::sidebar_text()).hover(|s| s.bg(Theme::sidebar_hover())))
+            // Selected or not, the same outline: the row's fill marks the selection.
+            .child(div().size(px(20.)).flex_none().flex().items_center().justify_center().mr(px(9.)).child(icon(glyph, ROW_ICON, Theme::icon())))
+            .child(label);
+        let nav = div().flex_none().pt(px(4.)).pb(px(4.)).px(px(SB_X))
+            .child(item("nav-home", "home", crate::settings::tr("主页", "Home"), home_on).on_click(cx.listener(|w, _, _, cx| w.show_view(View::Home, cx))))
+            .child(item("nav-add-folder", "folder-plus", crate::settings::tr("添加文件夹", "Add a folder"), false)
+                .tip(crate::settings::tr("添加文件夹", "Add a folder"), Some(crate::shortcuts::hint("workspace::OpenFolder", "⌘ + Shift + O")))
+                .on_click(cx.listener(|w, _, window, cx| w.open_folder_dialog(window, cx))));
 
         let mut list = div().flex().flex_col().px(px(SB_X)).pb(px(8.));
         // Pinned docs are shortcuts: they stay in 我的文档 too.

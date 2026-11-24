@@ -177,5 +177,5 @@ The code is licensed under [MIT](LICENSE). Third-party code, fonts and assets ar
 
 The following are not covered by the MIT license and should be replaced in forks:
 
-- The 69 Nucleo icons in `assets/icons/` are under a commercial Nucleo license. Do not extract or redistribute them on their own.
+- The 70 Nucleo icons in `assets/icons/` are under a commercial Nucleo license. Do not extract or redistribute them on their own.
 - The name "Quiet.md" and the app icon.

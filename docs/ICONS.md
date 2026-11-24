@@ -2,9 +2,9 @@
 
 Where every interface icon comes from, for the licence summary in [THIRD_PARTY.md](../THIRD_PARTY.md). Each SVG also names its source in a comment on its first line, except the Lucide and project-drawn editor icons, which follow the conventions below.
 
-## `assets/icons/`: 69 Nucleo icons
+## `assets/icons/`: 70 Nucleo icons
 
-Nucleo UI Outline 18, UI Fill 18 and UI Essential Outline 18, under the project’s commercial Nucleo licence (up to 100 icons in an open-source project). 69 files draw on 61 distinct Nucleo icons: several names reuse one icon (for example `code` and `braces` are both Code, `doc` and `file-text` both FileContent). They are excluded from the MIT licence and may not be extracted into an icon set.
+Nucleo UI Outline 18, UI Fill 18 and UI Essential Outline 18, under the project’s commercial Nucleo licence (up to 100 icons in an open-source project). 70 files draw on 62 distinct Nucleo icons: several names reuse one icon (for example `code` and `braces` are both Code, `doc` and `file-text` both FileContent). They are excluded from the MIT licence and may not be extracted into an icon set.
 
 Checked 2026-11-24 against the official packages `nucleo-ui-outline-18` 1.5.0 and `nucleo-ui-essential-outline-18` 1.1.8 by comparing the drawn shapes.
 
@@ -32,6 +32,7 @@ Checked 2026-11-24 against the official packages `nucleo-ui-outline-18` 1.5.0 an
 | `eye-open.svg` | UI Outline 18 | Eye | identical to the package |
 | `file-text.svg` | UI Outline 18 | FileContent | identical to the package |
 | `folder-input.svg` | UI Outline 18 | FolderDownload | identical to the package |
+| `folder-plus.svg` | UI Outline 18 | FolderPlus | identical to the package (taken from `nucleo-ui-outline-18` 1.5.0, 2026-11-25) |
 | `heading-1.svg` | UI Outline 18 | Heading1 | identical to the package |
 | `heading-2.svg` | UI Outline 18 | Heading2 | identical to the package |
 | `heading-3.svg` | UI Outline 18 | Heading3 | identical to the package |

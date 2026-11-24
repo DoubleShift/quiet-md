@@ -557,19 +557,28 @@ impl Workspace {
     /// The 导入 menu under the header icon.
     pub(crate) fn render_import_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (parent, pos) = self.import_menu.clone()?;
-        let row = |id: &'static str, glyph: &'static str, label: &'static str| crate::design::MenuItem::new(id).icon(glyph).label(label);
-        let item = |id: &'static str, glyph: &'static str, label: &'static str, kind: ImportKind| {
-            let parent = parent.clone();
-            row(id, glyph, label).on_click(cx.listener(move |w, _, window, cx| w.open_import_kind(kind, parent.clone(), window, cx)))
-        };
         Some(deferred(anchored().anchor(Anchor::TopRight).position(pos).snap_to_window_with_margin(px(8.)).child(
             crate::design::Popover::new("import-items").menu().min_w(px(210.))
                 .on_mouse_down_out(cx.listener(|w, _, _, cx| { w.import_menu = None; cx.notify(); }))
-                .child(item("import-md", "doc-md", crate::settings::tr("导入 Markdown 文件…", "Import Markdown Files…"), ImportKind::Markdown))
-                .child(item("import-folder", "folder", crate::settings::tr("导入文件夹…", "Import Folder…"), ImportKind::Folder))
-                .child(item("import-xml", "doc", crate::settings::tr("导入 DocxXML…", "Import DocxXML…"), ImportKind::DocxXml))
-                .when(crate::DATATABLE, |d| d.child(item("import-csv", "datatable", crate::settings::tr("从 CSV 新建数据表…", "New Data Table from CSV…"), ImportKind::Csv))),
+                .children(self.import_items(parent, cx)),
         )).with_priority(3).into_any_element())
+    }
+
+    /// The 导入 menu's rows, bringing things into `parent` (None: the root in front): that menu, and
+    /// the end of a root's "+" menu in the sidebar.
+    pub(crate) fn import_items(&self, parent: Option<String>, cx: &mut Context<Self>) -> Vec<crate::design::MenuItem> {
+        let item = |id: &'static str, glyph: &'static str, label: &'static str, kind: ImportKind| {
+            let parent = parent.clone();
+            crate::design::MenuItem::new(id).icon(glyph).label(label)
+                .on_click(cx.listener(move |w, _, window, cx| { w.create_menu = None; w.open_import_kind(kind, parent.clone(), window, cx) }))
+        };
+        let mut out = vec![
+            item("import-md", "doc-md", crate::settings::tr("导入 Markdown 文件…", "Import Markdown Files…"), ImportKind::Markdown),
+            item("import-folder", "folder", crate::settings::tr("导入文件夹…", "Import Folder…"), ImportKind::Folder),
+            item("import-xml", "doc", crate::settings::tr("导入 DocxXML…", "Import DocxXML…"), ImportKind::DocxXml),
+        ];
+        if crate::DATATABLE { out.push(item("import-csv", "datatable", crate::settings::tr("从 CSV 新建数据表…", "New Data Table from CSV…"), ImportKind::Csv)); }
+        out
     }
 
     /// The header's … menu: open this folder (None: the library) in the
