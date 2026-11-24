@@ -106,21 +106,34 @@ fn set_rev(p: &Paths, rev: &str) -> Result<()> {
 
 // ---- git -------------------------------------------------------------------
 
+/// Git, cut loose from any repository named in the environment. A git hook
+/// (pre-push running scripts/check.py) sets GIT_DIR and friends; inherited,
+/// they point `git -C <tree>` at the outer repository, so `init` rewrote its
+/// config (core.bare = true) instead of making the scratch tree. The list is
+/// `git rev-parse --local-env-vars`, what git itself clears for submodules.
+fn git_cmd() -> Command {
+    let mut c = Command::new("git");
+    for v in ["GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE",
+        "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE",
+        "GIT_COMMON_DIR", "GIT_CEILING_DIRECTORIES"] { c.env_remove(v); }
+    c
+}
+
 fn git(dir: &Path, args: &[&str]) -> Result<()> {
-    let st = Command::new("git").arg("-C").arg(dir).args(GIT_ID).args(args).status().context("running git")?;
+    let st = git_cmd().arg("-C").arg(dir).args(GIT_ID).args(args).status().context("running git")?;
     if !st.success() { bail!("git {} failed in {}", args.join(" "), dir.display()) }
     Ok(())
 }
 
 fn git_out(dir: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git").arg("-C").arg(dir).args(GIT_ID).args(args).stderr(Stdio::inherit()).output().context("running git")?;
+    let out = git_cmd().arg("-C").arg(dir).args(GIT_ID).args(args).stderr(Stdio::inherit()).output().context("running git")?;
     if !out.status.success() { bail!("git {} failed in {}", args.join(" "), dir.display()) }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// Runs git and returns (success, stderr) without failing.
 fn git_try(dir: &Path, args: &[&str]) -> Result<(bool, String)> {
-    let out = Command::new("git").arg("-C").arg(dir).args(GIT_ID).args(args).output().context("running git")?;
+    let out = git_cmd().arg("-C").arg(dir).args(GIT_ID).args(args).output().context("running git")?;
     Ok((out.status.success(), String::from_utf8_lossy(&out.stderr).into_owned()))
 }
 
@@ -132,7 +145,7 @@ fn ensure_cache(p: &Paths, cfg: &Config, rev: &str) -> Result<()> {
     if !p.cache.join(".git").exists() {
         fs::create_dir_all(p.cache.parent().unwrap())?;
         println!("cloning {} (blobless) into {}", cfg.repo, p.cache.display());
-        let st = Command::new("git").args(["clone", "--filter=blob:none", "--no-checkout", "--quiet", &cfg.repo]).arg(&p.cache).status()?;
+        let st = git_cmd().args(["clone", "--filter=blob:none", "--no-checkout", "--quiet", &cfg.repo]).arg(&p.cache).status()?;
         if !st.success() { bail!("git clone failed") }
     }
     if !git_try(&p.cache, &["cat-file", "-e", &format!("{rev}^{{commit}}")])?.0 {
@@ -637,5 +650,33 @@ mod tests {
         let e = diff_at(&d, 20).unwrap_err().to_string();
         assert!(e.contains("0030-eighteen.patch"), "{e}");
         fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// Run by `outer_repository_in_env_is_left_alone` with a hook's environment.
+    #[test]
+    #[ignore]
+    fn in_hook_env() {
+        let d = tree("hook", &[(10, "line 10 edited")]);
+        assert!(diff_at(&d, 20).unwrap().contains("+line 10 edited"));
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn outer_repository_in_env_is_left_alone() {
+        // A git hook runs with GIT_DIR etc. naming the repository being pushed.
+        let outer = scratch("outer");
+        git(&outer, &["init", "--quiet"]).unwrap();
+        let snapshot = || -> Vec<(String, Vec<u8>)> {
+            list_files(&outer.join(".git")).unwrap().into_iter().map(|f| { let b = fs::read(outer.join(".git").join(&f)).unwrap(); (f, b) }).collect()
+        };
+        let before = snapshot();
+        let out = Command::new(std::env::current_exe().unwrap())
+            .args(["--ignored", "--exact", "tests::in_hook_env"])
+            .env("GIT_DIR", outer.join(".git")).env("GIT_WORK_TREE", &outer).env("GIT_INDEX_FILE", outer.join(".git/index"))
+            .output().unwrap();
+        let log = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success() && log.contains("1 passed"), "{log}");
+        assert!(before == snapshot(), "the outer repository changed");
+        fs::remove_dir_all(&outer).unwrap();
     }
 }
