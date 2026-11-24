@@ -442,11 +442,9 @@ impl Home {
         .inset_0()
     }
 
-    fn cols(&self) -> Vec<Col> {
-        match self.tab {
-            HomeTab::Recent => RECENT_COLS.to_vec(),
-            HomeTab::Starred => STARRED_COLS.to_vec(),
-        }
+    /// The list's columns: the library's (`library`: the top level is listed) or 收藏's.
+    fn cols(&self, library: bool) -> Vec<Col> {
+        if library { RECENT_COLS.to_vec() } else { STARRED_COLS.to_vec() }
     }
 
     /// The column drawn as sorted; 标题 and 手动排序 mark their own header.
@@ -577,7 +575,9 @@ impl Workspace {
         true
     }
 
-    pub(crate) fn manual_home_sort(&self) -> bool { self.home.sort == HomeSort::Manual && self.home.tab == HomeTab::Recent }
+    pub(crate) fn manual_home_sort(&self) -> bool { self.home.sort == HomeSort::Manual && self.lists_library() }
+    /// 主页 shows its 我的文档 tab: the top level under 主页, every top-level folder a card.
+    pub(crate) fn lists_library(&self) -> bool { self.home.tab == HomeTab::Recent }
 
     /// A list header: clicking it sorts by that column; clicking the sorted
     /// one flips the direction. Headers without an order are not clickable.
@@ -788,12 +788,12 @@ impl Workspace {
             .child(self.place_button("home-more", None, cx))
             .child(self.import_button("home-import", None, cx))
             .when(!phone_bar, |d| d.child(
-            crate::ui::header_icon("home-new", "plus")
-                .child(self.home.track("create-home"))
-                .selected(self.create_menu.as_ref().is_some_and(|(_, pos)| self.home.anchor("create-home").is_some_and(|b| point(b.left(), b.bottom() + px(4.)) == *pos)))
-                .tip(crate::settings::tr("新建", "New"), Some(crate::shortcuts::hint("workspace::NewDoc", "⌘ + N")))
+            // 主页 makes no documents (which root they would land in isn't shown here): its one
+            // creation control adds a folder beside the others, as 添加文件夹 under 主页 does.
+            crate::ui::header_icon("home-new", "folder-plus")
+                .tip(crate::settings::tr("添加文件夹", "Add a folder"), Some(crate::shortcuts::hint("workspace::OpenFolder", "⌘ + Shift + O")))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(|w, ev: &ClickEvent, _, cx| { let pos = w.home.anchor("create-home").map_or(ev.position(), |b| point(b.left(), b.bottom() + px(4.))); w.create_menu = if w.create_menu.is_some() { None } else { Some((None, pos)) }; cx.notify(); })).into_any_element()
+                .on_click(cx.listener(|w, _, window, cx| w.open_folder_dialog(window, cx))).into_any_element()
         ));
         // Tabs as a segmented control.
         let tab = |id: &'static str, label: &'static str, t: HomeTab| {
@@ -882,7 +882,7 @@ impl Workspace {
             return div().flex_1().min_w_0().h_full().flex().flex_col().child(header).child(self.empty_main(cx)).into_any_element();
         }
         let entries = self.home_entries();
-        let body = if entries.is_empty() && (self.home.grid || self.home.tab == HomeTab::Recent) {
+        let body = if entries.is_empty() && (self.home.grid || self.lists_library()) {
             empty_state("illus/empty-list.svg", crate::settings::text("当前列表暂无内容")).into_any_element()
         } else if self.home.grid {
             self.render_home_grid(&entries, false, window, cx)
@@ -903,7 +903,7 @@ impl Workspace {
 
     pub(crate) fn render_home_list(&self, entries: &[Entry], in_folder: bool, cx: &mut Context<Self>) -> AnyElement {
         let list_scroll = if in_folder { &self.home.folder_list_scroll } else { &self.home.list_scroll };
-        let cols = self.home.cols();
+        let cols = self.home.cols(self.lists_library());
         let sort = self.home.sort_col();
         // The title is sized at about three times a column.
         let title_cell = || div().flex_grow_1().flex_shrink_1().flex_basis(relative(0.)).min_w(px(200.));

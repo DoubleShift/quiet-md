@@ -2367,7 +2367,10 @@ pub(crate) fn image_block_from_file(p: &Path) -> Result<Block, &'static str> {
         return Err(TOO_BIG);
     }
     let bytes = fdl_core::vfs::read(p).map_err(|_| BAD_DIMS)?;
-    image_block_named(&bytes, &ext, p.file_stem().and_then(|s| s.to_str()))
+    let b = image_block_named(&bytes, &ext, p.file_stem().and_then(|s| s.to_str()))?;
+    // The copy in the assets keeps the picture's change time, as a copy in the Finder does.
+    if let (BlockKind::Image { src, .. }, Some((_, changed))) = (&b.kind, fdl_core::vfs::file_times(p)) { let _ = fdl_core::vfs::set_modified(Path::new(src), changed); }
+    Ok(b)
 }
 
 /// One line of pasted text that is nothing but a local image file path

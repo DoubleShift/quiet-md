@@ -170,8 +170,10 @@ pub fn start(window: &mut Window, cx: &mut App) {
                     let at = |q: f64| v.get(((v.len() as f64 - 1.) * q).round() as usize).copied().unwrap_or(0.);
                     format!("p50 {:.2} p95 {:.2} max {:.2}", at(0.5), at(0.95), at(1.))
                 };
+                let mean = samples.iter().map(|s| s.1).sum::<f64>() / samples.len().max(1) as f64;
+                let drops = samples.iter().filter(|s| s.1 > 1000. / 60.).count();
                 eprintln!(
-                    "bench {step:?} x{}: step [{}] frame [{}] editor render [{}] ms",
+                    "bench {step:?} x{}: frame mean {mean:.2} drops {drops}: step [{}] frame [{}] editor render [{}] ms",
                     samples.len(),
                     stat(|s| s.0),
                     stat(|s| s.1),

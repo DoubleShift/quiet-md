@@ -34,7 +34,7 @@ impl Workspace {
                 self.home.sort_menu = false;
                 self.entries = self.store.list();
                 self.sort();
-                match &parent { Some(p) => { self.expanded.insert(p.clone()); } None => self.folded[1] = false }
+                if let Some(p) = &parent { self.expanded.insert(p.clone()); }
                 self.search.update(cx, |s, cx| s.set_text("", cx));
                 self.open(&id, window, cx);
                 if let Some(ed) = &self.editor { { let f = ed.read(cx).focus.clone(); window.focus(&f, cx); } }
@@ -59,7 +59,7 @@ impl Workspace {
                 self.home.sort_menu = false;
                 self.entries = self.store.list();
                 self.sort();
-                match &parent { Some(p) => { self.expanded.insert(p.clone()); } None => self.folded[1] = false }
+                if let Some(p) = &parent { self.expanded.insert(p.clone()); }
                 self.search.update(cx, |s, cx| s.set_text("", cx));
                 self.open(&id, window, cx);
             }
@@ -82,7 +82,7 @@ impl Workspace {
                 self.home.sort_menu = false;
                 self.entries = self.store.list();
                 self.sort();
-                match &parent { Some(p) => { self.expanded.insert(p.clone()); } None => self.folded[1] = false }
+                if let Some(p) = &parent { self.expanded.insert(p.clone()); }
                 self.search.update(cx, |s, cx| s.set_text("", cx));
                 self.open(&id, window, cx);
             }
@@ -153,7 +153,6 @@ impl Workspace {
             Ok(id) => {
                 self.entries = self.store.list(); self.sort();
                 if let Some(p) = parent { self.expanded.insert(p); }
-                self.folded[1] = false;
                 // Select and open the new folder (like 新建文档), then focus its name
                 // field. open_folder focuses the pane, so start_rename must follow it.
                 if self.open_folder(&id, window, cx) {

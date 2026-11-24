@@ -1403,7 +1403,7 @@ impl Workspace {
             .child(div().h(px(crate::app::HEADER_H)).flex_none().flex().items_center().pl(px(theme::TRAFFIC_LIGHTS_W)).pr(px(12.)).title_bar().child(self.header_navigation(cx))
                 .child(div().flex_1()).children(update_pill(cx)))
             // The document sidebar's rhythm: 主页 sits 8 under the bar, a section
-            // header like 我的文档's, rows on a 31 pitch. 设置's line sits on
+            // header like 我的文档's, rows `ROW_GAP` apart. 设置's line sits on
             // 主页's, not a section header's: the 34pt box keeps the rows below.
             .child(div().pt(px(8.)).px(px(sb::SB_X)).flex().flex_col()
                 .child(div().h(px(sb::SECTION_H)).pl(px(4.)).pt(px((sb::SECTION_TOP + sb::SECTION_H) / 2. - sb::ROW_H / 2.))
@@ -1416,7 +1416,7 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// 收起 / 展开侧栏 and 主页, in the very box the document sidebar's
+    /// 收起 / 展开侧栏 and 返回, in the very box the document sidebar's
     /// 收起侧栏 uses (28pt, 4pt past the traffic lights, glyph 17), so the
     /// buttons don't move when switching between the document list and 设置.
     pub(crate) fn header_navigation(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1426,14 +1426,20 @@ impl Workspace {
             .child(bar_button("settings-collapse", if open { "panel-left-close" } else { "panel-left-open" })
                 .tip(if open { tr("收起侧栏", "Hide sidebar") } else { tr("展开侧栏", "Show sidebar") }, Some(crate::shortcuts::hint("workspace::ToggleSidebar", "⌘ + ]")))
                 .on_click(cx.listener(|w, _, _, cx| { w.sidebar_open = !w.sidebar_open; cx.notify(); })))
-            .child(bar_button("settings-home", "home").tip(tr("返回主页", "Home"), Some(crate::shortcuts::hint("workspace::GoHome", "⌘ + ⌥ + Home")))
-                .on_click(cx.listener(|w, _, _, cx| w.show_view(View::Home, cx))))
+            // 返回, where navigation goes back (HIG): to the page 设置 was opened from, as the footer's 返回 does.
+            .child(bar_button("settings-back", "arrow-left").tip(tr("返回", "Back"), Some("Esc"))
+                .on_click(cx.listener(|w, _, _, cx| w.close_settings(cx))))
             .into_any_element()
     }
 
-    /// Back to where 设置 was opened from.
+    /// Back to where 设置 was opened from: the document, a folder's page or
+    /// 主页 (主页 when what it was is gone).
     pub(crate) fn close_settings(&mut self, cx: &mut Context<Self>) {
-        let back = if self.editor.is_some() && self.current.is_some() { View::Doc } else { View::Home };
+        let back = match self.settings_from {
+            View::Doc if self.editor.is_some() && self.current.is_some() => View::Doc,
+            View::Folder if self.folder_current.is_some() => View::Folder,
+            _ => View::Home,
+        };
         self.show_view(back, cx);
     }
 

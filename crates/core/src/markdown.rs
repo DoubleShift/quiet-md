@@ -326,6 +326,28 @@ pub fn front_matter(text: &str) -> (&str, &str) {
     ("", text)
 }
 
+/// When front matter (`front_matter`'s first part) says its page was made
+/// and last changed, in unix seconds, for an import to keep. Keys are read
+/// in any case, with `-`, `_` and spaces ignored, the first that parses
+/// winning: made from `created`, `createdAt`, `date created`,
+/// `creation_date`, then `date` (Obsidian, Jekyll, Hugo); changed from
+/// `updated`, `modified`, `lastmod`, `updatedAt`, `last_modified`,
+/// `last_modified_at`, `date modified`, `date updated`.
+pub fn front_matter_times(front: &str) -> (Option<u64>, Option<u64>) {
+    const MADE: [&str; 5] = ["created", "createdat", "datecreated", "creationdate", "date"];
+    const CHANGED: [&str; 8] = ["updated", "modified", "lastmod", "updatedat", "lastmodified", "lastmodifiedat", "datemodified", "dateupdated"];
+    // Top-level `key: value` lines; a value in quotes may hold ` #`.
+    let fields: Vec<(String, &str)> = front.lines().skip(1).filter(|l| !l.starts_with([' ', '\t', '#', '-'])).filter_map(|l| {
+        let (k, v) = l.split_once(':')?;
+        let key: String = k.trim().trim_matches(['"', '\'']).chars().filter(|c| !matches!(c, '-' | '_' | ' ')).flat_map(char::to_lowercase).collect();
+        let v = v.trim();
+        let v = if v.starts_with(['"', '\'']) { v } else { v.split(" #").next().unwrap_or(v).trim() };
+        Some((key, v))
+    }).collect();
+    let first = |keys: &[&str]| keys.iter().find_map(|k| fields.iter().filter(|(f, _)| f == k).find_map(|(_, v)| crate::time::parse_date(v)));
+    (first(&MADE), first(&CHANGED))
+}
+
 /// `%20` and friends in a link.
 pub fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
@@ -902,6 +924,26 @@ fn inline(t: &RichText, files: &mut impl FnMut(&FileBlock) -> Option<String>) ->
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn front_matter_says_when_a_page_was_made_and_changed() {
+        use super::front_matter_times as times;
+        let t = |s| crate::time::parse_date(s);
+        // Obsidian and Hugo spellings, any case; the first that parses wins.
+        assert_eq!(times("---\ncreated: 2024-03-05\nupdated: 2024-03-06T10:00:00Z\n---\n"), (t("2024-03-05"), t("2024-03-06T10:00:00Z")));
+        assert_eq!(times("---\ntitle: x\ndate: 2024-03-05T14:30:00+08:00\nlastmod: 2024-04-01\n---\n"), (t("2024-03-05T14:30:00+08:00"), t("2024-04-01")));
+        assert_eq!(times("---\nCreatedAt: \"2024-03-05\"\nUpdated_At: '2024-03-07'\n---\n"), (t("2024-03-05"), t("2024-03-07")));
+        assert_eq!(times("---\ndate created: 2024-03-05\ndate modified: 2024-03-08 # by Linter\n---\n"), (t("2024-03-05"), t("2024-03-08")));
+        assert_eq!(times("---\nlast_modified_at: 2024-03-09\n---\n"), (None, t("2024-03-09")));
+        // `created` before `date`, whichever comes first in the file.
+        assert_eq!(times("---\ndate: 2020-01-01\ncreated: 2024-03-05\n---\n").0, t("2024-03-05"));
+        // One that does not parse gives way to the next, or to nothing.
+        assert_eq!(times("---\ncreated: last spring\ndate: 2024-03-05\n---\n").0, t("2024-03-05"));
+        assert_eq!(times("---\ncreated: last spring\nmodified: {{date}}\n---\n"), (None, None));
+        // Nested keys, list items and comments are not the page's.
+        assert_eq!(times("---\nmeta:\n  created: 2024-03-05\n# date: 2024-03-05\ntags:\n- date: 2024-03-05\n---\n"), (None, None));
+        assert_eq!(times(""), (None, None));
+    }
+
     use super::*;
 
     #[test]

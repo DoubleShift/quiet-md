@@ -6,7 +6,7 @@ use gpui::{prelude::FluentBuilder, *};
 use std::{cell::Cell, collections::{HashMap, HashSet, VecDeque}, rc::Rc};
 use web_time::Instant;
 
-const PITCH: f32 = 31.;
+const PITCH: f32 = crate::sidebar::ROW_H + crate::sidebar::ROW_GAP;
 /// Whether clicking a folder open or shut animates (the drawer below): 外观 ›
 /// 动画 › 丰富. Otherwise rows appear and go in the same frame. Lifting and
 /// dropping an open folder keep their drawers either way.
@@ -100,7 +100,7 @@ struct Leaving { row: Row, pos: Spring, alpha: Fade }
 /// A folder opening or closing, as one drawer: a clip under the folder's row
 /// that grows or shrinks, its rows already in their final places inside, so
 /// the edge reveals them in reading order and nothing ever overlaps. The rows
-/// below ride on the edge. `folder: None` is 我的文档 itself unfolding;
+/// below ride on the edge. `folder: None`: the whole list as one drawer;
 /// `anchor`: a lifted folder has no row on screen, so its drawer closes at
 /// that row index instead (the slot the row left).
 ///
@@ -175,7 +175,6 @@ pub(crate) struct SidebarDrag {
     drawers: Vec<Drawer>,
     /// The folders open last frame, to notice one opening or closing.
     was_open: HashSet<String>,
-    unfold: bool,
     /// A dropped folder whose rows should open back out under it.
     reopen: Option<String>,
     /// The rename field fading in over its row.
@@ -197,11 +196,6 @@ impl SidebarDrag {
     /// How far the rename field on `id` has faded in (0–1).
     pub(crate) fn rename_in(&self, id: &str) -> f32 { self.rename_fx.as_ref().filter(|(r, _)| r == id).map_or(1., |(_, f)| f.unit()) }
     pub(crate) fn kick(&mut self, id: &str, v: f32) { if let Some(f) = self.fx.get_mut(id) { f.pop.v += v; } }
-    /// Forget every row so the next frame opens the whole list as one drawer (unfolding 我的文档).
-    pub(crate) fn reset(&mut self) {
-        self.springs.clear(); self.fx.clear(); self.shown.clear(); self.leaving.clear(); self.pill = None; self.drawers.clear();
-        self.unfold = true;
-    }
 }
 
 /// A row's face without its controls: the drag ghost and rows on their way out.
@@ -263,7 +257,7 @@ impl Workspace {
         let Some(bounds) = self.folder_drag.bounds.get() else { return };
         let rows = self.drag_rows();
         let Some(d) = self.folder_drag.active.as_mut().filter(|d| d.started) else { return };
-        let y = f32::from(d.at.y - d.offset.y - bounds.top()) + 15.;
+        let y = f32::from(d.at.y - d.offset.y - bounds.top()) + crate::sidebar::ROW_H / 2.;
         let desired = (d.initial_depth as i32 + (f32::from(d.at.x - d.start.x) / INDENT).round() as i32).max(0) as usize;
         // Hit the visible folder row with the pointer, including collapsed folders.
         // Accept immediately; the dwell timer only controls automatic expansion.
@@ -292,7 +286,7 @@ impl Workspace {
         let in_slot = y >= slot_y && y <= slot_y + PITCH;
         d.hover = None;
         let index = if in_slot { d.index } else {
-            rows.iter().enumerate().filter(|(i, _)| y > (*i + usize::from(*i >= d.index)) as f32 * PITCH + 15.).count()
+            rows.iter().enumerate().filter(|(i, _)| y > (*i + usize::from(*i >= d.index)) as f32 * PITCH + crate::sidebar::ROW_H / 2.).count()
         };
         let depth = slot_depth(index.checked_sub(1).and_then(|i| rows.get(i)), rows.get(index), desired);
         let parent = if depth == 0 { None } else { rows[..index].iter().rev().find(|r| r.depth + 1 == depth && r.entry.meta.folder.is_some()).map(|r| r.entry.id.clone()) };
@@ -306,7 +300,7 @@ impl Workspace {
     pub(crate) fn sidebar_target(&self, at: Point<Pixels>, local: bool) -> Option<crate::sidebar_drop::SidebarDropAt> {
         use crate::sidebar_drop::SidebarDropAt;
         if !self.list_scroll.bounds().contains(&at) { return None; }
-        let Some(b) = self.folder_drag.bounds.get().filter(|_| !self.folded[1]) else { return (!local).then(SidebarDropAt::top) };
+        let Some(b) = self.folder_drag.bounds.get() else { return (!local).then(SidebarDropAt::top) };
         let rows = self.drag_rows();
         let y = f32::from(at.y - b.top());
         // Below the tree: the end of 我的文档 (a 本机文件 row over its own section: nowhere).
@@ -317,7 +311,7 @@ impl Workspace {
         if let Some((_, r)) = rows.iter().enumerate().find(|(i, r)| takes_drop(&r.entry) && y > top_of(*i) + 5. && y < top_of(*i) + 26.) {
             return Some(SidebarDropAt { parent: Some(r.entry.id.clone()), slot: None, before: None });
         }
-        let index = rows.iter().enumerate().filter(|(i, _)| y > top_of(*i) + 15.).count();
+        let index = rows.iter().enumerate().filter(|(i, _)| y > top_of(*i) + crate::sidebar::ROW_H / 2.).count();
         Some(match rows.get(index) {
             Some(r) => SidebarDropAt { parent: r.entry.meta.parent.clone(), slot: Some((index, r.depth)), before: Some(r.entry.id.clone()) },
             None => SidebarDropAt { parent: None, slot: Some((index, 0)), before: None },
@@ -516,11 +510,6 @@ impl Workspace {
         let mut started = false;
         // Rows that appear at once, without fading in (folding is instant).
         let mut instant: HashSet<String> = HashSet::new();
-        if std::mem::take(&mut fd.unfold) && !rows.is_empty() {
-            if animate_folding() { fd.drawers.push(Drawer::new(None, vec![], true, None, 0.)); }
-            else { instant.extend(rows.iter().map(|r| r.entry.id.clone())); }
-            started = true;
-        }
         if primed {
             for f in open_now.difference(&fd.was_open) {
                 let Some(&i) = index.get(f.as_str()) else { continue };
