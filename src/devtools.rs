@@ -9,9 +9,11 @@
 //!   activate (make the window key; takes focus) | quit |
 //!   pick <path>[|<path>...] (answers the next file dialog instead of showing it)
 //!   row <title> | rrow <title> | hoverrow <title> (click, right-click or hover the sidebar row
-//!   with that title: 主页, 我的文档, a document or folder, 设置, a page in 设置's list…; the
+//!   with that title: 主页, 我的文档, a document or folder, 设置, a page in 设置's list…, or
+//!   the menu item (`design::MenuItem`: the + menu's 画板, a board's right-click menu); the
 //!   topmost if several; no row shown by that title ends the run with exit code 3) |
-//!   anchor <name> (click the middle of a tracked control, e.g. `create-sidebar`: 我的文档's "+") |
+//!   anchor <name> (click the middle of a tracked control, e.g. `create-sidebar`: 我的文档's "+",
+//!   `doc-font-picker` / `ui-font-picker`: 外观's font lists, `font-del-<id>`: a downloaded font's delete) |
 //!   origin board | origin window (the points of the mouse and file steps after it count from the open
 //!   画板's top-left corner, or again from the window's; no board open ends the run with exit code 3)
 //!   filedrag x y <path>[|<path>...] / filedrop x y / fileleave (files dragged in from the Finder)
@@ -132,10 +134,13 @@ pub fn start(window: &mut Window, cx: &mut App) {
                 "row" | "rrow" | "hoverrow" | "anchor" => {
                     let name = rest.trim();
                     let at = handle.update(cx, |root, window, cx| {
-                        if window.needs_draw() { window.draw(cx).clear(cx); }
+                        // This frame's rows only: a sidebar row or menu not drawn since stays out.
+                        rows_begin(window);
+                        window.refresh();
+                        window.draw(cx).clear(cx);
                         if cmd != "anchor" { return row_center(window, name); }
                         let ws = root.downcast::<crate::app::Workspace>().map_err(|_| "no workspace window".to_string())?;
-                        let b = ws.read(cx).home.anchor(name).ok_or(format!("no anchor {name:?}"))?;
+                        let b = ws.read(cx).home.anchor(name).or_else(|| probed_anchor(window, name)).ok_or(format!("no anchor {name:?}"))?;
                         Ok((f32::from(b.center().x).round(), f32::from(b.center().y).round()))
                     }).unwrap_or_else(|e| Err(e.to_string()));
                     match at {
@@ -305,6 +310,15 @@ pub fn start(window: &mut Window, cx: &mut App) {
             }
             #[cfg(target_os = "macos")]
             if cmd == "mark" || cmd == "commit" {
+                // A frame first, as one always comes between a click and a
+                // person's typing: a click that opens a text field (the
+                // board's text tool) gets its input handler when that paints,
+                // and text sent before it went nowhere.
+                let _ = handle.update(cx, |_, window, cx| {
+                    if window.needs_draw() {
+                        window.draw(cx).clear(cx);
+                    }
+                });
                 native::ime(ns_view, cmd == "commit", rest);
                 cx.background_executor().timer(Duration::from_millis(120)).await;
                 continue;
@@ -379,23 +393,42 @@ pub fn start(window: &mut Window, cx: &mut App) {
     .detach();
 }
 
+type Drawn = std::cell::RefCell<std::collections::HashMap<WindowId, Vec<(String, Bounds<Pixels>)>>>;
+
 thread_local! {
     /// The sidebar rows drawn in each window's last frame: title, and the part of the row on screen.
-    static ROWS: std::cell::RefCell<std::collections::HashMap<WindowId, Vec<(String, Bounds<Pixels>)>>> = Default::default();
+    static ROWS: Drawn = Default::default();
+    /// Controls that `anchor_probe` named, the same way (the app's own anchors are `Home::anchor`).
+    static ANCHORS: Drawn = Default::default();
 }
 
 /// The sidebar is being built for a new frame: forget the last one's rows.
-pub fn rows_begin(window: &Window) { ROWS.with(|r| r.borrow_mut().insert(window.window_handle().window_id(), vec![])); }
+pub fn rows_begin(window: &Window) {
+    let id = window.window_handle().window_id();
+    ROWS.with(|r| r.borrow_mut().insert(id, vec![]));
+    ANCHORS.with(|r| r.borrow_mut().insert(id, vec![]));
+}
 
-/// Put inside a (relative) sidebar row: records where `title`'s row is drawn, for `row` and friends.
-pub fn row_probe(title: impl Into<SharedString>) -> Option<AnyElement> {
-    let title = title.into();
+fn probe(list: &'static std::thread::LocalKey<Drawn>, title: SharedString) -> Option<AnyElement> {
     Some(canvas(move |b, window, _| {
         let shown = window.content_mask().bounds.intersect(&b);
         if shown.size.width > px(2.) && shown.size.height > px(2.) {
-            ROWS.with(|r| r.borrow_mut().entry(window.window_handle().window_id()).or_default().push((title.to_string(), shown)));
+            list.with(|r| r.borrow_mut().entry(window.window_handle().window_id()).or_default().push((title.to_string(), shown)));
         }
     }, |_, _, _, _| {}).absolute().inset_0().into_any_element())
+}
+
+/// Put inside a (relative) sidebar row or menu item (`design::MenuItem` does): records where
+/// `title`'s row is drawn, for `row` and friends.
+pub fn row_probe(title: impl Into<SharedString>) -> Option<AnyElement> { probe(&ROWS, title.into()) }
+
+/// Put inside a (relative) control to click by `anchor <name>`, where the app keeps no anchor
+/// of its own (外观's font pickers, a downloaded font's delete button).
+pub fn anchor_probe(name: impl Into<SharedString>) -> Option<AnyElement> { probe(&ANCHORS, name.into()) }
+
+/// The middle of the control `anchor_probe` named `name` in this frame.
+fn probed_anchor(window: &Window, name: &str) -> Option<Bounds<Pixels>> {
+    ANCHORS.with(|r| r.borrow().get(&window.window_handle().window_id()).and_then(|v| v.iter().find(|(t, _)| t == name).map(|(_, b)| *b)))
 }
 
 /// The middle of the topmost sidebar row titled `title` in the window's last frame.
@@ -405,7 +438,7 @@ fn row_center(window: &Window, title: &str) -> Result<(f32, f32), String> {
         let rows = r.get(&window.window_handle().window_id()).map_or(&[][..], |v| &v[..]);
         rows.iter().filter(|(t, _)| t == title).min_by(|a, b| a.1.origin.y.partial_cmp(&b.1.origin.y).unwrap())
             .map(|(_, b)| (f32::from(b.center().x).round(), f32::from(b.center().y).round()))
-            .ok_or_else(|| format!("no sidebar row titled {title:?}; shown: {:?}", rows.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>()))
+            .ok_or_else(|| format!("no sidebar row or menu item titled {title:?}; shown: {:?}", rows.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>()))
     })
 }
 

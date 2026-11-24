@@ -742,15 +742,16 @@ fn font_row(family: &str, dl: Option<&'static str>, flat: bool, g: SharedString,
         else { div().text_color(crate::design::color::disabled()).child(tr("下载后可预览", "Preview after download")) };
     let (del, star) = (dl.map(str::to_string), family.to_string());
     let hover_key = key.clone();
-    div().w_full().flex().flex_col().child(MenuItem::new(g.clone()).selected(focused)
+    div().w_full().flex().flex_col().relative().children(crate::devtools::row_probe(label.clone())).child(MenuItem::new(g.clone()).selected(focused)
         .on_hover(cx.listener(move |w, hovered: &bool, _, cx| if *hovered { w.preview_font(hover_key.clone(), row, cx) }))
         .on_click(cx.listener(move |w, _, window, cx| w.pick_font(key.clone(), target, window, cx)))
         .child(div().flex_none().w(px(150.)).overflow_hidden().whitespace_nowrap().text_ellipsis().child(ui::ui_text(label)))
         .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_size(px(theme::ui_font())).child(sample))
         .children(tags.into_iter().map(tag))
         .child(status)
-        .when(e.is_some_and(|e| fd::on_disk(&e.id) && !fd::pending(&e.id)), |d| d.child(Button::ghost(SharedString::from(format!("font-del-{}", del.clone().unwrap_or_default()))).sized(ButtonSize::Xs).icon("bin")
-            .on_click(cx.listener(move |w, _, _, cx| { cx.stop_propagation(); if let Some(id) = &del { w.delete_download(id, cx) } }))))
+        .when(e.is_some_and(|e| fd::on_disk(&e.id) && !fd::pending(&e.id)), |d| d.child(div().relative().children(crate::devtools::anchor_probe(format!("font-del-{}", del.clone().unwrap_or_default())))
+            .child(Button::ghost(SharedString::from(format!("font-del-{}", del.clone().unwrap_or_default()))).sized(ButtonSize::Xs).icon("bin")
+            .on_click(cx.listener(move |w, _, _, cx| { cx.stop_propagation(); if let Some(id) = &del { w.delete_download(id, cx) } })))))
         .child(Button::ghost(SharedString::from(format!("{g}-star"))).sized(ButtonSize::Xs)
             .child(crate::design::icon("star", 14., if fav { crate::design::color::primary() } else { crate::design::color::disabled() }))
             .on_click(cx.listener(move |w, _, _, cx| { cx.stop_propagation(); w.toggle_favorite(&star, cx) }))))
@@ -1548,6 +1549,7 @@ impl Workspace {
             let open = self.font_menu.as_ref().is_some_and(|m| m.target == target);
             popup_button(format!("{}-font-picker", target.key()), label, open)
                 .child(canvas(move |b, _, _| { anchors.borrow_mut().insert(key, b); }, |_, _, _, _| {}).absolute().inset_0())
+                .children(crate::devtools::anchor_probe(format!("{}-font-picker", target.key())))
                 .relative()
                 .on_click(cx.listener(move |w, _, window, cx| w.toggle_font_menu(target, window, cx)))
         })

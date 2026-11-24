@@ -45,8 +45,8 @@ Write one command per line. Lines beginning with `#` are comments. See the top o
 | `key <key>` | Send a key, e.g. `key cmd-b` or `key escape`. |
 | `type <text>` | Type text, including trailing spaces. |
 | `move x y` / `click x y` / `dclick x y` / `rclick x y` / `drag x1 y1 x2 y2` | Move, click, double-click, right-click or drag in window coordinates. |
-| `row <title>` / `rrow <title>` / `hoverrow <title>` | Click, right-click or hover the middle of the sidebar row showing that text, as drawn in the last frame: 主页, 我的文档, a document or folder, 设置, a page in 设置's own list. Use the interface language's text (`Home` in English). The topmost row wins if several match. If no such row is on screen, the run stops with exit code 3 and the log lists the rows it could see; `run.py` then exits with an error too. Prefer these to coordinates: the sidebar's rows move when it changes. |
-| `anchor <name>` | Click the middle of a control the app tracks by name, e.g. `anchor create-sidebar` (我的文档's "+"). A missing name stops the run like `row`. |
+| `row <title>` / `rrow <title>` / `hoverrow <title>` | Click, right-click or hover the middle of the sidebar row showing that text, as drawn in a frame drawn for the command: 主页, 我的文档, a document or folder, 设置, a page in 设置's own list. Menu items drawn with `design::MenuItem` count too, by their label: the + menu's 画板, a board's right-click menu. Use the interface language's text (`Home` in English). The topmost row wins if several match. If no such row is on screen, the run stops with exit code 3 and the log lists the rows it could see; `run.py` then exits with an error too. Prefer these to coordinates: the sidebar's rows move when it changes. |
+| `anchor <name>` | Click the middle of a control the app tracks by name, e.g. `anchor create-sidebar` (我的文档's "+"), `doc-font-picker` / `ui-font-picker` (外观's font lists) or `font-del-<id>` (a downloaded font's delete). A missing name stops the run like `row`. |
 | `origin board` / `origin window` | Count the points of the pointer and file steps that follow (`click`, `drag`, `move`, `rclick`, `filedrag`…) from the open 画板's top-left corner, or from the window's again. The board opens in the note pane, so write board scripts this way rather than in window coordinates. No board open stops the run like `row`. Offsets (`dragby`, wheel deltas) are not moved. |
 | `down x y` / `dragto x y` / `dragby dx dy` / `up x y` | Press, drag to an absolute point, drag relative to the last point or release. Use `bench 30 dragby 4 0` to time individual steps. |
 | `mods shift cmd` / `mods none` | Hold these modifier keys (shift, cmd, alt, ctrl) for the mouse steps that follow; `none` lets go. |
@@ -54,7 +54,7 @@ Write one command per line. Lines beginning with `#` are comments. See the top o
 | `wheel x y dy [dx]` | Send one wheel event. Optional horizontal delta simulates a trackpad. Positive values reveal content to the right. |
 | `pinch x y delta` | Send one trackpad pinch event at (x, y). A delta of 0.1 zooms in by 10%; negative values zoom out. |
 | `shot <name>` / `burst <name> n` | Take one screenshot or n shots about 8 ms apart. |
-| `mark <text>` / `commit <text>` | Set or commit IME composition text. |
+| `mark <text>` / `commit <text>` | Set or commit IME composition text, after drawing the frame a preceding click asked for: a text field it opens (the board's text tool) takes input once painted. |
 | `clip html\|text\|image <file>` / `clip clear` / `clip save <file>` | Set the simulated clipboard for a subsequent `key cmd-v`. Append multiple images or combine text and HTML. Use clear to empty it. `save` writes the text a copy put there to a file. |
 | `pick <path>[\|<path>…]` | Supply the next open/save dialog response without opening a system panel. |
 | `resize w h` | Resize the window. |

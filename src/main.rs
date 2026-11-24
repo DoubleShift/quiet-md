@@ -32,6 +32,7 @@ mod devtools {
     pub fn file_drag() -> bool { false }
     pub fn rows_begin(_: &gpui::Window) {}
     pub fn row_probe(_: impl Into<gpui::SharedString>) -> Option<gpui::AnyElement> { None }
+    pub fn anchor_probe(_: impl Into<gpui::SharedString>) -> Option<gpui::AnyElement> { None }
 }
 mod design;
 mod docinfo;
