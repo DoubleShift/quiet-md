@@ -727,7 +727,11 @@ fn start_installer(new: &Path) -> Result<(), String> {
     }
     // The folder must take the new bundle (a standard user cannot write to /Applications).
     let probe = parent.join(format!(".quiet.md-update-{}", fdl_core::vfs::process_id()));
-    if std::fs::create_dir(&probe).is_err() {
+    if let Err(e) = std::fs::create_dir(&probe) {
+        // Opened straight from the mounted .dmg (/Volumes/…, a read-only volume).
+        if e.kind() == std::io::ErrorKind::ReadOnlyFilesystem {
+            return Err(crate::settings::tr("Quiet.md 正在安装盘里运行。请先把它拖到「应用程序」文件夹，从那里打开后再更新", "Quiet.md is running from the installer disk image. Drag it to the Applications folder, open it from there, then update").into());
+        }
         return Err(crate::localized_format!("没有写入 {} 的权限，请从网站下载新版本", "No permission to write to {}. Download the new version from the website instead.", parent.display()));
     }
     let _ = std::fs::remove_dir(&probe);

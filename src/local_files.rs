@@ -126,6 +126,11 @@ impl Workspace {
         }
     }
 
+    /// A copy `id` of 本机文件 `src` keeps its times, as an import does.
+    pub(crate) fn keep_times(&mut self, id: &str, src: &std::path::Path) {
+        let _ = self.store.with(Some(id), |s| { crate::transfer::keep_times(s, id, src); Ok(()) });
+    }
+
     /// 导入到文档库: a Markdown copy at the top of 我的文档.
     pub(crate) fn import_local(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.row_menu = None;
@@ -133,6 +138,7 @@ impl Workspace {
         let front = self.store.front_matter_of(id);
         match self.store.create_markdown(&doc, &front) {
             Ok(new) => {
+                if let Some(src) = self.store.local_path(id) { self.keep_times(&new, &src); }
                 self.entries = self.store.list();
                 self.sort();
                 self.open(&new, window, cx);

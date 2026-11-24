@@ -207,7 +207,7 @@ iOS 本身不需要新的同步机制：**iCloud 云盘把文件夹同步过来�
 
 ### 6.3 分发
 
-- 签名团队用现有的 `9UXM7M6CX5`。Bundle id 建议和 Mac 共用 `com.s1dashu.quietmd`，以后可以做 Mac App Store 的通用购买；如果担心和现有 Developer ID 版冲突，iOS 用 `com.s1dashu.quietmd.ios` 也行（见决策 M8）。`CFBundleDisplayName` 定为「Quiet.md」，和 Mac 的 `scripts/package.sh`、`release.sh` 保持一致。iCloud 容器在文件 App 和访达里的名字、工作区里这个根的显示名（workspaces.md W20），都取自这个值。
+- 签名团队用现有的 `9UXM7M6CX5`。Bundle id 建议和 Mac 共用 `com.s1dashu.quietmd`，以后可以做 Mac App Store 的通用购买；如果担心和现有 Developer ID 版冲突，iOS 用 `com.s1dashu.quietmd.ios` 也行（见决策 M8）。`CFBundleDisplayName` 定为「Quiet.md」，和 Mac 的 `scripts/release.sh` 保持一致。iCloud 容器在文件 App 和访达里的名字、工作区里这个根的显示名（workspaces.md W20），都取自这个值。
 - 要在开发者后台建：App ID（iCloud Documents 能力）、iCloud 容器 `iCloud.com.s1dashu.quietmd`、App Store Connect 的 App 记录。
 - 先内部测试（TestFlight 内部测试员，不需要审核），稳定后开外部测试（要过 Beta 审核）。
 - 工程：`packaging/ios/`，XcodeGen 生成工程，`build-rust.sh` 编 `aarch64-apple-ios` 和 `aarch64-apple-ios-sim` 的 staticlib；最低系统版本建议 iOS 17（feinotes 同样是 17，`gpui_ios` 代码里也照顾到了 15/16）。

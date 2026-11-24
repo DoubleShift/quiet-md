@@ -161,9 +161,32 @@ fn tree(store: &mut crate::store::Store, t: &Scanned, root: &Path, parent: Optio
             let read = { let _local = NoCloudDownloads::new(); read_markdown(p, Some(root)) };
             read.and_then(|(doc, front)| store.create_markdown_in(&doc, &front, Some(&id)))
         } else { store.import_into(p, Some(&id)) };
-        if made.is_err() { *failed += 1; }
+        match made { Ok(doc) => keep_times(store, &doc, p), Err(_) => *failed += 1 }
     }
     Some(id)
+}
+
+/// One file (导入, a drop) as a new document in folder `parent`, with the file's times.
+pub(crate) fn import_file(store: &mut crate::store::Store, p: &Path, parent: Option<&str>) -> anyhow::Result<String> {
+    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or_default().to_ascii_lowercase();
+    let id = match ext.as_str() {
+        _ if crate::local_files::is_markdown_path(p) => import_markdown(store, p, None, parent),
+        e if MARKDOWN_EXTS.contains(&e) => markdown_document(p).map_err(anyhow::Error::from).and_then(|doc| store.create_from_in(&doc, parent)),
+        "xml" => store.import_into(p, parent),
+        "csv" | "tsv" if crate::DATATABLE => import_csv(store, p, parent),
+        _ => Err(anyhow::anyhow!("文件格式不支持")),
+    }?;
+    keep_times(store, &id, p);
+    Ok(id)
+}
+
+/// The document `id` just made from file `src` keeps that file's times: made
+/// and last changed as the file was (`vfs::file_times`), and its own file
+/// changed then too. When they cannot be read it keeps the import's time.
+pub(crate) fn keep_times(store: &mut crate::store::Store, id: &str, src: &Path) {
+    let Some((made, changed)) = fdl_core::vfs::file_times(src) else { return };
+    if let Some(p) = store.file_path(id) { let _ = fdl_core::vfs::set_modified(&p, changed); }
+    let _ = store.update_meta(id, |m| { m.created = made; m.modified = changed; });
 }
 
 /// What a folder import left behind, for its toast.
@@ -475,15 +498,7 @@ impl Workspace {
             let mut failed = false;
             let batch = writer.begin_batch().is_ok();
             for p in &paths {
-                let ext = p.extension().and_then(|s| s.to_str()).unwrap_or_default().to_ascii_lowercase();
-                let made = match ext.as_str() {
-                    _ if crate::local_files::is_markdown_path(p) => import_markdown(&mut writer, p, None, parent.as_deref()),
-                    e if MARKDOWN_EXTS.contains(&e) => markdown_document(p).map_err(anyhow::Error::from).and_then(|doc| writer.create_from_in(&doc, parent.as_deref())),
-                    "xml" => writer.import_into(p, parent.as_deref()),
-                    "csv" | "tsv" if crate::DATATABLE => import_csv(&mut writer, p, parent.as_deref()),
-                    _ => Err(anyhow::anyhow!("文件格式不支持")),
-                };
-                match made { Ok(id) => last = Some(id), Err(_) => failed = true }
+                match import_file(&mut writer, p, parent.as_deref()) { Ok(id) => last = Some(id), Err(_) => failed = true }
             }
             if batch && writer.end_batch().is_err() { failed = true; }
             let entries = writer.list();
@@ -542,19 +557,28 @@ impl Workspace {
     /// The 导入 menu under the header icon.
     pub(crate) fn render_import_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (parent, pos) = self.import_menu.clone()?;
-        let row = |id: &'static str, glyph: &'static str, label: &'static str| crate::design::MenuItem::new(id).icon(glyph).label(label);
-        let item = |id: &'static str, glyph: &'static str, label: &'static str, kind: ImportKind| {
-            let parent = parent.clone();
-            row(id, glyph, label).on_click(cx.listener(move |w, _, window, cx| w.open_import_kind(kind, parent.clone(), window, cx)))
-        };
         Some(deferred(anchored().anchor(Anchor::TopRight).position(pos).snap_to_window_with_margin(px(8.)).child(
             crate::design::Popover::new("import-items").menu().min_w(px(210.))
                 .on_mouse_down_out(cx.listener(|w, _, _, cx| { w.import_menu = None; cx.notify(); }))
-                .child(item("import-md", "doc-md", crate::settings::tr("导入 Markdown 文件…", "Import Markdown Files…"), ImportKind::Markdown))
-                .child(item("import-folder", "folder", crate::settings::tr("导入文件夹…", "Import Folder…"), ImportKind::Folder))
-                .child(item("import-xml", "doc", crate::settings::tr("导入 DocxXML…", "Import DocxXML…"), ImportKind::DocxXml))
-                .when(crate::DATATABLE, |d| d.child(item("import-csv", "datatable", crate::settings::tr("从 CSV 新建数据表…", "New Data Table from CSV…"), ImportKind::Csv))),
+                .children(self.import_items(parent, cx)),
         )).with_priority(3).into_any_element())
+    }
+
+    /// The 导入 menu's rows, bringing things into `parent` (None: the root in front): that menu, and
+    /// the end of a root's "+" menu in the sidebar.
+    pub(crate) fn import_items(&self, parent: Option<String>, cx: &mut Context<Self>) -> Vec<crate::design::MenuItem> {
+        let item = |id: &'static str, glyph: &'static str, label: &'static str, kind: ImportKind| {
+            let parent = parent.clone();
+            crate::design::MenuItem::new(id).icon(glyph).label(label)
+                .on_click(cx.listener(move |w, _, window, cx| { w.create_menu = None; w.open_import_kind(kind, parent.clone(), window, cx) }))
+        };
+        let mut out = vec![
+            item("import-md", "doc-md", crate::settings::tr("导入 Markdown 文件…", "Import Markdown Files…"), ImportKind::Markdown),
+            item("import-folder", "folder", crate::settings::tr("导入文件夹…", "Import Folder…"), ImportKind::Folder),
+            item("import-xml", "doc", crate::settings::tr("导入 DocxXML…", "Import DocxXML…"), ImportKind::DocxXml),
+        ];
+        if crate::DATATABLE { out.push(item("import-csv", "datatable", crate::settings::tr("从 CSV 新建数据表…", "New Data Table from CSV…"), ImportKind::Csv)); }
+        out
     }
 
     /// The header's … menu: open this folder (None: the library) in the
@@ -870,5 +894,108 @@ mod tests {
         assert!(matches!(doc.blocks[4].kind, BlockKind::Heading { level: 2, .. }));
         assert_eq!(percent_decode("a%20b%E5%9B%BE.png"), "a b图.png");
         let _ = fdl_core::vfs::remove_dir_all(dir);
+    }
+
+    /// A temporary library and a folder of files to import.
+    fn places(name: &str) -> (std::path::PathBuf, std::path::PathBuf, crate::store::Store) {
+        let tmp = fdl_core::vfs::temp_dir().join(format!("quiet-times-{name}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(tmp.join("from")).unwrap();
+        let store = crate::store::Store::open_at(tmp.join("library")).unwrap();
+        (tmp.clone(), tmp.join("from"), store)
+    }
+
+    /// `text` written at `path`, last changed at unix second `t`.
+    fn aged(path: &std::path::Path, text: &str, t: u64) {
+        if let Some(d) = path.parent() { std::fs::create_dir_all(d).unwrap(); }
+        std::fs::write(path, text).unwrap();
+        fdl_core::vfs::set_modified(path, t).unwrap();
+    }
+
+    fn mtime(p: &std::path::Path) -> u64 { std::fs::metadata(p).unwrap().modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() }
+
+    const THEN: u64 = 1_600_000_000;
+
+    #[test]
+    fn imported_files_keep_their_times() {
+        let (tmp, from, mut store) = places("files");
+        let mut files = vec![("周报.md", "# 周报\n\nbody\n"), ("notes.markdown", "body"), ("plain.txt", "body"), ("page.xml", "<doc><title>page</title><body><p>body</p></body></doc>")];
+        if crate::DATATABLE { files.push(("rows.csv", "name,n\na,1\n")); }
+        for (k, (name, text)) in files.iter().enumerate() {
+            let src = from.join(name);
+            let t = THEN + k as u64 * 1000;
+            aged(&src, text, t);
+            let id = super::import_file(&mut store, &src, None).unwrap_or_else(|e| panic!("{name}: {e:#}"));
+            let entry = store.list().into_iter().find(|e| e.id == id).unwrap();
+            // Made before its last change here: the change time is both.
+            assert_eq!((entry.meta.created, entry.meta.modified), (t, t), "{name}");
+            assert_eq!(mtime(&store.file_path(&id).unwrap()), t, "{name}: its file too");
+        }
+        // Read again from disk, as the next launch does.
+        let mut again = crate::store::Store::open_at(tmp.join("library")).unwrap();
+        assert!(again.list().iter().all(|e| e.meta.folder.is_some() || (THEN..THEN + 5000).contains(&e.meta.created)));
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn made_is_the_creation_time_where_the_system_keeps_one() {
+        let (tmp, from, mut store) = places("created");
+        let src = from.join("later.md");
+        let later = fdl_core::time::now() + 86_400;
+        aged(&src, "body", later);
+        // macOS and Windows keep when a file was made; Linux may not (statx).
+        let made = std::fs::metadata(&src).unwrap().created().ok().map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+        let id = super::import_file(&mut store, &src, None).unwrap();
+        let m = store.list().into_iter().find(|e| e.id == id).unwrap().meta;
+        assert_eq!((m.created, m.modified), (made.unwrap_or(later), later));
+        if cfg!(any(target_os = "macos", windows)) { assert!(made.is_some() && m.created < later); }
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn a_folder_import_keeps_each_files_times() {
+        // 导入文件夹, a dropped folder, and 欢迎页's Obsidian / Typora import (import_tree).
+        let (tmp, from, mut store) = places("folder");
+        aged(&from.join("vault/a.md"), "a", THEN);
+        aged(&from.join("vault/sub/b.md"), "b", THEN + 60);
+        aged(&from.join("vault/sub/c.xml"), "<doc><title>c</title><body><p>c</p></body></doc>", THEN + 120);
+        let tree = super::scan_folder(&from.join("vault"), 0).unwrap();
+        let mut failed = 0;
+        store.batch(|s| super::import_tree(s, &tree, None, &mut failed)).unwrap().unwrap();
+        assert_eq!(failed, 0);
+        let entries = store.list();
+        for (title, t) in [("a", THEN), ("b", THEN + 60), ("c", THEN + 120)] {
+            let e = entries.iter().find(|e| e.title == title).unwrap();
+            assert_eq!((e.meta.created, e.meta.modified), (t, t), "{title}");
+            assert_eq!(mtime(&store.file_path(&e.id).unwrap()), t);
+        }
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn a_copy_of_a_local_file_keeps_its_times() {
+        // 导入到文档库 and a 本机文件 row dropped on the tree: a Markdown copy.
+        let (tmp, from, mut store) = places("local");
+        let src = from.join("本机.md");
+        aged(&src, "# 本机\n\nbody\n", THEN);
+        let local = store.open_local(&src).unwrap();
+        let doc = store.load(&local).unwrap();
+        let copy = store.create_markdown(&doc, &store.front_matter_of(&local)).unwrap();
+        let path = store.local_path(&local).unwrap();
+        super::keep_times(&mut store, &copy, &path);
+        let m = store.list().into_iter().find(|e| e.id == copy).unwrap().meta;
+        assert_eq!((m.created, m.modified), (THEN, THEN));
+        assert_eq!(mtime(&src), THEN, "the original is left alone");
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn without_the_files_times_an_import_keeps_its_own() {
+        let (tmp, _, mut store) = places("gone");
+        let before = fdl_core::time::now();
+        let id = store.create_from(&fdl_core::model::Document::default()).unwrap();
+        super::keep_times(&mut store, &id, &tmp.join("no such file.md"));
+        let m = store.list().into_iter().find(|e| e.id == id).unwrap().meta;
+        assert!(m.created >= before && m.modified >= before);
+        std::fs::remove_dir_all(tmp).unwrap();
     }
 }

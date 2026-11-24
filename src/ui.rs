@@ -100,6 +100,11 @@ pub struct Tooltip {
     side: TipSide,
 }
 
+thread_local! {
+    /// The trigger last pressed (its bounds), whose tooltip stays hidden until the pointer leaves it.
+    static TIP_PRESSED: std::cell::Cell<Option<Bounds<Pixels>>> = const { std::cell::Cell::new(None) };
+}
+
 /// Preferred side: chrome shows tooltips below, document controls above,
 /// menu items to the right. Flipped when there is no room.
 #[derive(Clone, Copy, PartialEq)]
@@ -120,6 +125,7 @@ fn tip_bg() -> Hsla { crate::design::color::foreground() }
 
 impl Render for Tooltip {
     fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        if self.anchor.is_some() && TIP_PRESSED.get() == self.anchor { return div().into_any_element(); }
         let lines: Vec<SharedString> = self.label.split('\n').map(|l| SharedString::from(l.to_string())).collect();
         let g = crate::design::geo();
         let bubble = div()
@@ -315,8 +321,18 @@ impl TipExt for Stateful<Div> {
         let bounds = Rc::new(std::cell::Cell::new(None::<Bounds<Pixels>>));
         let record = bounds.clone();
         let label = SharedString::from(label);
-        // shadcn's TooltipProvider: `delayDuration = 0`
-        self.child(canvas(move |b, _, _| record.set(Some(b)), |_, _, _, _| {}).absolute().inset_0()).tooltip_show_delay(std::time::Duration::ZERO).tooltip(move |window, cx| {
+        // Radix closes a trigger's tooltip on pointerdown and keeps it closed until the pointer
+        // leaves, so a menu opened by the press isn't covered by it. GPUI only drops it on the
+        // press and shows it again on the next move: `TIP_PRESSED` holds it back until the pointer
+        // is out. The element is rebuilt every frame, so the press is kept by the trigger's bounds.
+        let press = bounds.clone();
+        self.child(canvas(move |b, window, _| {
+            record.set(Some(b));
+            if TIP_PRESSED.get() == Some(b) && !b.contains(&window.mouse_position()) { TIP_PRESSED.set(None); }
+        }, |_, _, _, _| {}).absolute().inset_0())
+            .capture_any_mouse_down(move |_, _, _| TIP_PRESSED.set(press.get()))
+            // shadcn's TooltipProvider: `delayDuration = 0`
+            .tooltip_show_delay(std::time::Duration::ZERO).tooltip(move |window, cx| {
             let origin = window.mouse_position() + point(px(1.), px(1.));
             let (label, anchor) = (label.clone(), bounds.get());
             cx.new(|_| Tooltip { label, anchor, origin, side }).into()

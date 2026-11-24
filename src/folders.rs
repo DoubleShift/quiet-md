@@ -172,6 +172,10 @@ impl Workspace {
         // each kind its own solid, coloured mark (assets/illus/kinds), so a glance tells them apart
         let row = |id: &'static str, kind: &'static str, label: &'static str| crate::design::MenuItem::new(id).leading(img(format!("illus/kinds/{kind}.svg")).flex_none().size(px(18.))).label(label);
         let (doc_parent, md_parent, board_parent, table_parent) = (parent.clone(), parent.clone(), parent.clone(), parent.clone());
+        // A root's own "+" (its row, or the sidebar heading when it is the only root) also brings
+        // things into it; 主页 and a folder's page have 导入 beside their "+".
+        let sidebar_heading = parent.is_none() && self.store.roots().len() == 1 && self.home.anchor("create-sidebar").is_some_and(|b| point(b.left(), b.bottom() + px(4.)) == pos);
+        let import = (sidebar_heading || parent.as_deref().is_some_and(|p| crate::shared_store::root_of_row(p).is_some())).then(|| self.import_items(parent.clone(), cx));
         Some(deferred(anchored().anchor(Anchor::TopLeft).position(pos).snap_to_window_with_margin(px(8.)).child(
             crate::design::Popover::new("create-items").menu().min_w(px(180.))
                 .on_mouse_down_out(cx.listener(|w, _, _, cx| { w.create_menu = None; cx.notify(); }))
@@ -180,6 +184,7 @@ impl Workspace {
                 .child(row("create-board", "board", crate::settings::text("画板")).on_click(cx.listener(move |w, _, window, cx| w.create_board(board_parent.clone(), window, cx))))
                 .when(crate::DATATABLE, |d| d.child(row("create-table", "datatable", crate::settings::text("数据表")).on_click(cx.listener(move |w, _, window, cx| w.create_table(table_parent.clone(), window, cx)))))
                 .child(row("create-folder", "folder", tr("文件夹", "Folder")).on_click(cx.listener(move |w, _, window, cx| w.new_folder(folder_parent.clone(), window, cx))))
+                .when_some(import, |d, rows| d.child(crate::design::MenuSeparator::new()).children(rows))
         )).with_priority(3).into_any_element())
     }
 
@@ -243,10 +248,14 @@ impl Workspace {
         let (doc, folder, rename, mv, del) = (m.id.clone(), m.id.clone(), m.id.clone(), m.id.clone(), m.id.clone());
         let row = |id: &'static str, glyph: &'static str, label: &'static str| crate::design::MenuItem::new(id).icon(glyph).label(label);
         let pos = if m.pos.x < px(0.) { point(-m.pos.x, m.pos.y + px(22.)) } else { m.pos };
+        // The row's "…" only manages the folder (新建 is the "+" beside it); a
+        // right-click still creates straight from the menu.
+        let create = !(m.pos.x < px(0.));
         vec![deferred(anchored().position(pos).snap_to_window_with_margin(px(8.)).child(crate::design::Popover::new("folder-row-menu").menu().min_w(px(190.))
             .on_mouse_down_out(cx.listener(|w, _, _, cx| { w.row_menu = None; cx.notify(); }))
-            .child(row("fr-new-doc", "doc", tr("新建文档", "New document")).on_click(cx.listener(move |w, _, window, cx| { w.row_menu = None; w.new_child(&doc, window, cx); })))
-            .child(row("fr-new-folder", "folder", tr("新建文件夹", "New folder")).on_click(cx.listener(move |w, _, window, cx| { w.row_menu = None; w.new_folder(Some(folder.clone()), window, cx); })))
+            .when(create, |d| d
+                .child(row("fr-new-doc", "doc", tr("新建文档", "New document")).on_click(cx.listener(move |w, _, window, cx| { w.row_menu = None; w.new_child(&doc, window, cx); })))
+                .child(row("fr-new-folder", "folder", tr("新建文件夹", "New folder")).on_click(cx.listener(move |w, _, window, cx| { w.row_menu = None; w.new_folder(Some(folder.clone()), window, cx); }))))
             .child(row("fr-rename", "square-pen", tr("重命名", "Rename")).on_click(cx.listener(move |w, _, window, cx| w.start_rename(&rename, window, cx))))
             .child(row("fr-move", "folder-input", tr("移动到", "Move to")).on_click(cx.listener(move |w, _, window, cx| w.open_move(vec![mv.clone()], window, cx))))
             .child(row("fr-delete", "bin", tr("删除", "Delete")).on_click(cx.listener(move |w, _, _, cx| w.ask_delete(&del, cx))))))

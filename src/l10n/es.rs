@@ -748,6 +748,7 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("无法连接更新服务器", "No se pudo conectar con el servidor de actualizaciones"),
     ("找不到正在运行的应用", "No se encuentra la app en ejecución"),
     ("请先把 Quiet.md 移到「应用程序」文件夹，再更新", "Mueve Quiet.md a la carpeta Aplicaciones antes de actualizar"),
+    ("Quiet.md 正在安装盘里运行。请先把它拖到「应用程序」文件夹，从那里打开后再更新", "Quiet.md se está ejecutando desde la imagen de disco de instalación. Arrástralo a la carpeta Aplicaciones, ábrelo desde allí y luego actualiza"),
     ("请使用 AppImage 版本更新", "Usa la versión AppImage para actualizar desde la app"),
     ("Quiet.md {} 已发布，点侧栏顶部的「更新」安装", "Quiet.md {} ya está disponible; haz clic en “Actualizar” en la parte superior de la barra lateral para instalarla"),
     ("没有写入 {} 的权限，请从网站下载新版本", "No tienes permiso para escribir en {}; descarga la nueva versión desde el sitio web"),

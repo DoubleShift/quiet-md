@@ -873,12 +873,13 @@ fn start_recording(handle: AnyWindowHandle, path: &str, cx: &mut AsyncApp) -> st
         let mut next = 0u64;
         while let Ok((t, w, h, mut px)) = rx.recv() {
             let enc = ffmpeg.get_or_insert_with(|| {
-                std::process::Command::new("ffmpeg")
-                    .args(["-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "bgra", "-s", &format!("{w}x{h}"), "-r", &fps.to_string(), "-i", "-"])
+                let mut c = std::process::Command::new("ffmpeg");
+                c.args(["-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "bgra", "-s", &format!("{w}x{h}"), "-r", &fps.to_string(), "-i", "-"])
                     .args(["-c:v", "libx264", "-preset", "ultrafast", "-crf", "6", "-pix_fmt", "yuv444p", &out])
-                    .stdin(std::process::Stdio::piped())
-                    .spawn()
-                    .expect("ffmpeg")
+                    .stdin(std::process::Stdio::piped());
+                #[cfg(target_os = "windows")]
+                { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }
+                c.spawn().expect("ffmpeg")
             });
             for p in px.as_chunks_mut::<4>().0 {
                 p[3] = 255;

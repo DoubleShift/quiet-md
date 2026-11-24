@@ -151,47 +151,39 @@ impl Workspace {
             .child(div().flex_1())
             .children(crate::settings::update_pill(cx));
 
-        // The nav is just 主页: 36px items, a blue tint when selected. Its
-        // icon column (x 17) is shared with 搜索 and the doc rows.
+        // The nav: 主页, then 添加文件夹 (another folder beside the default one, as
+        // 文件 › 打开文件夹… does). 36px items, a tint when selected. Their icon
+        // column (x 17) is shared with 搜索 and the doc rows.
         let home_on = self.view == View::Home;
-        let nav = div().flex_none().pt(px(4.)).pb(px(4.)).px(px(SB_X)).child(
-            div()
-                .id("nav-home")
-                .h(px(ROW_H))
-                .pl(px(6.))
-                .pr(px(4.))
-                .flex()
-                .items_center()
-                .rounded(px(ROW_R))
-                .cursor_pointer()
-                .text_size(px(theme::ui_font()))
-                .line_height(px(20.))
-                .when(home_on, |d| d.bg(Theme::sidebar_selected()).text_color(Theme::text()))
-                .when(!home_on, |d| d.text_color(Theme::sidebar_text()).hover(|s| s.bg(Theme::sidebar_hover())))
-                .child(
-                    // Selected or not, the same outline: the row's fill marks the selection.
-                    div().size(px(20.)).flex_none().flex().items_center().justify_center().mr(px(9.)).child(icon(
-                        "home",
-                        ROW_ICON,
-                        Theme::icon(),
-                    )),
-                )
-                .child(crate::settings::tr("主页", "Home"))
-                .on_click(cx.listener(|w, _, _, cx| w.show_view(View::Home, cx))),
-        )
-        // A phone's top bar has no 搜索 or +: search starts here, and new documents from 我的文档's +.
-        .when(self.drawer(window), |d| d.child(
-            div().id("nav-search").h(px(ROW_H)).pl(px(6.)).pr(px(4.)).flex().items_center().rounded(px(ROW_R)).cursor_pointer()
-                .text_size(px(theme::ui_font())).line_height(px(20.)).text_color(Theme::sidebar_text()).hover(|s| s.bg(Theme::sidebar_hover()))
-                .child(div().size(px(20.)).flex_none().flex().items_center().justify_center().mr(px(9.)).child(icon("search", ROW_ICON, Theme::icon())))
-                .child(crate::settings::tr("搜索文档", "Search documents"))
+        let item = |id: &'static str, glyph: &'static str, label: &'static str, on: bool| div()
+            .id(id)
+            .h(px(ROW_H))
+            .pl(px(6.))
+            .pr(px(4.))
+            .flex()
+            .items_center()
+            .rounded(px(ROW_R))
+            .cursor_pointer()
+            .text_size(px(theme::ui_font()))
+            .line_height(px(20.))
+            .when(on, |d| d.bg(Theme::sidebar_selected()).text_color(Theme::text()))
+            .when(!on, |d| d.text_color(Theme::sidebar_text()).hover(|s| s.bg(Theme::sidebar_hover())))
+            // Selected or not, the same outline: the row's fill marks the selection.
+            .child(div().size(px(20.)).flex_none().flex().items_center().justify_center().mr(px(9.)).child(icon(glyph, ROW_ICON, Theme::icon())))
+            .child(label);
+        let nav = div().flex_none().pt(px(4.)).pb(px(4.)).px(px(SB_X))
+            .child(item("nav-home", "home", crate::settings::tr("主页", "Home"), home_on).on_click(cx.listener(|w, _, _, cx| w.show_view(View::Home, cx))))
+            // A phone's top bar has no 搜索 or +: search starts here, and new documents from 我的文档's +.
+            .when(self.drawer(window), |d| d.child(item("nav-search", "search", crate::settings::tr("搜索文档", "Search documents"), false)
                 .on_click(cx.listener(|w, _, window, cx| {
                     // Opened once the drawer is gone: this tap's release would hand focus back to the note.
                     w.sidebar_open = false;
                     cx.notify();
                     cx.defer_in(window, |w, window, cx| w.open_search(window, cx));
-                })),
-        ));
+                }))))
+            .child(item("nav-add-folder", "folder-plus", crate::settings::tr("添加文件夹", "Add a folder"), false)
+                .tip(crate::settings::tr("添加文件夹", "Add a folder"), Some(crate::shortcuts::hint("workspace::OpenFolder", "⌘ + Shift + O")))
+                .on_click(cx.listener(|w, _, window, cx| w.open_folder_dialog(window, cx))));
 
         let mut list = div().flex().flex_col().px(px(SB_X)).pb(px(8.));
         // Pinned docs are shortcuts: they stay in 我的文档 too.
@@ -574,53 +566,29 @@ impl Workspace {
             )
     }
 
-    /// Creation inside a folder: the folder button makes one directly; the plus
-    /// opens the same 新建 menu as 我的文档's, hung from the button.
-    fn add_button(&self, e: &Entry, key: &str, folder: bool, cx: &mut Context<Self>) -> Button {
+    /// Creation inside a folder: "+" opens the same 新建 menu as 我的文档's, hung
+    /// from the button; 文件夹 is its last entry, so a folder needs no own button.
+    fn add_button(&self, e: &Entry, key: &str, cx: &mut Context<Self>) -> Button {
         let id = e.id.clone();
         let slot = format!("add-{key}-{}", e.id);
         let (record, lookup) = (self.more_bounds.clone(), self.more_bounds.clone());
         let anchor = |b: Bounds<Pixels>| point(b.left(), b.bottom() + px(4.));
-        let open = !folder && self.create_menu.as_ref().is_some_and(|(p, pos)| p.as_deref() == Some(e.id.as_str()) && self.more_bounds.borrow().get(&slot).is_some_and(|b| anchor(*b) == *pos));
-        Button::ghost(SharedString::from(format!("add-{key}-{folder}-{}", e.id)))
+        let open = self.create_menu.as_ref().is_some_and(|(p, pos)| p.as_deref() == Some(e.id.as_str()) && self.more_bounds.borrow().get(&slot).is_some_and(|b| anchor(*b) == *pos));
+        Button::ghost(SharedString::from(format!("add-{key}-{}", e.id)))
             .sized(ButtonSize::Xs)
             .relative()
             .opacity(if open { 1. } else { self.folder_drag.reveal(&e.id) })
             .selected(open)
-            .icon(if folder { "folder-plus" } else { "plus" })
-            .when(!folder, |d| { let slot = slot.clone(); d.child(canvas(move |b, _, _| { record.borrow_mut().insert(slot.clone(), b); }, |_, _, _, _| {}).absolute().inset_0()) })
-            .tip(crate::settings::tr(if folder { "新建文件夹" } else { "新建" }, if folder { "New folder" } else { "New" }), None)
+            .icon("plus")
+            .child({ let slot = slot.clone(); canvas(move |b, _, _| { record.borrow_mut().insert(slot.clone(), b); }, |_, _, _, _| {}).absolute().inset_0() })
+            .tip(crate::settings::tr("新建", "New"), None)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(move |w, ev: &ClickEvent, window, cx| {
+            .on_click(cx.listener(move |w, ev: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 w.row_menu = None;
-                if folder { w.new_folder(Some(id.clone()), window, cx); }
-                else {
-                    let pos = lookup.borrow().get(&slot).copied().map_or(ev.position(), anchor);
-                    w.create_menu = if open { None } else { Some((Some(id.clone()), pos)) };
-                }
+                let pos = lookup.borrow().get(&slot).copied().map_or(ev.position(), anchor);
+                w.create_menu = if open { None } else { Some((Some(id.clone()), pos)) };
                 cx.notify();
-            }))
-    }
-
-    /// Hover "+" on a document (新建子文档, #357): a new page under it, straight away.
-    fn child_button(&self, e: &Entry, key: &str, cx: &mut Context<Self>) -> Stateful<Div> {
-        let id = e.id.clone();
-        div()
-            .id(SharedString::from(format!("child-{key}-{}", e.id)))
-            .size(px(22.))
-            .p(px(3.))
-            .flex_none()
-            .rounded(px(6.))
-            .opacity(self.folder_drag.reveal(&e.id))
-            .hover(|s| s.bg(Theme::sidebar_selected()))
-            .child(icon("plus", 16., Theme::icon()))
-            .tip(crate::settings::tr("新建子文档", "New child page"), None)
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(move |w, _, window, cx| {
-                cx.stop_propagation();
-                w.row_menu = None;
-                w.new_child(&id, window, cx);
             }))
     }
 
@@ -629,13 +597,14 @@ impl Workspace {
         // 我的文档 rows float their buttons over the row's right end instead of reserving
         // the room: at rest the name runs to the edge, and it gives way as they fade in.
         // A folder with a 正文 is that document with child pages (#357): a page's face and buttons.
+        // A document row has no "+": 新建子文档 is only in its "…" menu, so child pages stay a
+        // side feature rather than the habit for making pages.
         let note = e.note.as_deref();
         let folder = e.meta.folder.is_some() && note.is_none();
-        let child = key == "doc" && self.takes_children(&e.id);
         let lib_batch = self.batch.is_some() && key == "doc";
         let float = key == "doc" && !lib_batch && self.rename.as_ref().is_none_or(|r| r.id != e.id);
         let menu_open = self.row_menu.as_ref().is_some_and(|m| m.id == e.id && !m.batch && m.pos.x < px(0.)) || (folder && self.create_menu.as_ref().is_some_and(|(p, _)| p.as_deref() == Some(e.id.as_str())));
-        let give = if float { (if folder { 74. } else if child { 52. } else { 28. }) * if menu_open { 1. } else { self.folder_drag.reveal(&e.id) } } else { 0. };
+        let give = if float { (if folder { 52. } else { 28. }) * if menu_open { 1. } else { self.folder_drag.reveal(&e.id) } } else { 0. };
         let selected = (self.view == View::Doc && (self.current.as_deref() == Some(e.id.as_str()) || (note.is_some() && self.current.as_deref() == note))) || (self.view == View::Folder && self.folder_current.as_deref() == Some(e.id.as_str()));
         let renaming = self.rename.as_ref().filter(|r| r.id == e.id).map(|r| r.field.clone());
         let title = match renaming {
@@ -738,7 +707,7 @@ impl Workspace {
                                 .with_transformation(Transformation::rotate(radians(if open { std::f32::consts::FRAC_PI_2 } else { 0. }))))))
                     }
                     // A document with children: its own icon, turning into the chevron on hover like a folder's.
-                    _ if note.is_some() && !drop_target => {
+                    _ if note.is_some() => {
                         let face = div().absolute().inset_0().flex().items_center().justify_center().opacity(1. - chevron);
                         d.child(match &e.icon {
                             Some(em) if !e.meta.markdown => face.text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 7.)).child(em.clone()),
@@ -748,19 +717,18 @@ impl Workspace {
                             .child(icon("disclosure", ROW_ICON, Theme::icon())
                                 .with_transformation(Transformation::rotate(radians(if open { std::f32::consts::FRAC_PI_2 } else { 0. }))))))
                     }
-                    _ if note.is_some() => d.child(icon("folder-input", ROW_ICON, Theme::icon())),
                     _ if e.meta.named_by_file() => d.child(icon(crate::search::file_glyph(&e.meta), ROW_ICON, Theme::icon())),
                     Some(em) => d.text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 7.)).child(em.clone()),
                     None => d.child(icon("doc", ROW_ICON, Theme::icon())),
                 })
             })
             .child(title)
-            // A folder's "…", "new folder" and "+" sit in the same columns as the header's
-            // 批量操作, 新建文件夹 and 新建文档.
+            // A folder's "…" and "+" sit in the same columns as the header's 批量操作
+            // and 新建: "…" manages the folder, "+" makes things in it (文件夹 is the
+            // menu's last entry, so a separate new-folder button would be a third entry).
             .when(float, |d| {
                 let end = div().absolute().top_0().bottom_0().right_0().flex().items_center();
-                d.child(if folder { end.child(self.more_button(e, key, cx).mr(px(0.))).child(self.add_button(e, key, true, cx).ml(px(2.))).child(self.add_button(e, key, false, cx).ml(px(2.)).mr(px(4.))) }
-                    else if child { end.child(self.more_button(e, key, cx).mr(px(0.))).child(self.child_button(e, key, cx).ml(px(2.)).mr(px(4.))) }
+                d.child(if folder { end.child(self.more_button(e, key, cx).mr(px(0.))).child(self.add_button(e, key, cx).ml(px(2.)).mr(px(4.))) }
                     else { end.child(self.more_button(e, key, cx)) })
             })
             .when(!renaming && key != "doc" && batch.is_none(), |d| d.child(self.more_button(e, key, cx)))

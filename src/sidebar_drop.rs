@@ -1,6 +1,7 @@
 //! Dropping onto the sidebar's 我的文档: files from the Finder are imported
-//! into the folder under the pointer (a document row: its folder; elsewhere:
-//! the top), and a 本机文件 row carried up into the tree is imported there.
+//! into the folder under the pointer, or between the rows there (a document
+//! row only opens a slot beside it, #418), and a 本机文件 row carried up into
+//! the tree is imported there.
 use fdl_core::vfs::PathExt as _;
 use crate::app::Workspace;
 use crate::settings::tr;
@@ -124,6 +125,7 @@ impl Workspace {
         let front = self.store.front_matter_of(id);
         match self.store.create_markdown_in(&doc, &front, target.parent.as_deref()) {
             Ok(new) => {
+                if let Some(src) = self.store.local_path(id) { self.keep_times(&new, &src); }
                 self.place_dropped(&[new], &target);
                 self.landed_in(target.parent.as_deref());
                 let place = self.drop_place(&target);

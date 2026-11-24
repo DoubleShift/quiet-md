@@ -122,7 +122,7 @@ pub(crate) fn summary_text(text: String, mut hits: Vec<Range<usize>>, width: f32
         hits.retain(|r| r.end <= cut);
         format!("{}…", &text[..cut])
     };
-    let runs = ui_runs(&text, &style, &hits, Theme::link());
+    let runs = ui_runs(&text, &style, &hits, crate::design::color::foreground());
     StyledText::new(text).with_runs(runs)
 }
 
@@ -138,7 +138,7 @@ fn summary_style(window: &Window) -> TextStyle {
 fn summary_lines(s: &str, style: &TextStyle, hits: &[Range<usize>], width: f32, window: &Window) -> usize {
     window
         .text_system()
-        .shape_text(s.to_string().into(), px(12.), &ui_runs(s, style, hits, Theme::link()), Some(px(width)), None)
+        .shape_text(s.to_string().into(), px(12.), &ui_runs(s, style, hits, crate::design::color::foreground()), Some(px(width)), None)
         .map(|ls| ls.iter().map(|l| l.wrap_boundaries().len() + 1).sum::<usize>())
         .unwrap_or(1)
 }
@@ -351,7 +351,7 @@ pub(crate) fn result_info(e: &Entry, q: &str, summary: Option<(String, Vec<Range
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
-                .child(ui_text(title).hit(title_hit, Theme::link())),
+                .child(ui_text(title).hit(title_hit, crate::design::color::foreground())),
         )
         .children(summary.map(|(text, hits)| div().text_size(px(12.)).line_height(px(20.)).child(summary_text(text, hits, width, window))))
         .child(extra_line(e))

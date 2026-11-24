@@ -795,6 +795,7 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("无法连接更新服务器", "Güncelleme sunucusuna ulaşılamıyor"),
     ("找不到正在运行的应用", "Çalışan uygulama bulunamadı"),
     ("请先把 Quiet.md 移到「应用程序」文件夹，再更新", "Güncellemeden önce Quiet.md'yi Uygulamalar klasörüne taşıyın"),
+    ("Quiet.md 正在安装盘里运行。请先把它拖到「应用程序」文件夹，从那里打开后再更新", "Quiet.md kurulum disk görüntüsünden çalışıyor. Uygulamalar klasörüne sürükleyin, oradan açın ve ardından güncelleyin"),
     ("请使用 AppImage 版本更新", "Uygulama içinden güncellemek için AppImage sürümünü kullanın"),
     ("Quiet.md {} 已发布，点侧栏顶部的「更新」安装", "Quiet.md {} yayınlandı. Yüklemek için kenar çubuğunun üstündeki «Güncelle»ye tıklayın."),
     ("没有写入 {} 的权限，请从网站下载新版本", "{} konumuna yazma izni yok. Yeni sürümü web sitesinden indirin."),

@@ -1735,11 +1735,11 @@ pub(crate) fn update_pill(cx: &mut Context<Workspace>) -> Option<AnyElement> {
     let busy = matches!(state, State::Downloading(_) | State::Installing(_));
     Some(div().id("update-pill").no_drag().flex_shrink_1().min_w_0().h(px(24.)).px(px(10.)).relative().overflow_hidden().flex().items_center().justify_center().rounded_full()
         .text_size(px(theme::ui_font_small())).line_height(px(theme::ui_font_small() + 4.)).font_weight(FontWeight::MEDIUM)
-        .when(!busy, |d| d.cursor_pointer().bg(Theme::primary()).text_color(gpui::white()).hover(|s| s.opacity(0.9)))
+        .when(!busy, |d| d.cursor_pointer().bg(crate::design::color::primary()).text_color(crate::design::color::primary_foreground()).hover(|s| s.opacity(0.9)))
         .when(busy, |d| d.bg(Theme::sidebar_hover()).text_color(Theme::text_caption()))
         // Downloading: a fixed width (no jitter as the digits change), filled left
         // to right behind a moving wave.
-        .when_some(fill, |d, f| d.w(px(56.)).child(ui::wave_fill(f, Theme::primary().opacity(0.18))))
+        .when_some(fill, |d, f| d.w(px(56.)).child(ui::wave_fill(f, crate::design::color::primary().opacity(0.18))))
         .child(div().relative().min_w_0().truncate().child(label))
         .tip(&tip, None)
         .on_click(move |_, _, cx| match &state { State::Available(_) => crate::update::download(cx), State::Ready(..) => crate::update::install(cx), _ => {} })

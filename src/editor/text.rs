@@ -712,9 +712,13 @@ fn span_color(spec: &TextSpec, m: &Marks) -> Hsla {
 
 use crate::editor_ui::{CJK_PUNCT_FONT, is_cjk_punct};
 
-#[cfg(not(target_family = "wasm"))]
+/// A family the platform has: a missing one resolves to GPUI's last-resort
+/// face in its regular style, so quotes in bold or italic text lost theirs (#419).
+#[cfg(target_vendor = "apple")]
 const QUOTE_FONT: &str = "Helvetica Neue";
-#[cfg(target_family = "wasm")]
+#[cfg(target_os = "windows")]
+const QUOTE_FONT: &str = "Segoe UI";
+#[cfg(not(any(target_vendor = "apple", target_os = "windows")))]
 const QUOTE_FONT: &str = crate::theme::SYSTEM_FONT;
 
 /// Shaped in place of an equation's U+FFFC: same UTF-8 length, a glyph of
@@ -1637,6 +1641,21 @@ mod tests {
                     assert_eq!(fonts.glyph_for_char(run.font_id, ch), Some(g.id), "{ch:?} drawn from the wrong face (pass {pass})");
                 }
             }
+        }
+    }
+
+    /// #419: curly quotes are drawn in `QUOTE_FONT` whatever the run's weight
+    /// and style, so it must be a family the platform has: a missing one
+    /// resolves every weight and style to one regular fallback face.
+    #[test]
+    fn quote_font_keeps_bold_and_italic() {
+        use gpui::{FontStyle, FontWeight};
+        let ts = gpui::TextSystem::new(std::sync::Arc::new(gpui_apple::AppleTextSystem::new()));
+        let id = |family: &str, weight, style| ts.resolve_font(&gpui::Font { weight, style, ..gpui::font(family.to_string()) });
+        for family in [super::QUOTE_FONT, "No Such Family"] {
+            let regular = id(family, FontWeight::NORMAL, FontStyle::Normal);
+            let differ = regular != id(family, FontWeight::BOLD, FontStyle::Normal) && regular != id(family, FontWeight::NORMAL, FontStyle::Italic);
+            assert_eq!(differ, family == super::QUOTE_FONT, "{family}");
         }
     }
 

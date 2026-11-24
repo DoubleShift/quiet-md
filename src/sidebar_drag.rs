@@ -16,6 +16,18 @@ const INDENT: f32 = 18.;
 #[derive(Clone)]
 struct Row { entry: Entry, depth: usize }
 
+/// A row whose middle a drop goes into: a plain folder. A document, one with child pages (#357)
+/// too, only opens a slot before or after it (#418): dropping on a page reorders, never nests.
+fn takes_drop(e: &Entry) -> bool { e.meta.folder.is_some() && e.note.is_none() }
+
+/// How deep a slot between `prev` and `next` sits, `desired` by the pointer's x: one under `prev`
+/// only when it is a folder or its children are shown right below it (among a page's child pages).
+fn slot_depth(prev: Option<&Row>, next: Option<&Row>, desired: usize) -> usize {
+    let max = prev.map_or(0, |p| p.depth + usize::from(takes_drop(&p.entry) || next.is_some_and(|n| n.depth > p.depth)));
+    let min = next.map_or(0, |r| r.depth);
+    desired.clamp(min.min(max), max)
+}
+
 /// Seconds a dragged row must rest on a collapsed folder before it opens.
 const DWELL: f32 = 0.45;
 
@@ -259,7 +271,7 @@ impl Workspace {
         let folder = rows.iter().enumerate().find(|(i, r)| {
             let top = self.folder_drag.springs.get(&r.entry.id).map_or(
                 (*i + usize::from(*i >= d.index)) as f32 * PITCH, |s| s.p[1]);
-            r.entry.meta.folder.is_some() && pointer_y > top + 5. && pointer_y < top + 26.
+            takes_drop(&r.entry) && pointer_y > top + 5. && pointer_y < top + 26.
                 && f32::from(d.at.x - bounds.left()) >= r.depth as f32 * INDENT
         });
         if let Some((i, r)) = folder {
@@ -282,16 +294,13 @@ impl Workspace {
         let index = if in_slot { d.index } else {
             rows.iter().enumerate().filter(|(i, _)| y > (*i + usize::from(*i >= d.index)) as f32 * PITCH + 15.).count()
         };
-        let prev = index.checked_sub(1).and_then(|i| rows.get(i));
-        let max = prev.map_or(0, |r| r.depth + usize::from(r.entry.meta.folder.is_some()));
-        let min = rows.get(index).map_or(0, |r| r.depth);
-        let depth = desired.clamp(min.min(max), max);
+        let depth = slot_depth(index.checked_sub(1).and_then(|i| rows.get(i)), rows.get(index), desired);
         let parent = if depth == 0 { None } else { rows[..index].iter().rev().find(|r| r.depth + 1 == depth && r.entry.meta.folder.is_some()).map(|r| r.entry.id.clone()) };
         d.index = index; d.depth = depth; d.parent = parent;
     }
 
     /// Where something dragged in from outside the tree lands at `at`: into the
-    /// folder row under it, or a slot between rows (as a row being moved gets),
+    /// folder row under it (`takes_drop`), or a slot between rows (as a row being moved gets),
     /// beside the row below it. `local`: a 本机文件 row, which lands only on the
     /// tree, not back in its own section.
     pub(crate) fn sidebar_target(&self, at: Point<Pixels>, local: bool) -> Option<crate::sidebar_drop::SidebarDropAt> {
@@ -305,7 +314,7 @@ impl Workspace {
         // Rows where they stand with the open slot, as for a row being moved: the hit stays put while they make room.
         let cur = self.sidebar_drop.as_ref().and_then(|t| t.slot).map(|s| s.0);
         let top_of = |i: usize| (i + usize::from(cur.is_some_and(|c| i >= c))) as f32 * PITCH;
-        if let Some((_, r)) = rows.iter().enumerate().find(|(i, r)| r.entry.meta.folder.is_some() && y > top_of(*i) + 5. && y < top_of(*i) + 26.) {
+        if let Some((_, r)) = rows.iter().enumerate().find(|(i, r)| takes_drop(&r.entry) && y > top_of(*i) + 5. && y < top_of(*i) + 26.) {
             return Some(SidebarDropAt { parent: Some(r.entry.id.clone()), slot: None, before: None });
         }
         let index = rows.iter().enumerate().filter(|(i, _)| y > top_of(*i) + 15.).count();
@@ -898,5 +907,44 @@ impl Workspace {
                     .opacity(d.lift.unit()).child(inside.to_string()))));
         }
         Some(deferred(layer).with_priority(5).into_any_element())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Entry, Row, slot_depth, takes_drop};
+
+    fn row(kind: &str, depth: usize) -> Row {
+        let meta = crate::store::Meta { folder: (kind != "doc").then(String::new), ..Default::default() };
+        let note = (kind == "page").then(|| "note".to_string());
+        Row { entry: Entry { id: kind.into(), meta, title: String::new(), icon: None, body: "".into(), reminders: vec![], links: vec![], note, root: String::new() }, depth }
+    }
+
+    /// #418: a drop on a document, one with child pages too, reorders; only a folder takes it in.
+    #[test]
+    fn only_folders_take_a_drop_into_them() {
+        assert!(takes_drop(&row("folder", 0).entry));
+        assert!(!takes_drop(&row("doc", 0).entry));
+        assert!(!takes_drop(&row("page", 0).entry), "a document with child pages is not a drop target");
+    }
+
+    /// A slot's depth: pulled right under a document it stays beside it; under a folder it goes in.
+    #[test]
+    fn a_slot_nests_only_under_folders_and_among_shown_child_pages() {
+        let (doc, page, folder) = (row("doc", 0), row("page", 0), row("folder", 0));
+        assert_eq!(slot_depth(Some(&doc), None, 3), 0);
+        assert_eq!(slot_depth(Some(&page), None, 3), 0, "a collapsed page does not take the row as a child");
+        assert_eq!(slot_depth(Some(&folder), None, 3), 1);
+        assert_eq!(slot_depth(Some(&folder), None, 0), 0);
+        // An expanded page: the slot before its first child page is among them (reordering child pages).
+        let kid = row("doc", 1);
+        assert_eq!(slot_depth(Some(&page), Some(&kid), 0), 1);
+        // Between two child pages, or dragged out past the last one.
+        assert_eq!(slot_depth(Some(&kid), Some(&row("doc", 1)), 0), 1);
+        assert_eq!(slot_depth(Some(&kid), Some(&doc), 1), 1, "after the last child page, kept among them");
+        assert_eq!(slot_depth(Some(&kid), Some(&doc), 0), 0, "or pulled left, out of them");
+        assert_eq!(slot_depth(Some(&kid), None, 0), 0, "out of the child pages");
+        assert_eq!(slot_depth(Some(&kid), None, 1), 1);
+        assert_eq!(slot_depth(None, Some(&doc), 2), 0);
     }
 }

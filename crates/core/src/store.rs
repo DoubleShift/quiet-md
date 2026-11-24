@@ -23,7 +23,7 @@ pub use layout::{file_name_for, relative, resolve, file_link};
 use layout::{parent_rel, base_name, stem_of, join_rel};
 #[path = "migrate.rs"] mod migrate;
 #[path = "meta.rs"] mod meta;
-pub use meta::{Device, device};
+pub use meta::{Device, DeviceInfo, device, set_device_name};
 pub use migrate::{MigrationState, ConsentReason, DeviceHint, MigrationReport, RestoreReport, SyncService, sync_of, set_ubiquity_probe};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -377,6 +377,12 @@ pub struct Store {
     /// turns it off under 自动排序, so sorting never rewrites what the user
     /// arranged by hand; the core never reads the window's sort setting.
     place_by_hand: bool,
+    /// FORMAT 6: the 回收站 and the hand order live in the device files too.
+    v6: bool,
+    /// FORMAT 6: the 回收站 records as last read or written, by id.
+    seen_trash: std::cell::RefCell<HashMap<String, serde_json::Value>>,
+    /// Pages leaving the 回收站 for good: written as `purged`, not restored.
+    purging: std::cell::RefCell<HashSet<String>>,
 }
 
 /// What switching documents remembers in memory only: each write of it is an
@@ -442,11 +448,32 @@ fn parsed_cache_path(root: &Path, key: &str) -> PathBuf {
 /// One write to the indexes: several copies of the app may share a library
 /// (builds tested side by side), so this is a short mutex, not a
 /// single-instance guard. Released when the write is done.
-/// `None`: the lock a batch already holds.
-struct WriteLock(Option<crate::vfs::File>);
+/// Empty: the lock a batch already holds.
+struct WriteLock(Vec<crate::vfs::File>);
 
 impl Drop for WriteLock {
-    fn drop(&mut self) { if let Some(f) = &self.0 { let _ = f.unlock(); } }
+    fn drop(&mut self) { for f in self.0.iter().rev() { let _ = f.unlock(); } }
+}
+
+/// `path` opened (made if missing) and locked, waiting for whoever holds it.
+fn lock_file(path: &Path) -> Result<crate::vfs::File> {
+    if let Some(dir) = path.parent() { crate::vfs::create_dir_all(dir)?; }
+    let f = crate::vfs::OpenOptions::new().create(true).truncate(false).write(true).open(path)?;
+    f.lock()?;
+    Ok(f)
+}
+
+/// This computer's write lock on the library at `root` (sync.md 1.6): in
+/// local data, as a lock in the root would only travel to other devices and
+/// lock nothing there. Named by the library id in `format.json`, which goes
+/// with the folder: the app (by 工作区 root key), the CLI and a lone
+/// `open_at` (by `library_key`) all take the same one. Without an id yet
+/// (before one is added, the old layout) it is `library_key`, and those
+/// formats take `.quiet/.lock` as well.
+fn lock_path_at(root: &Path) -> PathBuf {
+    let id = reread::<FormatMarker>(&root.join(INTERNAL).join("format.json")).map(|m| m.id).unwrap_or_default();
+    let name = if !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') { id } else { library_key(root) };
+    local_base(root).join("locks").join(format!("{name}.lock"))
 }
 
 /// A batch of writes (`Store::batch`): the lock is held throughout and the
@@ -458,7 +485,7 @@ struct Batch { lock: Option<WriteLock>, depth: u32, index: std::cell::Cell<bool>
 /// a change would make older builds misread the library. 4: real folders,
 /// files named by title, internal data in `.quiet/`. 5: what the files
 /// cannot say split by device, `.quiet/meta/<device id>.json` (`meta.rs`).
-pub const FORMAT: u32 = 5;
+pub const FORMAT: u32 = 6;
 
 /// `load` of a document still in iCloud.
 pub const NOT_DOWNLOADED: &str = "这篇文档还在从 iCloud 下载，请稍后再打开";
@@ -552,6 +579,22 @@ struct Location { path: PathBuf }
 /// The library this run uses once first launch has picked it.
 static ROOT: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
 
+/// Rename `tmp` over `path`. On Windows a file another program has just
+/// opened (the virus scanner or the search indexer looking at what was
+/// written a moment ago) refuses to be replaced for a few milliseconds:
+/// `ERROR_ACCESS_DENIED` (5) or `ERROR_SHARING_VIOLATION` (32). Try again
+/// for up to about a second before giving up.
+fn replace(tmp: &Path, path: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    for wait in [5, 10, 20, 40, 80, 160, 320, 400] {
+        match crate::vfs::rename(tmp, path) {
+            Err(e) if matches!(e.raw_os_error(), Some(5 | 32)) => std::thread::sleep(std::time::Duration::from_millis(wait)),
+            r => return r,
+        }
+    }
+    crate::vfs::rename(tmp, path)
+}
+
 /// Write `bytes` to `path` through a temporary file, so a crash leaves
 /// either the old or the new contents.
 pub(crate) fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<()> { write_atomic_then(path, bytes, true) }
@@ -569,7 +612,8 @@ fn write_atomic_then(path: &std::path::Path, bytes: &[u8], sync_dir: bool) -> Re
         let mut file = crate::vfs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
         file.write_all(bytes)?;
         file.sync_all()?;
-        crate::vfs::rename(&tmp, path)?;
+        drop(file);
+        replace(&tmp, path).with_context(|| format!("replacing {}", path.display()))?;
         #[cfg(unix)]
         if sync_dir && let Some(parent) = path.parent() { crate::vfs::File::open(parent)?.sync_all()?; }
         // Windows has no directory fsync; the rename is as far as it goes.
@@ -615,7 +659,7 @@ fn write_cache(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(format!(".{}.tmp", uuid::Uuid::new_v4()));
     let tmp = PathBuf::from(tmp);
-    let r = crate::vfs::write(&tmp, bytes).and_then(|_| crate::vfs::rename(&tmp, path));
+    let r = crate::vfs::write(&tmp, bytes).and_then(|_| replace(&tmp, path));
     if r.is_err() { let _ = crate::vfs::remove_file(&tmp); }
     Ok(r?)
 }
@@ -1221,7 +1265,12 @@ impl Store {
     /// Whether `id` is in this library's 回收站, as the disk has it: a
     /// writer of its own (`tree_writer`) may have put it there meanwhile.
     pub fn trashed(&mut self, id: &str) -> bool {
-        if !self.trash.contains_key(id) && let Some(t) = reread(&self.trash_index_file()) { self.trash = t; }
+        if !self.trash.contains_key(id) {
+            if self.v6 {
+                let m = meta::cached(&self.root, &self.me.id, &self.merged.borrow(), &mut vec![]);
+                self.trash = m.trash().iter().filter_map(|(k, v)| Some((k.clone(), meta::trashed_of(v)?))).collect();
+            } else if let Some(t) = reread(&self.trash_index_file()) { self.trash = t; }
+        }
         self.trash.contains_key(id)
     }
 
@@ -1258,8 +1307,17 @@ impl Store {
     /// is taken over the first time (`adopt_path_data`).
     pub fn open_at_as(root: PathBuf, key: &str) -> Result<Self> { Self::open_as(root, key, device()) }
 
+    /// `open_at` for tools beside the app (the `quiet` CLI): copies left by
+    /// a crash stay for the app to restore and report.
+    pub fn open_for_tools(root: PathBuf) -> Result<Self> { let key = library_key(&root); Self::open_for_tools_as(root, &key) }
+
+    /// `open_for_tools` for 工作区 root `key` (see `open_at_as`).
+    pub fn open_for_tools_as(root: PathBuf, key: &str) -> Result<Self> { Self::open_with(root, key, device(), false) }
+
     /// `open_at_as`, writing as device `me` (tests play several devices).
-    pub(crate) fn open_as(root: PathBuf, key: &str, me: Device) -> Result<Self> {
+    pub(crate) fn open_as(root: PathBuf, key: &str, me: Device) -> Result<Self> { Self::open_with(root, key, me, true) }
+
+    fn open_with(root: PathBuf, key: &str, me: Device, recover: bool) -> Result<Self> {
         crate::vfs::create_dir_all(&root)?;
         Self::adopt_path_data(&root, key);
         let mut warnings = vec![];
@@ -1281,11 +1339,11 @@ impl Store {
                 Some(m) => {
                     if migrate::legacy(&root) { migrate::finish(&root, &mut warnings); }
                     if m.id.is_empty() { let _ = write_atomic(&marker, &serde_json::to_vec_pretty(&FormatMarker { format: m.format, id: uuid::Uuid::new_v4().to_string() })?); }
-                    if m.format < 5 && sync_of(&root) == SyncService::Local && !tests::STAY_4.with(|k| k.get()) && let Err(e) = meta::upgrade(&root, &me, &mut warnings) { warnings.push(format!("无法升级文档索引：{e}")); }
+                    if m.format < Self::newest() && sync_of(&root) == SyncService::Local && let Err(e) = Self::upgrade_meta(&root, &me, &mut warnings) { warnings.push(format!("无法升级文档索引：{e}")); }
                 }
                 None => {
                     crate::vfs::create_dir_all(&internal)?;
-                    let format = if tests::STAY_4.with(|k| k.get()) { 4 } else { FORMAT };
+                    let format = Self::newest();
                     write_atomic(&marker, &serde_json::to_vec_pretty(&FormatMarker { format, id: uuid::Uuid::new_v4().to_string() })?)?;
                 }
             }
@@ -1293,8 +1351,9 @@ impl Store {
         let base = if flat { root.clone() } else { internal.clone() };
         let trash = load_json(&base.join("trash").join("index.json"), "回收站索引", &mut warnings);
         let v5 = !flat && Self::format_at(&root) >= 5;
+        let v6 = v5 && Self::format_at(&root) >= 6;
         let mut store = Store { file_changes: vec![], root, index: HashMap::new(), foreign: DiskIndex::new(), trash, flat, warnings, migrated: None, loaded: Default::default(), copied: Default::default(), parsed: HashMap::new(), batch: Default::default(), view: Default::default(),
-            v5, me, clock: Default::default(), seen: Default::default(), merged: Default::default(), key: key.to_string(), place_by_hand: true };
+            v5, me, clock: Default::default(), seen: Default::default(), merged: Default::default(), key: key.to_string(), place_by_hand: true, v6, seen_trash: Default::default(), purging: Default::default() };
         if flat {
             store.index = load_json(&base.join("index.json"), "文档索引", &mut store.warnings);
             store.flat_folders()?;
@@ -1310,7 +1369,7 @@ impl Store {
             store.foreign = foreign_of(&disk);
             store.load_parsed();
         }
-        if let Ok(entries) = crate::vfs::read_dir(store.recovery_dir()) {
+        if recover && let Ok(entries) = crate::vfs::read_dir(store.recovery_dir()) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().is_none_or(|x| x != "xml") { continue; }
@@ -1330,19 +1389,33 @@ impl Store {
         Ok(store)
     }
 
+    /// FORMAT 4 → 5 under the locks a FORMAT 4 write takes: a copy opening
+    /// the root at the same time waits, then finds it done.
+    fn upgrade_meta(root: &Path, me: &Device, warnings: &mut Vec<String>) -> Result<()> {
+        let _locks = WriteLock(vec![lock_file(&lock_path_at(root))?, lock_file(&root.join(INTERNAL).join(".lock"))?]);
+        if Self::format_at(root) < 5 { meta::upgrade(root, me, warnings)?; }
+        if Self::format_at(root) == 5 && Self::newest() >= 6 { meta::upgrade6(root, me, warnings)?; }
+        Ok(())
+    }
+
+    /// The format a library is moved to on opening: `FORMAT`, unless a test
+    /// keeps it at an older one (as a synced folder would).
+    fn newest() -> u32 { if tests::STAY_4.with(|k| k.get()) { 4 } else if tests::STAY_5.with(|k| k.get()) { 5 } else { FORMAT } }
+
     /// The format `root`'s `.quiet/format.json` names (0: none).
     /// One still only in iCloud: 5 when the per-device index folder is
     /// there, else 4 (the formats with a `.quiet/`).
     fn format_at(root: &Path) -> u32 {
         let marker = root.join(INTERNAL).join("format.json");
-        if crate::vfs::is_dataless(&marker) { return if meta::dir(root).fs_is_dir() { FORMAT } else { 4 } }
+        // 5, not 6, when it cannot tell: a write checks the marker again and stops.
+        if crate::vfs::is_dataless(&marker) { return if meta::dir(root).fs_is_dir() { 5 } else { 4 } }
         reread::<FormatMarker>(&marker).map_or(0, |m| m.format)
     }
 
     /// FORMAT 5: the index from every device's file (sync.md 3.3). Entries
     /// whose files are not here (yet) come along and `list` passes them over.
     fn load_meta(&mut self, warnings: &mut Vec<String>) {
-        let merged = meta::load(&self.root, &self.me.id, warnings);
+        let merged = meta::cached(&self.root, &self.me.id, self.merged.get_mut(), warnings);
         self.clock.set(self.clock.get().max(merged.max));
         let mut disk = merged.disk_index();
         self.foreign = foreign_of(&disk);
@@ -1350,17 +1423,28 @@ impl Store {
         let local = self.read_local();
         self.index = self.from_disk(&disk, &local);
         disk.extend(self.foreign.clone());
-        *self.seen.get_mut() = meta::by_id(&disk);
+        let mut seen = meta::by_id(&disk);
+        if self.v6 {
+            // As the keys were read: `to_ranks` kept their order, so none changes here.
+            let raw = merged.items.iter().map(|(id, f)| (id.clone(), f.iter().map(|(k, w)| (k.clone(), w.v.clone())).collect())).collect();
+            meta::to_keys(&mut seen, &meta::keys_of(&raw));
+            let trash = merged.trash();
+            self.trash = trash.iter().filter_map(|(id, v)| Some((id.clone(), meta::trashed_of(v)?))).collect();
+            *self.seen_trash.get_mut() = trash.into_iter().collect();
+        }
+        *self.seen.get_mut() = seen;
         *self.merged.get_mut() = merged;
     }
 
     /// FORMAT 5's `save_index`: what changed since the index was read,
     /// stamped as this device's.
     fn save_meta(&self) -> Result<()> {
-        let now = meta::by_id(&self.disk_index());
+        let mut now = meta::by_id(&self.disk_index());
+        // FORMAT 6: ranks back to keys, a new one only for what moved.
+        if self.v6 { meta::to_keys(&mut now, &meta::keys_of(&self.seen.borrow())); }
         let changes = meta::diff(&self.seen.borrow(), &now);
         if !changes.is_empty() {
-            let merged = meta::commit(&self.root, &self.me, &self.clock, changes, &mut vec![])?;
+            let merged = meta::commit_over(&self.root, &self.me, &self.clock, &self.merged.borrow(), changes, &mut vec![])?;
             *self.merged.borrow_mut() = merged;
             *self.seen.borrow_mut() = now;
         }
@@ -1375,11 +1459,60 @@ impl Store {
     fn index_file(&self) -> PathBuf { self.internal().join("index.json") }
     fn trash_index_file(&self) -> PathBuf { self.internal().join("trash").join("index.json") }
     fn local_file(&self) -> PathBuf { local_file_for(&self.root, &self.key) }
+    fn lock_path(&self) -> PathBuf { lock_path_at(&self.root) }
+
+    /// The write locks, this computer's first. Before FORMAT 5 older builds,
+    /// which may have the library open too, lock `.quiet/.lock` (the top's
+    /// `.lock` in the old layout), so that one is held as well; FORMAT 5,
+    /// which they cannot open, no longer makes it.
+    fn lock_files(&self, v5: bool) -> Result<Vec<crate::vfs::File>> {
+        let mut held = loop {
+            let path = self.lock_path();
+            let f = lock_file(&path)?;
+            // A new library id meanwhile (`renew_library_id`): take the new one's.
+            if self.lock_path() == path { break vec![f] }
+            let _ = f.unlock();
+        };
+        if !v5 { held.push(lock_file(&self.internal().join(".lock"))?); }
+        Ok(held)
+    }
 
     /// The name this computer's data about the library goes by.
     pub fn key(&self) -> &str { &self.key }
     /// See `place_by_hand`: false while the window sorts automatically.
     pub fn set_place_by_hand(&mut self, on: bool) { self.place_by_hand = on; }
+
+    /// The devices that write this root's metadata (FORMAT 5), the latest
+    /// writer first; for 移除已停用的设备. Empty before FORMAT 5.
+    pub fn devices(&self) -> Vec<DeviceInfo> { if self.v5 { meta::devices(&self.root) } else { vec![] } }
+
+    /// 移除已停用的设备: device `id`'s fields that still win become this
+    /// device's, stamps unchanged, and its file goes; the merged view stays
+    /// as it was. This device cannot remove itself.
+    pub fn retire_device(&mut self, id: &str) -> Result<()> {
+        anyhow::ensure!(self.v5, "这个文档库还没有按设备记录元数据");
+        anyhow::ensure!(id != self.me.id, "不能移除当前设备");
+        let _lock = self.begin_write()?;
+        *self.merged.get_mut() = meta::retire(&self.root, &self.me, id, &mut vec![])?;
+        let before = std::mem::take(&mut self.index);
+        self.load_meta(&mut vec![]);
+        self.reclaim_open(before);
+        Ok(())
+    }
+
+    /// Copy the file at `src` into the library's attachments (sync.md 2.5),
+    /// named by a new UUID with `src`'s extension, so two devices inserting a
+    /// `截图.png` each never meet. Returns its path in the library
+    /// (`.assets/<uuid>.png`); the original name is the caller's to keep in `name=`.
+    pub fn import_attachment(&self, src: &Path) -> Result<String> {
+        anyhow::ensure!(src.fs_is_file(), "找不到要导入的文件：{}", src.display());
+        let dir = Self::assets_in(&self.root);
+        let ext = src.extension().and_then(|e| e.to_str()).filter(|e| !e.is_empty() && e.len() <= 16 && e.chars().all(|c| c.is_ascii_alphanumeric()));
+        let name = match ext { Some(e) => format!("{}.{e}", uuid::Uuid::new_v4()), None => uuid::Uuid::new_v4().to_string() };
+        crate::vfs::create_dir_all(&dir)?;
+        crate::vfs::copy(src, dir.join(&name))?;
+        Ok(format!("{}/{name}", dir.file_name().unwrap_or_default().to_string_lossy()))
+    }
 
     /// This computer's data about `root` named by its path (builds before
     /// root keys) goes by `key` from now on, unless `key` has some already.
@@ -1606,16 +1739,14 @@ impl Store {
     /// nothing the disk does not. A lock failure must never allow an unguarded write.
     fn begin_write(&mut self) -> Result<WriteLock> {
         // Inside a batch the lock is held and memory is what the disk will be.
-        if self.batch.lock.is_some() { return Ok(WriteLock(None)); }
+        if self.batch.lock.is_some() { return Ok(WriteLock(vec![])); }
         crate::vfs::create_dir_all(self.internal())?;
-        let f = crate::vfs::OpenOptions::new().create(true).truncate(false).write(true).open(self.internal().join(".lock"))?;
-        f.lock()?;
-        let lock = WriteLock(Some(f));
+        let lock = WriteLock(self.lock_files(self.v5)?);
         // Another copy moved it to the new layout meanwhile: nothing more is written here.
         anyhow::ensure!(!self.flat || !self.root.join(INTERNAL).join("format.json").fs_exists(), "文档库已升级到新格式，请重新打开 Quiet.md");
         let marker: FormatMarker = serde_json::from_slice(&crate::vfs::read(self.internal().join("format.json"))?)?;
         anyhow::ensure!(marker.format <= FORMAT, "这个文档库由更新版本的 Quiet.md 创建，请升级后再打开");
-        anyhow::ensure!(self.v5 || marker.format < 5, "文档库已升级到新格式，请重新打开 Quiet.md");
+        anyhow::ensure!((self.v5 || marker.format < 5) && (self.v6 || marker.format < 6), "文档库已升级到新格式，请重新打开 Quiet.md");
         // An unreadable index is not judged here (that is `open`'s job): the
         // version in memory is written back unchanged.
         if self.v5 {
@@ -1631,7 +1762,7 @@ impl Store {
             self.foreign = foreign_of(&disk);
             self.reclaim_open(before);
         }
-        if let Some(trash) = reread(&self.trash_index_file()) { self.trash = trash; }
+        if !self.v6 && let Some(trash) = reread(&self.trash_index_file()) { self.trash = trash; }
         self.apply_pending_opened();
         Ok(lock)
     }
@@ -2000,9 +2131,11 @@ impl Store {
             if disk.contains_key(key) { continue; }
             let t = crate::vfs::metadata(self.abs(key.trim_end_matches('/'))).ok().and_then(|m| m.modified().ok())
                 .and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or_else(now);
+            // A file: made when the system says it was (`vfs::file_times`), else at its last change.
+            let made = if key.ends_with('/') { t } else { crate::vfs::file_times(&self.abs(key)).map_or(t, |(made, _)| made) };
             // Found by every device alike: the same id on each (sync.md 3.3).
             let id = if self.v5 { meta::path_id(key) } else { String::new() };
-            disk.insert(key.clone(), Attached { id: id.clone(), created: t, modified: t, ..Attached::of(&id, &Meta::default()) });
+            disk.insert(key.clone(), Attached { id: id.clone(), created: made, modified: t, ..Attached::of(&id, &Meta::default()) });
             dirty = true;
         }
         if dirty {
@@ -2130,9 +2263,11 @@ impl Store {
         Ok(doc)
     }
 
-    /// Accept an external revision only when the caller has a clean editor.
-    pub fn refresh_markdown(&self, id: &str) -> Result<Option<Document>> {
-        if !self.is_markdown(id) { return Ok(None) }
+    /// Accept an external revision (another program, the `quiet` CLI) only
+    /// when the caller has a clean editor. Documents only: boards and 数据表
+    /// follow their files their own way.
+    pub fn refresh_external(&self, id: &str) -> Result<Option<Document>> {
+        if self.kind(id) != DocKind::Doc { return Ok(None) }
         let disk = self.read_doc_text(id)?;
         if self.loaded.borrow().get(id).is_none_or(|base| base == &disk) { return Ok(None) }
         let doc = self.parse_doc(id, &disk)?;
@@ -2448,7 +2583,9 @@ impl Store {
         }
         if self.flat { self.require_markdown_format()?; }
         let id = uuid::Uuid::new_v4().to_string();
-        self.index.insert(id.clone(), Meta { created: t, modified: t, opened: t, markdown: true, path: Some(key), ..Default::default() });
+        // Made and changed as the file was, not when it was first opened here.
+        let (made, changed) = crate::vfs::file_times(&path).unwrap_or((t, t));
+        self.index.insert(id.clone(), Meta { created: made, modified: changed, opened: t, markdown: true, path: Some(key), ..Default::default() });
         if let Err(e) = self.save_index() { self.index.remove(&id); return Err(e); }
         Ok(id)
     }
@@ -2544,7 +2681,7 @@ impl Store {
         crate::vfs::create_dir_all(self.trash_dir())?;
         // Persist destination metadata before moving content. An interrupted
         // move leaves extra index entries, never an unindexed trashed file.
-        save_json(&self.trash_index_file(), &trash)?;
+        self.write_trash(&trash)?;
         self.trash = trash;
         let mut failed = None;
         for (n, ((id, _), target)) in items.iter().zip(&targets).enumerate() {
@@ -2585,9 +2722,30 @@ impl Store {
         }
     }
 
-    fn save_trash(&self) -> Result<()> {
+    fn save_trash(&self) -> Result<()> { self.write_trash(&self.trash) }
+
+    /// Keep `trash` as the 回收站: `trash/index.json`, or in FORMAT 6 this
+    /// device's fields (sync.md 3.3) — `trashed` for what went in, `null`
+    /// for what came back, and a `purged` tombstone for what is gone for good.
+    fn write_trash(&self, trash: &HashMap<String, Trashed>) -> Result<()> {
         crate::vfs::create_dir_all(self.trash_dir())?;
-        save_json(&self.trash_index_file(), &self.trash)
+        if !self.v6 { return save_json(&self.trash_index_file(), trash) }
+        let purging = std::mem::take(&mut *self.purging.borrow_mut());
+        let seen = self.seen_trash.borrow().clone();
+        let mut changes = vec![];
+        for (id, t) in trash {
+            let v = meta::trashed_value(t);
+            if seen.get(id) != Some(&v) { changes.push((id.clone(), "trashed".to_string(), v)); }
+        }
+        for id in seen.keys().filter(|id| !trash.contains_key(*id)) {
+            changes.push(if purging.contains(id) { (id.clone(), "purged".to_string(), serde_json::Value::from(now())) } else { (id.clone(), "trashed".to_string(), serde_json::Value::Null) });
+        }
+        if changes.is_empty() { return Ok(()) }
+        changes.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+        let merged = meta::commit_over(&self.root, &self.me, &self.clock, &self.merged.borrow(), changes, &mut vec![])?;
+        *self.seen_trash.borrow_mut() = trash.iter().map(|(id, t)| (id.clone(), meta::trashed_value(t))).collect();
+        *self.merged.borrow_mut() = merged;
+        Ok(())
     }
 
     /// `id` and the pages deleted along with it.
@@ -2629,7 +2787,8 @@ impl Store {
                 }
                 let Some((kind, markdown)) = p.file_name().and_then(|s| s.to_str()).and_then(DocKind::of_name) else { continue };
                 let Some(id) = p.file_stem().and_then(|s| s.to_str()).map(str::to_string) else { continue };
-                if !self.trash.contains_key(&id) {
+                // FORMAT 6: a file whose record has not arrived yet waits for it.
+                if !self.trash.contains_key(&id) && !self.v6 {
                     let t = e
                         .metadata()
                         .ok()
@@ -2646,7 +2805,8 @@ impl Store {
                 on_disk.insert(id);
             }
         }
-        if readable {
+        // FORMAT 6: a record whose file has not arrived yet is kept, only not shown.
+        if readable && !self.v6 {
             let before = self.trash.len();
             self.trash.retain(|id, t| t.meta.folder.is_some() || on_disk.contains(id));
             dirty |= self.trash.len() != before;
@@ -2657,8 +2817,8 @@ impl Store {
             let p = self.trash_path(&id);
             let r = if p.fs_is_dir() { crate::vfs::remove_dir_all(&p) } else { crate::vfs::remove_file(&p) };
             match r {
-                Ok(()) => { self.trash.remove(&id); dirty = true; crate::versions::purge(&self.history_base(), &id); }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => { self.trash.remove(&id); dirty = true; crate::versions::purge(&self.history_base(), &id); }
+                Ok(()) => { self.trash.remove(&id); self.purging.borrow_mut().insert(id.clone()); dirty = true; crate::versions::purge(&self.history_base(), &id); }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => { self.trash.remove(&id); self.purging.borrow_mut().insert(id.clone()); dirty = true; crate::versions::purge(&self.history_base(), &id); }
                 Err(e) => self.warnings.push(format!("无法清理过期回收站文档 {id}：{e}")),
             }
         }
@@ -2669,6 +2829,7 @@ impl Store {
             .trash
             .iter()
             .filter(|(_, t)| t.root.as_ref().is_none_or(|r| !self.trash.contains_key(r)))
+            .filter(|(id, t)| !self.v6 || !readable || t.meta.folder.is_some() || on_disk.contains(*id))
             .map(|(id, t)| {
                 let doc = if t.meta.named_by_file() || t.meta.folder.is_some() || crate::vfs::is_dataless(&self.trash_path(id)) { Document::default() } else { crate::vfs::read_to_string(self.trash_path(id)).ok().and_then(|x| docxml::parse(&x).ok()).unwrap_or_default() };
                 TrashEntry {
@@ -2798,6 +2959,7 @@ impl Store {
                     Err(e) => { r = Err(e.into()); break 'pages; }
                 }
                 self.trash.remove(&k);
+                self.purging.borrow_mut().insert(k.clone());
                 crate::versions::purge(&self.history_base(), &k);
             }
         }
@@ -2961,7 +3123,10 @@ impl Store {
             for (id, v) in &s.scroll_top { if was.scroll_top.get(id) != Some(v) { changes.push((id.clone(), "scroll".into(), serde_json::to_value(v)?)); } }
             for id in was.scroll_top.keys() { if !s.scroll_top.contains_key(id) { changes.push((id.clone(), "scroll".into(), serde_json::Value::Null)); } }
             if changes.is_empty() { return Ok(()) }
-            *self.merged.borrow_mut() = meta::commit(&self.root, &self.me, &self.clock, changes, &mut vec![])?;
+            // Not inside `begin_write`: the lock is taken here, so two copies never write this device's file at once.
+            let _lock = if self.batch.lock.is_some() { WriteLock(vec![]) } else { WriteLock(self.lock_files(true)?) };
+            let merged = meta::commit_over(&self.root, &self.me, &self.clock, &self.merged.borrow(), changes, &mut vec![])?;
+            *self.merged.borrow_mut() = merged;
             return Ok(())
         }
         let shared = Settings { window_origin: None, window_display: None, window_size: None, quick_note_size: None, ..s.clone() };
@@ -3059,7 +3224,7 @@ thread_local! {
 }
 
 #[cfg(not(test))]
-mod tests { thread_local!(pub static STAY_4: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }); }
+mod tests { thread_local!(pub static STAY_4: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }); thread_local!(pub static STAY_5: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }); }
 
 #[cfg(test)]
 mod tests {
@@ -3067,6 +3232,8 @@ mod tests {
 
     // Libraries opened while set stay FORMAT 4, as in a synced folder.
     thread_local!(pub static STAY_4: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
+    // … and FORMAT 5.
+    thread_local!(pub static STAY_5: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
 
     /// A library in a fresh temporary folder, removed on drop.
     struct Lib(PathBuf);
@@ -3447,11 +3614,86 @@ mod tests {
         crate::vfs::write(&file, "from another app\n").unwrap();
         s.save_editor(&id, &editor).unwrap();
         assert_eq!(crate::vfs::read_to_string(&file).unwrap(), "from the editor\n");
-        assert!(s.refresh_markdown(&id).unwrap().is_none());
+        assert!(s.refresh_external(&id).unwrap().is_none());
         crate::vfs::write(&file, "saved after the editor\n").unwrap();
-        let refreshed = s.refresh_markdown(&id).unwrap().unwrap();
+        let refreshed = s.refresh_external(&id).unwrap().unwrap();
         assert_eq!(refreshed.blocks[0].text.text, "saved after the editor");
-        assert!(s.refresh_markdown(&id).unwrap().is_none());
+        assert!(s.refresh_external(&id).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_clean_editor_takes_in_another_programs_save() {
+        let lib = Lib::new("xml-external-save");
+        let mut s = lib.open();
+        let id = s.create_from(&Document { title: crate::model::RichText::plain("Plan"), blocks: vec![crate::model::Block::text("first")], ..Default::default() }).unwrap();
+        s.load_for_edit(&id, false).unwrap();
+        assert!(s.refresh_external(&id).unwrap().is_none());
+        // `quiet` (another Store on the same folder) saves the document.
+        let mut cli = Store::open_for_tools(lib.0.clone()).unwrap();
+        cli.list();
+        let mut doc = cli.load(&id).unwrap();
+        doc.blocks.push(crate::model::Block::text("from the CLI"));
+        cli.save(&id, &doc).unwrap();
+        let fresh = s.refresh_external(&id).unwrap().unwrap();
+        assert_eq!(fresh.blocks.last().unwrap().text.text, "from the CLI");
+        assert!(s.refresh_external(&id).unwrap().is_none());
+        // Saving the taken-in version is not a conflict.
+        s.save(&id, &fresh).unwrap();
+    }
+
+    /// The file's creation time where this system keeps one, in unix seconds.
+    fn made_of(p: &Path) -> Option<u64> { std::fs::metadata(p).ok()?.created().ok()?.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs()) }
+
+    #[test]
+    fn files_found_in_place_keep_their_times() {
+        let lib = Lib::new("found-times");
+        let mut s = lib.open();
+        // Put in the folder by hand (the Finder, Obsidian): last changed long ago, or later than made.
+        let (then, later) = (1_600_000_000, now() + 86_400);
+        crate::vfs::create_dir_all(lib.0.join("notes")).unwrap();
+        for (rel, t) in [("old.md", then), ("notes/later.md", later)] {
+            crate::vfs::write(lib.0.join(rel), "body\n").unwrap();
+            crate::vfs::set_modified(&lib.0.join(rel), t).unwrap();
+        }
+        let list = s.list();
+        let meta = |title: &str| list.iter().find(|e| e.title == title).unwrap().meta.clone();
+        // Made after its last change (as a copy is): the change time is both.
+        assert_eq!((meta("old").created, meta("old").modified), (then, then));
+        // Made before: when it was made, where the system keeps that (Linux may not).
+        let made = made_of(&lib.0.join("notes/later.md"));
+        assert_eq!((meta("later").created, meta("later").modified), (made.unwrap_or(later), later));
+        if cfg!(any(target_os = "macos", windows)) { assert!(meta("later").created < later); }
+        // A folder keeps its change time, as before.
+        let folder = list.iter().find(|e| e.meta.folder.is_some()).unwrap();
+        assert_eq!(folder.meta.created, folder.meta.modified);
+        // Kept: the next look finds the same.
+        assert_eq!(lib.open().list().iter().find(|e| e.title == "old").unwrap().meta.created, then);
+    }
+
+    #[test]
+    fn a_local_file_opened_in_place_has_its_own_times() {
+        let lib = Lib::new("local-times");
+        let away = crate::vfs::temp_dir().join(format!("fdl-local-times-{}", uuid::Uuid::new_v4()));
+        crate::vfs::create_dir_all(&away).unwrap();
+        let (file, later) = (away.join("later.md"), now() + 86_400);
+        crate::vfs::write(&file, "body\n").unwrap();
+        crate::vfs::set_modified(&file, later).unwrap();
+        let old = away.join("old.md");
+        crate::vfs::write(&old, "body\n").unwrap();
+        crate::vfs::set_modified(&old, 1_600_000_000).unwrap();
+        let mut s = lib.open();
+        let before = now();
+        let id = s.open_local(&file).unwrap();
+        let m = s.list().into_iter().find(|e| e.id == id).unwrap().meta;
+        assert_eq!((m.created, m.modified), (made_of(&file).unwrap_or(later), later));
+        assert!(m.opened >= before, "opened is when it was opened");
+        let id = s.open_local(&old).unwrap();
+        let m = s.list().into_iter().find(|e| e.id == id).unwrap().meta;
+        assert_eq!((m.created, m.modified), (1_600_000_000, 1_600_000_000));
+        // Opened again: only `opened` moves.
+        s.open_local(&old).unwrap();
+        assert_eq!(s.list().into_iter().find(|e| e.id == id).unwrap().meta.created, 1_600_000_000);
+        crate::vfs::remove_dir_all(away).unwrap();
     }
 
     #[test]
@@ -3565,8 +3807,8 @@ mod tests {
         let lib = Lib::new("lock-failure");
         let mut s = lib.open();
         let id = s.create_from(&doc("original")).unwrap();
-        crate::vfs::remove_file(lib.0.join(".quiet/.lock")).unwrap();
-        crate::vfs::create_dir(lib.0.join(".quiet/.lock")).unwrap();
+        crate::vfs::remove_file(s.lock_path()).unwrap();
+        crate::vfs::create_dir(s.lock_path()).unwrap();
         assert!(s.save(&id, &doc("lost")).is_err());
         assert_eq!(s.load(&id).unwrap().title.text, "original");
         assert!(s.create_from(&doc("new")).is_err());
@@ -3703,6 +3945,123 @@ mod tests {
     fn dev(id: &str) -> Device { Device { id: id.into(), ..Default::default() } }
 
     #[test]
+    fn the_write_lock_is_local_and_shared_by_the_key() {
+        let lib = Lib::new("local-lock");
+        // The app opens a root by its 工作区 key, the CLI and `open_at` by `library_key`: one lock still.
+        let mut a = Store::open_as(lib.0.clone(), &uuid::Uuid::new_v4().to_string(), device()).unwrap();
+        let key = library_key(&lib.0);
+        a.create_from(&doc("甲")).unwrap();
+        // FORMAT 5 makes no lock in the root: it would only travel to other devices.
+        assert!(a.lock_path().fs_is_file() && !lib.0.join(".quiet/.lock").fs_exists());
+        // A second copy on this computer (another window, the CLI) waits for the first.
+        a.begin_batch().unwrap();
+        let wrote = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let other = {
+            let (root, key, wrote) = (lib.0.clone(), key.clone(), wrote.clone());
+            std::thread::spawn(move || {
+                let mut b = Store::open_as(root, &key, device()).unwrap();
+                b.create_from(&doc("乙")).unwrap();
+                wrote.store(true, std::sync::atomic::Ordering::SeqCst);
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!wrote.load(std::sync::atomic::Ordering::SeqCst));
+        a.create_from(&doc("丙")).unwrap();
+        a.end_batch().unwrap();
+        other.join().unwrap();
+        assert!(wrote.load(std::sync::atomic::Ordering::SeqCst));
+        let mut titles: Vec<String> = a.list().into_iter().map(|e| e.title).collect();
+        titles.sort();
+        assert_eq!(titles, ["丙", "乙", "甲"]);
+        // Named by the library id, and a new id (a folder copied whole) moves it.
+        let was = a.lock_path();
+        assert!(was.ends_with(format!("{}.lock", a.library_id())));
+        a.renew_library_id().unwrap();
+        assert!(a.lock_path() != was && a.lock_path().ends_with(format!("{}.lock", a.library_id())));
+        a.create_from(&doc("丁")).unwrap();
+        assert!(a.lock_path().fs_is_file());
+    }
+
+    #[test]
+    fn the_merged_view_is_reread_only_when_a_device_file_changed() {
+        let lib = Lib::new("merged-cache");
+        let mut a = Store::open_as(lib.0.clone(), &library_key(&lib.0), dev("aaaa")).unwrap();
+        let x = a.create_from(&doc("共享")).unwrap();
+        let first = meta::cached(&lib.0, "aaaa", &meta::Merged::default(), &mut vec![]);
+        // Nothing changed: the same view without reading.
+        assert!(meta::cached(&lib.0, "aaaa", &first, &mut vec![]).get(&x, "path").is_some());
+        // Another device writes its file: the next write here sees it.
+        meta::commit(&lib.0, &dev("bbbb"), &Default::default(), vec![(x.clone(), "pinned".into(), true.into())], &mut vec![]).unwrap();
+        assert_eq!(meta::cached(&lib.0, "aaaa", &first, &mut vec![]).get(&x, "pinned"), Some(&serde_json::Value::Bool(true)));
+        a.set_starred(&x, true).unwrap();
+        let m = a.list().into_iter().find(|e| e.id == x).unwrap().meta;
+        assert!(m.pinned && m.starred > 0);
+        // Its own write keeps the view current, and a later one by another device still shows.
+        meta::commit(&lib.0, &dev("bbbb"), &Default::default(), vec![(x.clone(), "pinned".into(), false.into())], &mut vec![]).unwrap();
+        a.set_starred(&x, false).unwrap();
+        assert!(!a.list().into_iter().find(|e| e.id == x).unwrap().meta.pinned);
+    }
+
+    #[test]
+    fn devices_are_named_or_labelled() {
+        let d = Device { id: "9b2f0c1e".into(), name: String::new(), platform: "macos".into() };
+        assert_eq!(d.label(), "macOS 9b2f");
+        assert_eq!(Device { name: " Sida 的 MacBook ".into(), ..d.clone() }.label(), "Sida 的 MacBook");
+        assert_eq!(Device { platform: String::new(), ..d }.label(), "? 9b2f");
+        set_device_name("书房的 Mac");
+        assert_eq!(device().name, "书房的 Mac");
+        set_device_name("");
+    }
+
+    #[test]
+    fn retiring_a_device_keeps_the_merged_view() {
+        let lib = Lib::new("retire");
+        let mut a = Store::open_as(lib.0.clone(), &library_key(&lib.0), dev("aaaa")).unwrap();
+        let x = a.create_from(&doc("甲")).unwrap();
+        let y = a.create_from(&doc("乙")).unwrap();
+        let file = |d: &str| meta::dir(&lib.0).join(format!("{d}.json"));
+        // "eeee": wins x's pinned and y's width, loses x's starred to a later write here,
+        // and ties "dddd" on y's width (it wins that tie by its id).
+        let t = crate::time::now_ms();
+        crate::vfs::write(file("eeee"), serde_json::to_vec(&serde_json::json!({ "v": 1, "device": { "id": "eeee", "name": "旧电脑", "platform": "windows" },
+            "items": { (x.clone()): { "pinned": [true, t], "starred": [5, 1] }, (y.clone()): { "width": ["wide", t] } } })).unwrap()).unwrap();
+        crate::vfs::write(file("dddd"), serde_json::to_vec(&serde_json::json!({ "v": 1, "device": { "id": "dddd" },
+            "items": { (y.clone()): { "width": ["full", t] } } })).unwrap()).unwrap();
+        a.set_starred(&x, true).unwrap();
+        let view = || {
+            let m = meta::load(&lib.0, "aaaa", &mut vec![]);
+            m.items.into_iter().map(|(i, f)| (i, f.into_iter().map(|(k, w)| (k, w.v)).collect::<BTreeMap<_, _>>())).collect::<BTreeMap<_, _>>()
+        };
+        let before = view();
+        assert_eq!(before[&y]["width"], "wide");
+        let listed: Vec<String> = a.devices().into_iter().map(|d| d.device.id).collect();
+        assert!(listed.contains(&"eeee".to_string()) && listed.contains(&"aaaa".to_string()));
+        assert_eq!(a.devices().into_iter().find(|d| d.device.id == "eeee").unwrap().last, t);
+        assert!(a.retire_device("aaaa").is_err() && a.retire_device("ffff").is_err());
+        a.retire_device("eeee").unwrap();
+        assert_eq!(view(), before);
+        assert!(!file("eeee").fs_exists() && file("dddd").fs_exists());
+        assert!(!a.devices().iter().any(|d| d.device.id == "eeee"));
+        let m = a.list().into_iter().find(|e| e.id == x).unwrap().meta;
+        assert!(m.pinned && m.starred > 5);
+    }
+
+    #[test]
+    fn attachments_come_in_under_new_names() {
+        let lib = Lib::new("attach");
+        let s = lib.open();
+        let src = lib.0.with_extension("src");
+        crate::vfs::create_dir_all(&src).unwrap();
+        crate::vfs::write(src.join("截图.PNG"), b"png").unwrap();
+        let one = s.import_attachment(&src.join("截图.PNG")).unwrap();
+        let two = s.import_attachment(&src.join("截图.PNG")).unwrap();
+        assert!(one.starts_with(".assets/") && one.ends_with(".PNG") && one != two, "{one} {two}");
+        assert_eq!(crate::vfs::read(lib.0.join(&one)).unwrap(), b"png");
+        assert!(s.import_attachment(&src.join("没有.png")).is_err());
+        let _ = crate::vfs::remove_dir_all(&src);
+    }
+
+    #[test]
     fn format_4_moves_to_device_files() {
         let lib = Lib::new("v4to5");
         STAY_4.with(|k| k.set(true));
@@ -3721,7 +4080,8 @@ mod tests {
         assert_eq!(Store::format_at(&lib.0), 4);
         STAY_4.with(|k| k.set(false));
         let mut s = lib.open();
-        assert!(s.v5 && Store::format_at(&lib.0) == 5, "{:?}", s.warnings);
+        // 4 → 5 → 6 in one go.
+        assert!(s.v6 && Store::format_at(&lib.0) == 6, "{:?}", s.warnings);
         assert!(lib.meta_file().fs_is_file() && lib.0.join(".quiet/index.json.v4").fs_is_file() && !lib.0.join(".quiet/index.json").fs_exists());
         let list = s.list();
         let by = |id: &str| list.iter().find(|e| e.id == id).unwrap().meta.clone();
@@ -3736,8 +4096,160 @@ mod tests {
         STAY_4.with(|k| k.set(false));
         let x = old.create_from(&doc("丙")).unwrap();
         let mut new = lib4.open();
-        assert!(new.v5 && new.list().iter().any(|e| e.id == x));
+        assert!(new.v6 && new.list().iter().any(|e| e.id == x));
         assert!(old.set_pinned(&x, true).unwrap_err().to_string().contains("新格式"));
+    }
+
+    /// Pages in folder `parent`, in the order the sidebar shows them.
+    fn in_order(s: &mut Store, parent: Option<&str>) -> Vec<String> {
+        let mut v: Vec<(bool, u64, std::cmp::Reverse<u64>, String)> = s.list().into_iter().filter(|e| e.meta.parent.as_deref() == parent && !e.meta.local())
+            .map(|e| { let p = e.meta.place(); (!p.0, p.1, p.2, e.id) }).collect();
+        v.sort();
+        v.into_iter().map(|x| x.3).collect()
+    }
+
+    #[test]
+    fn format_5_moves_to_6() {
+        let lib = Lib::new("v5to6");
+        STAY_5.with(|k| k.set(true));
+        let mut s = lib.open();
+        STAY_5.with(|k| k.set(false));
+        assert!(s.v5 && !s.v6);
+        let f = s.create_folder("夹", None).unwrap();
+        let kids: Vec<String> = ["一", "二", "三", "四"].iter().map(|t| s.create_from_in(&doc(t), Some(&f)).unwrap()).collect();
+        s.move_in_tree(&kids[3], Some(&f), Some(&kids[0])).unwrap();
+        s.set_pinned(&kids[1], true).unwrap();
+        let gone = kids[2].clone();
+        s.delete(&gone, None).unwrap();
+        let order = in_order(&mut s, Some(&f));
+        drop(s);
+        let state = |lib: &Lib| {
+            let mut s = lib.open();
+            assert!(s.v6 && Store::format_at(&lib.0) == 6, "{:?}", s.warnings);
+            let trash: Vec<(String, Option<String>)> = s.list_trash().into_iter().map(|t| (t.id, t.parent)).collect();
+            (in_order(&mut s, Some(&f)), trash, s.list().into_iter().find(|e| e.id == kids[1]).unwrap().meta.pinned)
+        };
+        let first = state(&lib);
+        assert_eq!(first, (order.clone(), vec![(gone.clone(), Some(f.clone()))], true));
+        let trash = lib.0.join(".quiet/trash");
+        assert!(trash.join("index.json.v5").fs_is_file() && !trash.join("index.json").fs_exists());
+        let file = crate::vfs::read_to_string(lib.meta_file()).unwrap();
+        assert!(file.contains("\"trashed\"") && file.contains("\"order\": [\n"), "{file}");
+        // A crash after this device's file, before the marker: done again, the same.
+        let marker = lib.0.join(".quiet/format.json");
+        let m: FormatMarker = reread(&marker).unwrap();
+        write_atomic(&marker, &serde_json::to_vec(&FormatMarker { format: 5, id: m.id }).unwrap()).unwrap();
+        crate::vfs::rename(trash.join("index.json.v5"), trash.join("index.json")).unwrap();
+        let mine = crate::vfs::read_to_string(lib.meta_file()).unwrap();
+        assert_eq!(state(&lib), first);
+        let keys = |t: &str| -> Vec<String> { let v: serde_json::Value = serde_json::from_str(t).unwrap(); kids.iter().filter_map(|k| v["items"][k]["order"][0].as_str().map(str::to_string)).collect() };
+        assert_eq!(keys(&crate::vfs::read_to_string(lib.meta_file()).unwrap()), keys(&mine));
+        // Restored, it goes back where it was.
+        let mut s = lib.open();
+        s.restore(&gone).unwrap();
+        assert_eq!(s.list().into_iter().find(|e| e.id == gone).unwrap().meta.parent.as_deref(), Some(f.as_str()));
+        assert!(s.list_trash().is_empty());
+        // A FORMAT 5 build still open stops writing once it is 6.
+        STAY_5.with(|k| k.set(true));
+        let lib5 = Lib::new("v5open");
+        let mut old = lib5.open();
+        STAY_5.with(|k| k.set(false));
+        let x = old.create_from(&doc("丙")).unwrap();
+        let mut new = lib5.open();
+        assert!(new.v6 && new.list().iter().any(|e| e.id == x));
+        assert!(old.set_pinned(&x, true).unwrap_err().to_string().contains("新格式"));
+        // … and one opening it refuses it (`format > FORMAT`, as 5 would see it).
+        let marker = lib5.0.join(".quiet/format.json");
+        let m: FormatMarker = reread(&marker).unwrap();
+        write_atomic(&marker, &serde_json::to_vec(&FormatMarker { format: FORMAT + 1, id: m.id }).unwrap()).unwrap();
+        assert!(Store::open_as(lib5.0.clone(), &library_key(&lib5.0), device()).is_err());
+    }
+
+    #[test]
+    fn devices_share_the_trash() {
+        let lib = Lib::new("trash-devices");
+        let mut a = Store::open_as(lib.0.clone(), &library_key(&lib.0), dev("aaaa")).unwrap();
+        let [x, y, z] = ["甲", "乙", "丙"].map(|t| a.create_from(&doc(t)).unwrap());
+        let mut b = Store::open_as(lib.0.clone(), &library_key(&lib.0), dev("bbbb")).unwrap();
+        b.list();
+        // Each deletes one: both are in the 回收站 on both.
+        a.delete(&x, None).unwrap();
+        b.delete(&y, None).unwrap();
+        let ids = |s: &mut Store| { let mut v: Vec<String> = s.list_trash().into_iter().map(|t| t.id).collect(); v.sort(); v };
+        let both = { let mut v = vec![x.clone(), y.clone()]; v.sort(); v };
+        assert_eq!(ids(&mut a), both);
+        assert_eq!(ids(&mut b), both);
+        // Deleted on one, restored on the other: the later write holds.
+        a.delete(&z, None).unwrap();
+        assert!(ids(&mut b).contains(&z));
+        b.restore(&z).unwrap();
+        assert!(!ids(&mut a).contains(&z) && a.list().iter().any(|e| e.id == z));
+        // A record before its file: not shown until the file is here.
+        let file = a.trash_path(&x);
+        let away = lib.0.join("away.xml");
+        crate::vfs::rename(&file, &away).unwrap();
+        assert!(!ids(&mut b).contains(&x));
+        crate::vfs::rename(&away, &file).unwrap();
+        assert!(ids(&mut b).contains(&x));
+        // 彻底删除: gone on both, a tombstone in the device's file.
+        b.purge(&x).unwrap();
+        assert!(!ids(&mut a).contains(&x));
+        assert!(crate::vfs::read_to_string(meta::dir(&lib.0).join("bbbb.json")).unwrap().contains("\"purged\""));
+    }
+
+    #[test]
+    fn tombstones_go_after_thirty_days() {
+        let lib = Lib::new("tombstones");
+        let mut s = Store::open_as(lib.0.clone(), &library_key(&lib.0), dev("aaaa")).unwrap();
+        let x = s.create_from(&doc("甲")).unwrap();
+        s.delete(&x, None).unwrap();
+        s.purge(&x).unwrap();
+        let path = meta::dir(&lib.0).join("aaaa.json");
+        let mut v: serde_json::Value = serde_json::from_slice(&crate::vfs::read(&path).unwrap()).unwrap();
+        assert!(v["items"][&x]["purged"].is_array());
+        // Purged 31 days ago: the next write here drops what this device said about it.
+        v["items"][&x]["purged"][1] = (crate::time::now_ms() - 31 * 86_400_000).into();
+        crate::vfs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+        let y = s.create_from(&doc("乙")).unwrap();
+        s.set_pinned(&y, true).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&crate::vfs::read(&path).unwrap()).unwrap();
+        assert!(v["items"].get(&x).is_none() && v["items"].get(&y).is_some(), "{v}");
+        assert!(s.list_trash().is_empty() && !s.list().iter().any(|e| e.id == x));
+    }
+
+    #[test]
+    fn a_move_writes_the_moved_page_only() {
+        let lib = Lib::new("fractional");
+        let mut a = Store::open_as(lib.0.clone(), &library_key(&lib.0), dev("aaaa")).unwrap();
+        let f = a.create_folder("夹", None).unwrap();
+        let p: Vec<String> = (0..5).map(|n| a.create_from_in(&doc(&format!("页{n}")), Some(&f)).unwrap()).collect();
+        a.move_in_tree(&p[0], Some(&f), Some(&p[1])).unwrap();
+        let mut b = Store::open_as(lib.0.clone(), &library_key(&lib.0), dev("bbbb")).unwrap();
+        let start = in_order(&mut b, Some(&f));
+        let file = |d: &str| -> serde_json::Value { serde_json::from_slice(&crate::vfs::read(meta::dir(&lib.0).join(format!("{d}.json"))).unwrap_or_else(|_| b"{}".to_vec())).unwrap() };
+        let orders = |v: &serde_json::Value| -> Vec<String> { p.iter().filter(|id| v["items"][*id].get("order").is_some()).cloned().collect() };
+        // A moves the first to the end, B the last to the front: each device's file names only its page.
+        let last = start[4].clone();
+        let before = file("aaaa");
+        a.move_in_tree(&start[0], Some(&f), None).unwrap();
+        let after = file("aaaa");
+        let changed: Vec<&String> = p.iter().filter(|id| before["items"][*id]["order"][0] != after["items"][*id]["order"][0]).collect();
+        assert_eq!(changed, vec![&start[0]]);
+        let front = in_order(&mut b, Some(&f))[0].clone();
+        b.move_in_tree(&last, Some(&f), Some(&front)).unwrap();
+        assert_eq!(orders(&file("bbbb")), vec![last.clone()]);
+        let ia = in_order(&mut a, Some(&f));
+        assert_eq!(ia, in_order(&mut b, Some(&f)));
+        assert_eq!(ia, [&start[4..], &start[1..4], &start[..1]].concat());
+        assert_eq!(orders(&file("aaaa")).len(), 5, "created here: every page has its key from A");
+        // The same key on two devices: both order the pages by id.
+        let key = file("aaaa")["items"][&start[0]]["order"][0].clone();
+        let other = ia.iter().find(|id| **id != start[0] && **id != last).unwrap().clone();
+        meta::commit(&lib.0, &dev("cccc"), &Default::default(), vec![(other.clone(), "order".into(), key)], &mut vec![]).unwrap();
+        let (oa, ob) = (in_order(&mut a, Some(&f)), in_order(&mut b, Some(&f)));
+        assert_eq!(oa, ob);
+        let (i, j) = (oa.iter().position(|x| *x == start[0]).unwrap(), oa.iter().position(|x| *x == other).unwrap());
+        assert_eq!(i < j, start[0] < other);
     }
 
     #[test]
@@ -4006,7 +4518,10 @@ mod tests {
     #[test]
     fn unreadable_trash_folder_keeps_its_index() {
         let lib = Lib::new("trashdir");
+        // FORMAT 5 keeps the 回收站 in `trash/index.json`; 6 keeps its records in the device files.
+        STAY_5.with(|k| k.set(true));
         let mut s = lib.open();
+        STAY_5.with(|k| k.set(false));
         let a = s.create_from(&doc("一")).unwrap();
         s.delete(&a, None).unwrap();
         // Swap the folder for a file: read_dir fails.
@@ -4014,7 +4529,7 @@ mod tests {
         let index = crate::vfs::read(trash.join("index.json")).unwrap();
         crate::vfs::rename(&trash, lib.0.join(".quiet/trash-away")).unwrap();
         crate::vfs::write(&trash, b"").unwrap();
-        let mut s = Store { file_changes: vec![], root: lib.0.clone(), index: HashMap::new(), foreign: DiskIndex::new(), flat: false, migrated: None, trash: serde_json::from_slice(&index).unwrap(), warnings: vec![], loaded: Default::default(), copied: Default::default(), parsed: HashMap::new(), batch: Default::default(), view: Default::default(), v5: false, me: device(), clock: Default::default(), seen: Default::default(), merged: Default::default(), key: library_key(&lib.0), place_by_hand: true };
+        let mut s = Store { file_changes: vec![], root: lib.0.clone(), index: HashMap::new(), foreign: DiskIndex::new(), flat: false, migrated: None, trash: serde_json::from_slice(&index).unwrap(), warnings: vec![], loaded: Default::default(), copied: Default::default(), parsed: HashMap::new(), batch: Default::default(), view: Default::default(), v5: false, me: device(), clock: Default::default(), seen: Default::default(), merged: Default::default(), key: library_key(&lib.0), place_by_hand: true, v6: false, seen_trash: Default::default(), purging: Default::default() };
         assert_eq!(s.list_trash().len(), 1);
         assert_eq!(s.trash.len(), 1);
     }
@@ -5361,7 +5876,8 @@ mod tests {
             assert!(s.warnings.iter().any(|w| w == &not_downloaded(what)), "{what}: {:?}", s.warnings);
         }
         assert!(s.warnings.iter().all(|w| !w.contains("备份") && !w.contains("损坏")), "{:?}", s.warnings);
-        assert_eq!(Store::format_at(&lib.0), FORMAT, "the layout on disk says 5");
+        // The marker cannot be read: 5, the oldest with device files, until a write reads it.
+        assert_eq!(Store::format_at(&lib.0), 5);
         // This device's changes can't go to its file now: refused, not written over.
         let _ = s.list();
         assert!(s.create_from(&doc("二")).is_err());
