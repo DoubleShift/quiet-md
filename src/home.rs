@@ -778,21 +778,23 @@ impl Workspace {
     pub(crate) fn render_home(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         // Too narrow for the search box: a search icon beside +, in the same style.
         let search = self.header_search(window, cx);
-        let narrow = search.is_none();
+        // A phone searches and creates from the sidebar's drawer.
+        let phone_bar = crate::theme::compact(f32::from(window.viewport_size().width));
+        let narrow = search.is_none() && !phone_bar;
         let header = page_header(self, crate::settings::text("主页"), 26., cx).relative().children(search)
             .when(narrow, |d| d.child(crate::ui::header_icon("home-search", "search").mr(px(4.))
                 .tip(crate::settings::tr("搜索文档", "Search documents"), Some(crate::shortcuts::hint("workspace::FocusSearch", "⌘ + J")))
                 .on_click(cx.listener(|w, _, window, cx| w.open_search(window, cx)))))
             .child(self.place_button("home-more", None, cx))
             .child(self.import_button("home-import", None, cx))
-            .child(
+            .when(!phone_bar, |d| d.child(
             crate::ui::header_icon("home-new", "plus")
                 .child(self.home.track("create-home"))
                 .selected(self.create_menu.as_ref().is_some_and(|(_, pos)| self.home.anchor("create-home").is_some_and(|b| point(b.left(), b.bottom() + px(4.)) == *pos)))
                 .tip(crate::settings::tr("新建", "New"), Some(crate::shortcuts::hint("workspace::NewDoc", "⌘ + N")))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|w, ev: &ClickEvent, _, cx| { let pos = w.home.anchor("create-home").map_or(ev.position(), |b| point(b.left(), b.bottom() + px(4.))); w.create_menu = if w.create_menu.is_some() { None } else { Some((None, pos)) }; cx.notify(); })).into_any_element()
-        );
+        ));
         // Tabs as a segmented control.
         let tab = |id: &'static str, label: &'static str, t: HomeTab| {
             crate::design::Segment::new(id, crate::settings::label(label)).selected(self.home.tab == t)

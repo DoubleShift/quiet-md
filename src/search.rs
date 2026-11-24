@@ -681,7 +681,7 @@ impl Workspace {
                 cx.notify();
             }))));
         let cancel = div().id("search-cancel").flex_none().h(px(36.)).pl(px(12.)).flex().items_center().cursor_pointer()
-            .text_size(px(16.)).text_color(Theme::link()).child(crate::settings::text("取消"))
+            .text_size(px(16.)).text_color(crate::design::color::foreground()).child(crate::settings::text("取消"))
             .on_click(cx.listener(|w, _, window, cx| w.close_search(window, cx)));
         let mut list = div().id("search-results").flex_1().min_h_0().flex().flex_col().overflow_y_scroll().track_scroll(&self.search_scroll).pb(px(if keyboard > 0. { 8. } else { bottom }));
         if q.is_empty() && !results.is_empty() {

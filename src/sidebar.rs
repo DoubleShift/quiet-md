@@ -178,7 +178,20 @@ impl Workspace {
                 )
                 .child(crate::settings::tr("主页", "Home"))
                 .on_click(cx.listener(|w, _, _, cx| w.show_view(View::Home, cx))),
-        );
+        )
+        // A phone's top bar has no 搜索 or +: search starts here, and new documents from 我的文档's +.
+        .when(self.drawer(window), |d| d.child(
+            div().id("nav-search").h(px(ROW_H)).pl(px(6.)).pr(px(4.)).flex().items_center().rounded(px(ROW_R)).cursor_pointer()
+                .text_size(px(theme::ui_font())).line_height(px(20.)).text_color(Theme::sidebar_text()).hover(|s| s.bg(Theme::sidebar_hover()))
+                .child(div().size(px(20.)).flex_none().flex().items_center().justify_center().mr(px(9.)).child(icon("search", ROW_ICON, Theme::icon())))
+                .child(crate::settings::tr("搜索文档", "Search documents"))
+                .on_click(cx.listener(|w, _, window, cx| {
+                    // Opened once the drawer is gone: this tap's release would hand focus back to the note.
+                    w.sidebar_open = false;
+                    cx.notify();
+                    cx.defer_in(window, |w, window, cx| w.open_search(window, cx));
+                })),
+        ));
 
         let mut list = div().flex().flex_col().px(px(SB_X)).pb(px(8.));
         // Pinned docs are shortcuts: they stay in 我的文档 too.

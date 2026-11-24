@@ -1929,7 +1929,7 @@ impl Workspace {
                                 })),
                         )
                     })
-                    .child(
+                    .when(!compact, |d| d.child(
                         seg("doc-search", "search")
                             .tip_label(crate::shortcuts::keys(crate::settings::text("搜索(⌘ + J)")).into(), TipSide::Below)
                             // Opened here, not through the action: with nothing focused (an app just opened on iOS) the action reaches no one.
@@ -1938,7 +1938,7 @@ impl Workspace {
                     .child(
                         // Straight to a new document: no 新建 menu, as 导入 is rare.
                         seg("doc-new", "plus").tip(crate::settings::tr("新建文档", "New document"), None).on_click(cx.listener(|w, _, window, cx| w.new_doc(window, cx))),
-                    ).into_any_element()
+                    )).into_any_element()
             )
     }
 }
