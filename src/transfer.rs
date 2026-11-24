@@ -510,7 +510,7 @@ impl Workspace {
         if !self.save_before(cx, move |w, window, cx| w.import_paths(&again, retry.clone(), open, window, cx)) {
             return;
         }
-        let Some((key, mut writer)) = self.store.tree_writer(parent.as_deref()) else { return self.show_toast_kind(ToastKind::Error, &crate::shared_store::no_root().to_string(), cx) };
+        let Some((key, mut writer)) = self.store.tree_writer(parent.as_deref()) else { return self.show_toast_kind(ToastKind::Error, &crate::shared_store::no_folder().to_string(), cx) };
         let Some(task_guard) = self.store.begin_file_task() else { return };
         let parent = self.store.real_parent(parent.as_deref()).map(str::to_string);
         let paths = paths.to_vec();
@@ -586,8 +586,8 @@ impl Workspace {
         )).with_priority(3).into_any_element())
     }
 
-    /// The 导入 menu's rows, bringing things into `parent` (None: the root in front): that menu, and
-    /// the end of a root's "+" menu in the sidebar.
+    /// The 导入 menu's rows, bringing things into `parent` (None: the top-level folder in front): that menu, and
+    /// the end of a top-level folder's "+" menu in the sidebar.
     pub(crate) fn import_items(&self, parent: Option<String>, cx: &mut Context<Self>) -> Vec<crate::design::MenuItem> {
         let item = |id: &'static str, glyph: &'static str, label: &'static str, kind: ImportKind| {
             let parent = parent.clone();
@@ -671,7 +671,7 @@ impl Workspace {
         // Scanning and writing hundreds of files takes seconds (an fsync each),
         // so it runs on its own store off the window's thread; the library
         // lock keeps it one write, as `tree_writer` does for drags.
-        let Some((key, mut writer)) = self.store.tree_writer(parent.as_deref()) else { return self.show_toast_kind(ToastKind::Error, &crate::shared_store::no_root().to_string(), cx) };
+        let Some((key, mut writer)) = self.store.tree_writer(parent.as_deref()) else { return self.show_toast_kind(ToastKind::Error, &crate::shared_store::no_folder().to_string(), cx) };
         let Some(task_guard) = self.store.begin_file_task() else { return };
         let parent = self.store.real_parent(parent.as_deref()).map(str::to_string);
         let dir = dir.to_path_buf();
@@ -807,7 +807,7 @@ impl Workspace {
 impl Workspace {
     pub(crate) fn check_export_safety(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::model::*;
-        let root = crate::store::Store::root_dir();
+        let root = crate::store::Store::active_dir();
         assert!(std::env::var_os("FDL_SCRIPT").is_some() && std::env::var_os("QUIET_MD_HOME").is_some());
         fdl_core::vfs::create_dir_all(root.join("assets")).unwrap();
         fdl_core::vfs::write(root.join("assets/report.pdf"), b"attachment-content").unwrap();
@@ -1086,7 +1086,7 @@ mod tests {
     fn pictures_copied_in_keep_their_change_time() {
         let (tmp, from, _store) = places("pictures");
         // Never the real library's assets: this library is the one in front.
-        crate::store::Store::set_active_root(&tmp.join("library"));
+        crate::store::Store::set_active_dir(&tmp.join("library"));
         let pic = from.join("photo.png");
         image::RgbImage::new(2, 2).save(&pic).unwrap();
         fdl_core::vfs::set_modified(&pic, THEN).unwrap();

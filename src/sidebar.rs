@@ -197,13 +197,13 @@ impl Workspace {
             }
             list = list.child(div().h(px(GROUP_GAP - SECTION_TOP)));
         }
-        // 工作区: one root shows its contents under 我的文档; several show as rows
+        // 主页: one top-level folder shows its contents under 我的文档; several show as rows
         // of the tree there; none, a way to open one.
-        let roots = self.store.roots();
-        if roots.is_empty() {
-            list = list.child(self.empty_roots(cx));
+        let tops = self.store.top_folders();
+        if tops.is_empty() {
+            list = list.child(self.empty_home(cx));
         } else {
-            // One root or several, the heading is 我的文档 (#421); it never folds.
+            // One top-level folder or several, the heading is 我的文档 (#421); it never folds.
             list = list.child(self.section(1, crate::settings::text("我的文档"), cx));
             list = list.child(self.render_folder_rows(window, cx));
         }
@@ -441,7 +441,7 @@ impl Workspace {
     /// Check or uncheck a 我的文档 row (entering 批量操作 if needed); false
     /// when the 50-page limit blocks it.
     pub(crate) fn toggle_check(&mut self, id: &str) -> bool {
-        if crate::shared_store::root_of_row(id).is_some() { return false; }
+        if crate::shared_store::top_of_row(id).is_some() { return false; }
         let sel = self.batch.get_or_insert_with(Vec::new);
         if let Some(i) = sel.iter().position(|x| x == id) {
             sel.remove(i);
@@ -743,7 +743,7 @@ impl Workspace {
 
     pub(crate) fn render_row_menu(&self, window: &Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let Some(m) = self.row_menu.clone() else { return vec![] };
-        if let Some(key) = crate::shared_store::root_of_row(&m.id).map(str::to_string) { return self.root_row_menu(&key, m, cx); }
+        if let Some(key) = crate::shared_store::top_of_row(&m.id).map(str::to_string) { return self.top_row_menu(&key, m, cx); }
         if !m.batch && self.entries.iter().any(|e| e.id == m.id && e.meta.folder.is_some() && e.note.is_none()) { return self.folder_row_menu(m, cx); }
         if !m.batch && self.entries.iter().any(|e| e.id == m.id && e.meta.local()) { return self.local_row_menu(m, cx); }
         // A document with children (a folder with a 正文, #357): the document's menu, its

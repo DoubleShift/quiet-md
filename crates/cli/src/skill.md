@@ -6,7 +6,7 @@ description: Read, search, edit and organize the user's Quiet.md notes library (
 # quiet: the user's Quiet.md library
 
 Quiet.md keeps notes as plain files in the folders the user opened in it
-(`quiet roots` lists them; `--root NAME` picks one): `.xml` documents, `.md`
+(`quiet ls` lists them; paths start with one: `Quiet.md/工作/周报`): `.xml` documents, `.md`
 notes, `.excalidraw` boards and `.sqlite` 数据表. The user
 edits them in the Quiet.md app; you work on the same files with `quiet`, which
 keeps them valid, rewrites links when a document moves, keeps every replaced
@@ -37,8 +37,8 @@ quiet run script.js                    a JavaScript script against `lib`: one tr
 ```
 
 A document is its path (`工作/周报`, extension optional) or title. New content is
-Markdown; `[[path or title]]` links to another document (this root's first,
-then the other roots'; `[[id]]` when a name is ambiguous). Every write takes
+Markdown; `[[path or title]]` links to another document (this folder's first,
+then the other folders'; `[[id]]` when a name is ambiguous). Every write takes
 `--dry-run`. Use `quiet run` instead of many commands when the steps do not
 need your judgement in between.
 

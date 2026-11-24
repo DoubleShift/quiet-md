@@ -101,6 +101,7 @@ This approach copies the entire document at each history step. A historical benc
 | `model.rs` | Document model, inline object types and `display_title` |
 | `docxml.rs` | DocxXML parsing and serialization, including `to_inline` for inline objects |
 | `store.rs` | Library I/O, index recovery, trash, settings and `image_path` |
+| `home.rs` | `Home`, the one root: the top-level folders on 主页 (`TopFolder`, each its own `Store` and `.quiet/`), this computer's list of them (`folders.json`), nesting checks and ids unique across them. See docs/design/workspaces.md |
 | `paste.rs` | HTML and Markdown to blocks, shared by paste and import |
 | `markdown.rs` | Markdown export |
 | `lang.rs` | Code language table |
@@ -134,6 +135,7 @@ Whiteboard and history modules in core:
 | `main.rs` | Entry point, `FDL_SCRIPT` mode (devtools builds only), `--self-test` and core module re-exports |
 | `guides.rs` | Seeds an empty library with the bundled Getting Started guides once |
 | `app.rs` | `Workspace`, the two-pane window, open/create/save/delete actions, save state and reminder scheduling |
+| `shared_store.rs` | The `Home` the windows share: each call goes to the top-level folder a document is in; with two or more, each folder shows as a row of the sidebar tree (`top_row`) |
 | `html.rs` / `printing.rs` / `transfer.rs` | HTML/PDF export, printing and import/export UI |
 | `clipboard.rs` | System clipboard HTML and the simulated clipboard in script mode |
 | `sidebar.rs` / `tree.rs` | Sidebar and document tree, including child pages (a folder's own document, see FORMAT.md and core's `subdocs.rs`) and Move to |

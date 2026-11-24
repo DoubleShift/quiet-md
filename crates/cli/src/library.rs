@@ -62,15 +62,14 @@ impl Session {
         Ok(json!({ "path": d.path, "restore": v.name, "time": date_ms(v.ms) }))
     }
 
-    /// Every root's 回收站 (each root keeps its own), as (root key, entry).
+    /// Every top-level folder's 回收站 (each top-level folder keeps its own), as (top-level folder key, entry).
     fn all_trash(&mut self) -> Vec<(String, fdl_core::store::TrashEntry)> {
-        let only = self.only.clone();
-        self.ws.roots.iter_mut().filter(|r| only.as_ref().is_none_or(|k| k == &r.key)).filter_map(|r| Some((r.key.clone(), r.store.as_mut()?)))
+        self.ws.folders.iter_mut().filter_map(|r| Some((r.key.clone(), r.store.as_mut()?)))
             .flat_map(|(k, s)| s.list_trash().into_iter().map(move |t| (k.clone(), t))).collect()
     }
 
     pub(crate) fn trash_list(&mut self) -> R<Value> {
-        let list: Vec<Value> = self.all_trash().iter().map(|(k, t)| json!({ "id": t.id, "title": t.title, "root": self.root_name(k), "deleted": date_ms(t.deleted * 1000) })).collect();
+        let list: Vec<Value> = self.all_trash().iter().map(|(k, t)| json!({ "id": t.id, "title": t.title, "folder": self.top_name(k), "deleted": date_ms(t.deleted * 1000) })).collect();
         Ok(json!({ "days": fdl_core::store::TRASH_DAYS, "items": list }))
     }
 
@@ -81,10 +80,10 @@ impl Session {
         let hits: Vec<_> = list.iter().filter(|(_, t)| t.id == spec || t.title == spec).collect();
         let hits = if hits.is_empty() { list.iter().filter(|(_, t)| t.title.to_lowercase().contains(&spec.to_lowercase())).collect() } else { hits };
         match hits.as_slice() {
-            // Back into the root whose 回收站 it is in.
-            [(k, t)] => { self.pending.push(Pending::Untrash { root: k.clone(), id: t.id.clone(), title: t.title.clone() }); Ok(json!({ "title": t.title, "root": self.root_name(k), "untrash": true })) }
+            // Back into the top-level folder whose 回收站 it is in.
+            [(k, t)] => { self.pending.push(Pending::Untrash { top: k.clone(), id: t.id.clone(), title: t.title.clone() }); Ok(json!({ "title": t.title, "folder": self.top_name(k), "untrash": true })) }
             [] => Err(fail("not_found", format!("nothing called {spec:?} in the trash")).hint("`quiet trash` lists it")),
-            many => Err(fail("ambiguous", format!("{} items match {spec:?}: {}", many.len(), many.iter().map(|(k, t)| if self.multi() { format!("{} ({}, in {})", t.title, t.id, self.root_name(k)) } else { format!("{} ({})", t.title, t.id) }).collect::<Vec<_>>().join(", "))).hint("pass the id")),
+            many => Err(fail("ambiguous", format!("{} items match {spec:?}: {}", many.len(), many.iter().map(|(k, t)| format!("{} ({}, in {})", t.title, t.id, self.top_name(k))).collect::<Vec<_>>().join(", "))).hint("pass the id")),
         }
     }
 
@@ -94,11 +93,11 @@ impl Session {
         let path = PathBuf::from(need(a, "path")?);
         if !path.is_file() { return Err(fail("not_found", format!("no file {}", path.display()))); }
         kind_of_file(&path)?;
-        let (root, folder) = self.landing(arg(a, "folder"))?;
+        let (top, folder) = self.landing(arg(a, "folder"))?;
         let to = self.folder_rel(folder.as_deref());
-        let name = self.root_name(&root);
-        self.pending.push(Pending::Import { root, path: path.clone(), folder: Some(to.clone()).filter(|t| !t.is_empty()) });
-        Ok(json!({ "path": path.display().to_string(), "import": true, "root": name, "to": if to.is_empty() { "/".to_string() } else { to } }))
+        let shown = self.home_path(&top, &to);
+        self.pending.push(Pending::Import { top, path: path.clone(), folder: Some(to).filter(|t| !t.is_empty()) });
+        Ok(json!({ "path": path.display().to_string(), "import": true, "to": shown }))
     }
 }
 
@@ -117,7 +116,7 @@ fn kind_of_file(p: &Path) -> R<FileKind> {
 
 /// `path` as a new document in folder `parent` (as the app's 导入): Markdown
 /// stays Markdown with its pictures copied in, CSV becomes a 数据表.
-pub(crate) fn import_file(store: &mut Store, root: &Path, path: &Path, parent: Option<&str>) -> R<String> {
+pub(crate) fn import_file(store: &mut Store, top: &Path, path: &Path, parent: Option<&str>) -> R<String> {
     let bytes = fdl_core::store::read_bounded(path, IMPORT_LIMIT)?;
     let text = String::from_utf8_lossy(&bytes);
     let text = text.trim_start_matches('\u{feff}');
@@ -127,12 +126,12 @@ pub(crate) fn import_file(store: &mut Store, root: &Path, path: &Path, parent: O
             let mut doc = fdl_core::markdown::parse_file(text, &stem, path.parent());
             if let Some(dir) = path.parent() { fdl_core::markdown::wiki_images(&mut doc.blocks, dir, None); }
             // Its pictures copied in, as the app's 导入 does.
-            let assets = Store::assets_in(root);
+            let assets = Store::assets_in(top);
             let mut n = 0;
             let mut failed = None;
             crate::blocks::each_block(&mut doc.blocks, &mut |b| {
                 let fdl_core::model::BlockKind::Image { src, .. } = &mut b.kind else { return };
-                let Some((from, to)) = picture_copy(root, &assets, src, n) else { return };
+                let Some((from, to)) = picture_copy(top, &assets, src, n) else { return };
                 n += 1;
                 match to.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::copy(&from, &to)) {
                     Ok(_) => *src = to.to_string_lossy().into_owned(),
@@ -160,9 +159,9 @@ pub(crate) fn import_file(store: &mut Store, root: &Path, path: &Path, parent: O
 /// A picture a block shows from outside the library (`src` an absolute path
 /// or `file://` URL to an image that exists), and where its copy goes in
 /// `assets`: `<8 hex>-<name>.<ext>`, as the app names them. `n` tells copies apart.
-pub(crate) fn picture_copy(root: &Path, assets: &Path, src: &str, n: usize) -> Option<(PathBuf, PathBuf)> {
+pub(crate) fn picture_copy(top: &Path, assets: &Path, src: &str, n: usize) -> Option<(PathBuf, PathBuf)> {
     let from = PathBuf::from(fdl_core::markdown::percent_decode(src.strip_prefix("file://").unwrap_or(src)));
-    if !from.is_absolute() || from.starts_with(root) { return None; }
+    if !from.is_absolute() || from.starts_with(top) { return None; }
     let ext = from.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     if !["jpeg", "jpg", "png", "gif", "webp", "bmp"].contains(&ext.as_str()) || !from.is_file() { return None; }
     if from.metadata().map(|m| m.len()).unwrap_or(0) > IMPORT_LIMIT { return None; }

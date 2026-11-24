@@ -710,7 +710,7 @@ fn span_color(spec: &TextSpec, m: &Marks) -> Hsla {
     if m.strike && !crate::settings::feishu() { c.opacity(c.a * 0.65) } else { c }
 }
 
-use crate::editor_ui::{CJK_PUNCT_FONT, is_cjk_punct};
+use crate::editor_ui::{cjk_punct_font, is_cjk_punct};
 
 /// A family the platform has: a missing one resolves to GPUI's last-resort
 /// face in its regular style, so quotes in bold or italic text lost theirs (#419).
@@ -748,6 +748,31 @@ fn is_quote(ch: char) -> bool {
     matches!(ch, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
 }
 
+/// #419: the curly quotes that belong to Chinese text, by byte offset: those
+/// right next to a Han character or Chinese punctuation, and the other one of
+/// their pair (`用“Quiet.md”打开`: both). They take the Chinese face, the rest
+/// stay Latin. A quote with no pair (an apostrophe) goes by its own neighbours.
+fn cjk_quotes(text: &str) -> Vec<usize> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let chinese = |j: Option<usize>| j.and_then(|j| chars.get(j)).is_some_and(|&(_, ch)| is_cjk(ch) || is_cjk_punct(ch));
+    let mut on: Vec<bool> = (0..chars.len()).map(|i| is_quote(chars[i].1) && (chinese(i.checked_sub(1)) || chinese(Some(i + 1)))).collect();
+    let (mut double, mut single) = (vec![], vec![]);
+    for (i, &(_, ch)) in chars.iter().enumerate() {
+        let open = match ch {
+            '\u{201C}' => { double.push(i); continue }
+            '\u{2018}' => { single.push(i); continue }
+            '\u{201D}' => double.pop(),
+            '\u{2019}' => single.pop(),
+            _ => continue,
+        };
+        if let Some(o) = open {
+            let both = on[o] || on[i];
+            (on[o], on[i]) = (both, both);
+        }
+    }
+    chars.iter().zip(on).filter(|(_, on)| *on).map(|(&(at, _), _)| at).collect()
+}
+
 pub fn build_runs(
     text: &RichText,
     spec: &TextSpec,
@@ -755,6 +780,7 @@ pub fn build_runs(
     highlight: Option<&Vec<crate::highlight::Span>>,
 ) -> Vec<TextRun> {
     let mut runs = vec![];
+    let chinese_quotes = if text.text.chars().any(is_quote) { cjk_quotes(&text.text) } else { vec![] };
     for (range, m) in text.spans() {
         // Split by the marked (IME) range and syntax highlight boundaries.
         let mut cuts = vec![range.start, range.end];
@@ -769,7 +795,8 @@ pub fn build_runs(
             }
         }
         // Curly quotes render in a Latin-width face (QUOTE_FONT) rather
-        // than the body face's full-width ones.
+        // than the body face's full-width ones, but in Chinese text in the
+        // Chinese one (`cjk_quotes`).
         for (i, ch) in text.text[range.clone()].char_indices() {
             if is_quote(ch) || is_cjk_punct(ch) {
                 cuts.push(range.start + i);
@@ -807,9 +834,17 @@ pub fn build_runs(
                 // A family the reader picked keeps the ones it draws itself.
                 let own = crate::fonts::own_glyphs(&font.family);
                 if text.text[a..b].chars().all(is_quote) {
-                    if !own.quotes { font.family = QUOTE_FONT.into(); }
-                } else if !own.cjk_punct && text.text[a..b].chars().all(is_cjk_punct) {
-                    font.family = CJK_PUNCT_FONT.into();
+                    // Cut one by one, so `a` is the quote.
+                    // In Chinese text the Chinese face's; without one (not
+                    // installed here), as in Latin text.
+                    match (chinese_quotes.binary_search(&a).is_ok(), own.cjk_punct, cjk_punct_font()) {
+                        (true, true, _) => {}
+                        (true, false, Some(f)) => font.family = f.into(),
+                        _ if !own.quotes => font.family = QUOTE_FONT.into(),
+                        _ => {}
+                    }
+                } else if !own.cjk_punct && text.text[a..b].chars().all(is_cjk_punct) && let Some(f) = cjk_punct_font() {
+                    font.family = f.into();
                 }
             }
             if hl_italic {
@@ -1611,6 +1646,43 @@ mod wrap_tests {
         assert_eq!(breaks("你好世界"), [1, 2, 3]);
         assert_eq!(breaks("中文。한국어"), [1, 3], "Chinese still breaks, but not before closing punctuation");
         assert_eq!(breaks("Hello world"), [6]);
+    }
+}
+
+#[cfg(test)]
+mod quote_tests {
+    use super::cjk_quotes;
+
+    /// The quotes `cjk_quotes` gives the Chinese face, as the text with those
+    /// marked `^` (the others `.`): everything else drops out.
+    fn marks(text: &str) -> String {
+        let on = cjk_quotes(text);
+        text.char_indices().filter(|(_, ch)| super::is_quote(*ch)).map(|(at, _)| if on.contains(&at) { '^' } else { '.' }).collect()
+    }
+
+    #[test]
+    fn quotes_in_chinese_text_take_the_chinese_face() {
+        // Next to a Han character, on either side, or Chinese punctuation.
+        assert_eq!(marks("他说“好”。"), "^^");
+        assert_eq!(marks("说：“Hello world”"), "^^", "a pair goes together: the closing one has only Latin around it");
+        assert_eq!(marks("用“Quiet.md”打开"), "^^", "English inside, Chinese outside");
+        assert_eq!(marks("“好”"), "^^", "the start and end of a paragraph");
+        assert_eq!(marks("“Hello”你好"), "^^", "one side is enough");
+        // Nested: each pair by its own neighbours.
+        assert_eq!(marks("他说：“她说‘好’。”"), "^^^^");
+        assert_eq!(marks("他说：“‘Hi’ there”"), "^..^", "the inner pair has only quotes and Latin around it");
+        // Latin on both sides stays Latin.
+        assert_eq!(marks("He said “hello” to ‘me’."), "....");
+        assert_eq!(marks("“Hello”"), "..");
+        assert_eq!(marks("中文 “Hello” 中文"), "..", "a space between is not next to");
+        // An apostrophe has no pair: its own neighbours decide.
+        assert_eq!(marks("it’s 中文"), ".");
+        assert_eq!(marks("中’s"), "^");
+        assert_eq!(marks("‘it’s’ 好"), "...", "the apostrophe closes the pair; the last one is alone");
+        // Unpaired openings and closings.
+        assert_eq!(marks("“好"), "^");
+        assert_eq!(marks("Hi” 好”"), ".^", "unpaired closings go by their own neighbours");
+        assert_eq!(marks("plain text"), "");
     }
 }
 

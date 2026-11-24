@@ -86,7 +86,7 @@ fn table_srcs(blocks: &[crate::model::Block], out: &mut Vec<String>) {
 fn tables_time(srcs: &[String]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = rustc_hash::FxHasher::default();
-    let root = crate::store::Store::root_dir();
+    let root = crate::store::Store::active_dir();
     for s in srcs { std::fs::metadata(root.join(s)).and_then(|m| m.modified()).ok().hash(&mut h); }
     h.finish()
 }
@@ -133,7 +133,7 @@ fn thumb_blocks(blocks: &[crate::model::Block], budget: &mut usize, depth: usize
             BlockKind::Raw { tag, .. } => BlockKind::Raw { tag: tag.clone(), xml: String::new() },
             // a 数据表 (a table file's card, or one in a page): its first rows and columns as a table, header first
             BlockKind::DataTable(r) => {
-                let grid = fdl_core::table::block_grid(&crate::store::Store::root_dir(), r);
+                let grid = fdl_core::table::block_grid(&crate::store::Store::active_dir(), r);
                 let (nr, nc) = (grid.len().min(9), grid.first().map_or(0, |h| h.len().min(5)));
                 if nr == 0 || nc == 0 { BlockKind::Table(crate::model::Table { col_widths: vec![], header_rows: 0, header_col: false, rows: vec![] }) } else {
                     let cell = |s: &str| crate::model::TableCell { blocks: vec![crate::model::Block::text(s)], ..crate::model::TableCell::empty() };
@@ -483,8 +483,8 @@ pub(crate) struct Order {
 
 impl Order {
     pub(crate) fn cmp(&self, a: &Entry, b: &Entry) -> std::cmp::Ordering {
-        // 多个根: their rows keep roots.json's order; only what is in a root is sorted.
-        let row = |e: &Entry| crate::shared_store::root_of_row(&e.id).is_some();
+        // 多个顶层文件夹: their rows keep folders.json's order; only what is in a top-level folder is sorted.
+        let row = |e: &Entry| crate::shared_store::top_of_row(&e.id).is_some();
         if row(a) || row(b) {
             return row(b).cmp(&row(a)).then_with(|| (a.meta.place(), &a.id).cmp(&(b.meta.place(), &b.id)));
         }
@@ -788,7 +788,7 @@ impl Workspace {
             .child(self.place_button("home-more", None, cx))
             .child(self.import_button("home-import", None, cx))
             .when(!phone_bar, |d| d.child(
-            // 主页 makes no documents (which root they would land in isn't shown here): its one
+            // 主页 makes no documents (which top-level folder they would land in isn't shown here): its one
             // creation control adds a folder beside the others, as 添加文件夹 under 主页 does.
             crate::ui::header_icon("home-new", "folder-plus")
                 .tip(crate::settings::tr("添加文件夹", "Add a folder"), Some(crate::shortcuts::hint("workspace::OpenFolder", "⌘ + Shift + O")))
@@ -877,8 +877,8 @@ impl Workspace {
             .child(self.view_switch(cx).ml(px(16.))
             ) };
 
-        // No root folder open (2.8): nothing to list or sort, a way to open one.
-        if self.store.roots().is_empty() {
+        // No top-level folder open (2.8): nothing to list or sort, a way to open one.
+        if self.store.top_folders().is_empty() {
             return div().flex_1().min_w_0().h_full().flex().flex_col().child(header).child(self.empty_main(cx)).into_any_element();
         }
         let entries = self.home_entries();
@@ -1184,7 +1184,7 @@ mod sort_tests {
                 created,
                 order,
                 // A page inside a folder: its hand order is `order`, not
-                // `root_order` (which is only for the top level).
+                // `top_order` (which is only for the top level).
                 parent: Some("p".into()),
                 folder: folder.then(|| format!("{id}-dir")),
                 ..Default::default()
@@ -1195,7 +1195,7 @@ mod sort_tests {
             reminders: vec![],
             links: vec![],
             note: None,
-            root: String::new(),
+            top: String::new(),
         }
     }
 
@@ -1259,18 +1259,18 @@ mod sort_tests {
     }
 
     #[test]
-    fn root_rows_keep_their_order() {
-        // 多个根: the rows stay in roots.json's order (`root_order`) whatever the sort.
+    fn top_rows_keep_their_order() {
+        // 多个顶层文件夹: the rows stay in folders.json's order (`top_order`) whatever the sort.
         let row = |key: &str, title: &str, at: u64| {
-            let mut e = page(&crate::shared_store::root_row(key), title, 0, 0, 0, true);
-            (e.meta.parent, e.meta.root_order) = (None, Some(at));
+            let mut e = page(&crate::shared_store::top_row(key), title, 0, 0, 0, true);
+            (e.meta.parent, e.meta.top_order) = (None, Some(at));
             e
         };
         let mut v = vec![row("b", "Alpha", 2), row("a", "Zulu", 1), page("x", "Middle", 5, 5, 0, false)];
         for field in [HomeSort::Title, HomeSort::Modified, HomeSort::Manual] {
             for dir in [SortDir::Asc, SortDir::Desc] {
                 sort_entries(&mut v, Order { field, dir, folders_first: false });
-                assert_eq!(ids(&v), ["root:a", "root:b", "x"]);
+                assert_eq!(ids(&v), ["top:a", "top:b", "x"]);
             }
         }
     }

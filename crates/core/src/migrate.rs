@@ -325,7 +325,7 @@ pub(super) fn pages_to_folders(index: &mut HashMap<String, Meta>, has_file: impl
         let mut kids: Vec<String> = index.iter().filter(|(_, m)| m.parent.as_ref() == Some(folder)).map(|(k, _)| k.clone()).collect();
         let old = |k: &String| { let m = &index[k]; (k != doc, if m.order > 0 { m.order } else { m.created * 1000 }, k.clone()) };
         kids.sort_by_key(old);
-        for (i, k) in kids.iter().enumerate() { if let Some(m) = index.get_mut(k) { m.order = i as u64 + 1; m.root_order = None; } }
+        for (i, k) in kids.iter().enumerate() { if let Some(m) = index.get_mut(k) { m.order = i as u64 + 1; m.top_order = None; } }
     }
 }
 

@@ -529,16 +529,16 @@ fn finished_days_are_sent_and_forgotten() {
     assert!(left["days"].get("2020-01-01").is_none() && left["days"].get("2999-01-01").is_some());
 }
 
-/// Two roots, as the app keeps them: folders `Work` and `Home` and a
-/// `roots.json` of their own (`QUIET_MD_ROOTS`, so this computer's list is untouched).
-fn two_roots(work: &[(&str, &str)], home: &[(&str, &str)]) -> (PathBuf, PathBuf, PathBuf) {
-    let (mut dirs, file) = roots(&[("Work", work), ("Home", home)]);
+/// Two top-level folders, as the app keeps them: folders `Work` and `Home` and a
+/// `folders.json` of their own (`QUIET_MD_FOLDERS`, so this computer's list is untouched).
+fn two_folders(work: &[(&str, &str)], home: &[(&str, &str)]) -> (PathBuf, PathBuf, PathBuf) {
+    let (mut dirs, file) = top_folders(&[("Work", work), ("Home", home)]);
     (dirs.remove(0), dirs.remove(0), file)
 }
 
-/// Roots named and filled as given, in that order, and their `roots.json`.
-fn roots(list: &[(&str, &[(&str, &str)])]) -> (Vec<PathBuf>, PathBuf) {
-    let base = library(&[]).with_extension("roots");
+/// Top-level folders named and filled as given, in that order, and their `folders.json`.
+fn top_folders(list: &[(&str, &[(&str, &str)])]) -> (Vec<PathBuf>, PathBuf) {
+    let base = library(&[]).with_extension("folders");
     let _ = std::fs::remove_dir_all(&base);
     let mut dirs = vec![];
     for (name, docs) in list {
@@ -550,172 +550,188 @@ fn roots(list: &[(&str, &[(&str, &str)])]) -> (Vec<PathBuf>, PathBuf) {
         }
         dirs.push(dir);
     }
-    let roots = serde_json::json!({ "v": 1, "roots": dirs.iter().enumerate().map(|(i, d)| serde_json::json!({ "key": format!("k{i}"), "path": d })).collect::<Vec<_>>() });
-    let file = base.join("roots.json");
-    std::fs::write(&file, roots.to_string()).unwrap();
+    let list = serde_json::json!({ "v": 1, "folders": dirs.iter().enumerate().map(|(i, d)| serde_json::json!({ "key": format!("k{i}"), "path": d })).collect::<Vec<_>>() });
+    let file = base.join("folders.json");
+    std::fs::write(&file, list.to_string()).unwrap();
     (dirs, file)
 }
 
-/// `quiet` on the roots in `file`, as it runs beside the app (no --library).
-fn roots_run(file: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_quiet")).env("QUIET_NO_TELEMETRY", "1").env_remove("QUIET_MD_HOME").env("QUIET_MD_ROOTS", file).args(args).output().unwrap()
+/// `quiet` on the top-level folders in `file`, as it runs beside the app (no --library).
+fn folders_run(file: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_quiet")).env("QUIET_NO_TELEMETRY", "1").env_remove("QUIET_MD_HOME").env("QUIET_MD_FOLDERS", file).args(args).output().unwrap()
 }
 
-fn roots_ok(file: &Path, args: &[&str]) -> String {
-    let o = roots_run(file, args);
+fn folders_ok(file: &Path, args: &[&str]) -> String {
+    let o = folders_run(file, args);
     assert!(o.status.success(), "quiet {args:?} failed: {}", String::from_utf8_lossy(&o.stderr));
     String::from_utf8(o.stdout).unwrap()
 }
 
-fn roots_json(file: &Path, args: &[&str]) -> serde_json::Value {
+fn folders_json(file: &Path, args: &[&str]) -> serde_json::Value {
     let mut a = vec!["--json"];
     a.extend_from_slice(args);
-    serde_json::from_str(&roots_ok(file, &a)).unwrap()
+    serde_json::from_str(&folders_ok(file, &a)).unwrap()
 }
 
 #[test]
-fn sees_every_root_the_app_has_open() {
-    let (work, home, file) = two_roots(&[("Plan", PLAN), ("Budget", "Rent and food.")], &[("Plan", "# Garden\nPlant the tomatoes."), ("Recipes", "Bread: flour, water, salt.")]);
-    // Every root's documents, each saying its root; text names it with two roots.
-    let all = roots_json(&file, &["ls"]);
-    let mut seen: Vec<(String, String)> = all.as_array().unwrap().iter().map(|e| (e["root"].as_str().unwrap().into(), e["path"].as_str().unwrap().into())).collect();
-    seen.sort();
-    assert_eq!(seen, [("Home".into(), "Plan.xml".into()), ("Home".into(), "Recipes.xml".into()), ("Work".into(), "Budget.xml".into()), ("Work".into(), "Plan.xml".into())]);
-    let text = roots_ok(&file, &["ls"]);
-    assert!(text.contains("Work: Budget.xml") && text.contains("Home: Recipes.xml"), "{text}");
-    let found = roots_json(&file, &["find", "flour"]);
-    assert_eq!((found["total"].as_u64(), found["results"][0]["root"].as_str()), (Some(1), Some("Home")));
-    assert!(roots_ok(&file, &["find", "rent"]).contains("Work: Budget.xml"));
-    // The same title in both: which one is for --root (any case) to say.
-    let o = roots_run(&file, &["read", "Plan"]);
+fn paths_start_at_home() {
+    let (work, home, file) = two_folders(&[("Plan", PLAN), ("Budget", "Rent and food.")], &[("Plan", "# Garden\nPlant the tomatoes."), ("Recipes", "Bread: flour, water, salt.")]);
+    // `ls` on 主页: the top-level folders; their paths are where every path starts.
+    let tops = folders_json(&file, &["ls"]);
+    let names: Vec<&str> = tops.as_array().unwrap().iter().map(|e| e["path"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Work", "Home"]);
+    assert!(tops.as_array().unwrap().iter().all(|e| e["top"] == true && e["documents"] == 2));
+    let all = folders_json(&file, &["ls", "-r"]);
+    let docs: Vec<&str> = all.as_array().unwrap().iter().filter(|e| e["kind"] != "folder").map(|e| e["path"].as_str().unwrap()).collect();
+    assert_eq!(docs, ["Home/Plan.xml", "Home/Recipes.xml", "Work/Budget.xml", "Work/Plan.xml"]);
+    assert!(folders_ok(&file, &["ls", "Work"]).contains("Work/Budget.xml"));
+    let found = folders_json(&file, &["find", "flour"]);
+    assert_eq!((found["total"].as_u64(), found["results"][0]["path"].as_str()), (Some(1), Some("Home/Recipes.xml")));
+    // The same title in both: ambiguous, each by its path from 主页; the path says which.
+    let o = folders_run(&file, &["read", "Plan"]);
     assert_eq!(o.status.code(), Some(3));
     let err = String::from_utf8_lossy(&o.stderr);
-    assert!(err.contains("error[ambiguous]") && err.contains("Plan.xml (in Work)") && err.contains("Plan.xml (in Home)") && err.contains("--root"), "{err}");
-    assert!(roots_ok(&file, &["--root", "home", "read", "Plan"]).contains("Plant the tomatoes"));
-    assert!(roots_ok(&file, &["read", "Plan", "--root", "Work"]).contains("Ship the CLI"));
-    assert!(roots_ok(&file, &["--root", work.to_str().unwrap(), "read", "Plan"]).contains("Ship the CLI"), "a root by its path");
-    // By id, in whichever root it is; edits land in that root's file.
-    let id = all.as_array().unwrap().iter().find(|e| e["root"] == "Home" && e["path"] == "Plan.xml").unwrap()["id"].as_str().unwrap().to_string();
-    roots_ok(&file, &["insert", &id, "--md", "Water daily."]);
+    assert!(err.contains("error[ambiguous]") && err.contains("Work/Plan.xml") && err.contains("Home/Plan.xml") && err.contains("主页"), "{err}");
+    assert!(folders_ok(&file, &["read", "home/Plan"]).contains("Plant the tomatoes"), "the folder's name in any case");
+    assert!(folders_ok(&file, &["read", "Work/Plan.xml"]).contains("Ship the CLI"));
+    assert!(folders_ok(&file, &["read", work.join("Plan.xml").to_str().unwrap()]).contains("Ship the CLI"), "a path on disk");
+    assert!(folders_ok(&file, &["read", "Budget"]).contains("Rent"), "a title only one document has needs no folder");
+    // By id, in whichever top-level folder it is; edits land in that folder's file.
+    let id = all.as_array().unwrap().iter().find(|e| e["path"] == "Home/Plan.xml").unwrap()["id"].as_str().unwrap().to_string();
+    folders_ok(&file, &["insert", &id, "--md", "Water daily."]);
     assert!(std::fs::read_to_string(home.join("Plan.xml")).unwrap().contains("Water daily."));
     assert!(!std::fs::read_to_string(work.join("Plan.xml")).unwrap().contains("Water daily."));
-    // --root narrows everything; a name no root has is no_root, with the roots listed.
-    let only = roots_json(&file, &["--root", "Work", "ls"]);
-    assert!(only.as_array().unwrap().iter().all(|e| e["root"] == "Work") && only.as_array().unwrap().len() == 2);
-    assert!(!roots_ok(&file, &["--root", "Work", "ls"]).contains("Work: "), "one root: no root names");
-    let o = roots_run(&file, &["--root", "Attic", "ls"]);
-    let err = String::from_utf8_lossy(&o.stderr);
-    assert!(err.contains("error[no_root]") && err.contains("Work, Home"), "{err}");
-    // --library: that folder alone.
-    let lib = ok(&home, &["ls"]);
-    assert!(lib.contains("Recipes.xml") && !lib.contains("Budget") && !lib.contains("Home: "), "{lib}");
-}
-
-#[test]
-fn new_documents_land_in_one_root() {
-    let (work, home, file) = two_roots(&[("Plan", PLAN)], &[("Recipes", "Bread.")]);
-    // Nothing said: the first root, and the output says so.
-    let out = roots_ok(&file, &["new", "Inbox", "--md", "first"]);
-    assert!(out.contains("created Inbox.xml (in Work)"), "{out}");
-    assert!(work.join("Inbox.xml").is_file() && !home.join("Inbox.xml").exists());
-    assert!(roots_ok(&file, &["--root", "Home", "new", "Shopping"]).contains("created Shopping.xml"));
-    assert!(home.join("Shopping.xml").is_file());
-    // Into a folder: that folder's root.
-    roots_ok(&file, &["--root", "Home", "mkdir", "Kitchen"]);
-    let out = roots_ok(&file, &["new", "Soup", "--in", "Kitchen"]);
-    assert!(out.contains("(in Home)") && home.join("Kitchen/Soup.xml").is_file(), "{out}");
-    // --in a folder of Home with --root Work: the two disagree, so neither wins.
-    let o = roots_run(&file, &["--root", "Work", "new", "Stew", "--in", "Kitchen"]);
-    let err = String::from_utf8_lossy(&o.stderr);
-    assert!(err.contains("error[root_conflict]") && err.contains("is in Home") && err.contains("--root says Work"), "{err}");
-    assert_eq!(o.status.code(), Some(2));
-    assert!(!home.join("Kitchen/Stew.xml").exists() && !work.join("Stew.xml").exists());
-    // A folder that is in no root stays not_found.
-    let o = roots_run(&file, &["--root", "Work", "new", "Stew", "--in", "Cellar"]);
+    // A folder of 主页 lists what is in it; a name no folder has is not_found.
+    let only = folders_json(&file, &["ls", "Work"]);
+    assert!(only.as_array().unwrap().iter().all(|e| e["path"].as_str().unwrap().starts_with("Work/")) && only.as_array().unwrap().len() == 2);
+    let o = folders_run(&file, &["ls", "Attic"]);
     assert!(String::from_utf8_lossy(&o.stderr).contains("error[not_found]"));
-    let made = roots_json(&file, &["new", "Notes", "--dry-run"]);
-    assert_eq!(made["root"], "Work");
-    // No moving between roots yet; within one, as before.
-    let o = roots_run(&file, &["mv", "Plan", "Kitchen"]);
-    assert!(String::from_utf8_lossy(&o.stderr).contains("error[cross_root]"), "{}", String::from_utf8_lossy(&o.stderr));
+    // --library: that folder on its own, paths starting in it.
+    let lib = ok(&home, &["ls"]);
+    assert!(lib.contains("Recipes.xml") && !lib.contains("Home/") && !lib.contains("Budget"), "{lib}");
+}
+
+#[test]
+fn two_folders_of_one_name_are_told_apart_by_key() {
+    let base = library(&[]).with_extension("twins");
+    let _ = std::fs::remove_dir_all(&base);
+    let (a, b) = (base.join("one/笔记"), base.join("two/笔记"));
+    for (dir, title) in [(&a, "甲"), (&b, "乙")] {
+        let mut store = Store::open_at(dir.clone()).unwrap();
+        store.create_from(&Document { title: RichText::plain(title), ..Default::default() }).unwrap();
+    }
+    let file = base.join("folders.json");
+    std::fs::write(&file, serde_json::json!({ "v": 1, "folders": [{ "key": "ka", "path": a }, { "key": "kb", "path": b }] }).to_string()).unwrap();
+    let o = folders_run(&file, &["ls", "笔记"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("error[ambiguous]") && err.contains(a.to_str().unwrap()) && err.contains("key kb"), "{err}");
+    assert!(folders_ok(&file, &["ls", "kb"]).contains("笔记/乙.xml"));
+    assert_eq!(folders_json(&file, &["read", "ka/甲"])["title"], "甲");
+}
+
+#[test]
+fn new_documents_land_in_one_folder() {
+    let (work, home, file) = two_folders(&[("Plan", PLAN)], &[("Recipes", "Bread.")]);
+    // Nothing said: the first top-level folder, and the path says so.
+    let out = folders_ok(&file, &["new", "Inbox", "--md", "first"]);
+    assert!(out.contains("created Work/Inbox.xml"), "{out}");
+    assert!(work.join("Inbox.xml").is_file() && !home.join("Inbox.xml").exists());
+    assert!(folders_ok(&file, &["new", "Shopping", "--in", "Home"]).contains("created Home/Shopping.xml"));
+    assert!(home.join("Shopping.xml").is_file());
+    // Into a folder: by its path from 主页, or by a name only one folder has.
+    folders_ok(&file, &["mkdir", "Kitchen", "--in", "Home"]);
+    let out = folders_ok(&file, &["new", "Soup", "--in", "Home/Kitchen"]);
+    assert!(out.contains("Home/Kitchen/Soup.xml") && home.join("Kitchen/Soup.xml").is_file(), "{out}");
+    assert!(folders_ok(&file, &["new", "Stew", "--in", "Kitchen"]).contains("Home/Kitchen/Stew.xml"));
+    // A folder that is not there is not_found, whichever top-level folder is named.
+    let o = folders_run(&file, &["new", "Pie", "--in", "Work/Kitchen"]);
+    assert!(String::from_utf8_lossy(&o.stderr).contains("error[not_found]"));
+    assert!(!work.join("Kitchen").exists());
+    let made = folders_json(&file, &["new", "Notes", "--dry-run"]);
+    assert_eq!(made["path"], "Work/Notes.xml");
+    // No moving between top-level folders yet; nor onto 主页 itself.
+    let o = folders_run(&file, &["mv", "Work/Plan", "Home/Kitchen"]);
+    assert!(String::from_utf8_lossy(&o.stderr).contains("error[cross_folder]"), "{}", String::from_utf8_lossy(&o.stderr));
+    let o = folders_run(&file, &["mv", "Work/Plan", "/"]);
+    assert!(String::from_utf8_lossy(&o.stderr).contains("error[bad_args]"));
     assert!(work.join("Plan.xml").is_file());
-    // Each root's own 回收站: trashed in Home, back in Home.
-    roots_ok(&file, &["rm", "Shopping"]);
-    let trash = roots_json(&file, &["trash"]);
-    assert_eq!(trash["items"][0]["root"], "Home");
-    roots_ok(&file, &["untrash", "Shopping"]);
+    // Each top-level folder's own 回收站: trashed in Home, back in Home.
+    folders_ok(&file, &["rm", "Home/Shopping"]);
+    let trash = folders_json(&file, &["trash"]);
+    assert_eq!(trash["items"][0]["folder"], "Home");
+    folders_ok(&file, &["untrash", "Shopping"]);
     assert!(home.join("Shopping.xml").is_file());
 }
 
 #[test]
-fn a_missing_root_is_listed_and_the_rest_work() {
-    let (work, home, file) = two_roots(&[("Plan", PLAN)], &[("Recipes", "Bread.")]);
+fn a_missing_folder_is_listed_and_the_rest_work() {
+    let (work, home, file) = two_folders(&[("Plan", PLAN)], &[("Recipes", "Bread.")]);
     std::fs::remove_dir_all(&work).unwrap();
-    let roots = roots_json(&file, &["roots"]);
-    let list = roots.as_array().unwrap();
+    let list_json = folders_json(&file, &["ls"]);
+    let list = list_json.as_array().unwrap();
     assert_eq!(list.len(), 2);
-    assert_eq!((list[0]["name"].as_str(), list[0]["available"].as_bool()), (Some("Work"), Some(false)));
+    assert_eq!((list[0]["path"].as_str(), list[0]["available"].as_bool()), (Some("Work"), Some(false)));
     assert!(list[0]["error"].as_str().unwrap().contains("not there"));
-    assert_eq!((list[1]["name"].as_str(), list[1]["documents"].as_u64(), list[1]["default"].as_bool()), (Some("Home"), Some(1), Some(true)));
-    let text = roots_ok(&file, &["roots"]);
+    assert_eq!((list[1]["path"].as_str(), list[1]["documents"].as_u64(), list[1]["default"].as_bool()), (Some("Home"), Some(1), Some(true)));
+    let text = folders_ok(&file, &["ls"]);
     assert!(text.contains("unavailable") && text.contains(&home.display().to_string()), "{text}");
-    assert!(roots_ok(&file, &["read", "Recipes"]).contains("Bread."));
-    // New documents go to the first root that opens.
-    roots_ok(&file, &["new", "Later"]);
-    assert!(home.join("Later.xml").is_file() && !work.exists(), "a missing root is never made anew");
-    let o = roots_run(&file, &["--root", "Work", "ls"]);
+    assert!(folders_ok(&file, &["read", "Recipes"]).contains("Bread."));
+    // New documents go to the first top-level folder that opens.
+    folders_ok(&file, &["new", "Later"]);
+    assert!(home.join("Later.xml").is_file() && !work.exists(), "a missing top-level folder is never made anew");
+    let o = folders_run(&file, &["ls", "Work"]);
     assert!(String::from_utf8_lossy(&o.stderr).contains("error[unavailable]"));
-    // No roots at all.
-    std::fs::write(&file, r#"{"v":1,"roots":[]}"#).unwrap();
-    let o = roots_run(&file, &["ls"]);
+    // No top-level folders at all.
+    std::fs::write(&file, r#"{"v":1,"folders":[]}"#).unwrap();
+    let o = folders_run(&file, &["ls"]);
     assert!(String::from_utf8_lossy(&o.stderr).contains("error[no_library]"));
 }
 
 #[test]
-fn wiki_links_look_in_their_own_root_first() {
-    let (dirs, file) = roots(&[
+fn wiki_links_look_in_their_own_folder_first() {
+    let (dirs, file) = top_folders(&[
         ("Work", &[("Plan", "Ship it."), ("Notes", "Today.")]),
         ("Home", &[("Plan", "Plant tomatoes."), ("Garden", "Beds."), ("Recipes", "Bread.")]),
         ("Attic", &[("Recipes", "Old ones.")]),
     ]);
-    let links = |doc: &str, extra: &[&str]| -> Vec<String> {
-        let mut a = extra.to_vec();
-        a.extend(["links", doc]);
-        roots_json(&file, &a)["out"].as_array().unwrap().iter().map(|l| l["to"].as_str().unwrap().to_string()).collect()
+    let links = |doc: &str| -> Vec<String> {
+        folders_json(&file, &["links", doc])["out"].as_array().unwrap().iter().map(|l| l["to"].as_str().unwrap().to_string()).collect()
     };
-    // The same title here and in another root: this root's.
-    roots_ok(&file, &["insert", "Notes", "--md", "See [[Plan]]."]);
-    assert_eq!(links("Notes", &[]), ["Plan.xml (in Work)"]);
-    // Only in another root: that one, --root or not.
-    roots_ok(&file, &["--root", "Work", "insert", "Notes", "--md", "And [[Garden]]."]);
-    assert_eq!(links("Notes", &[]), ["Plan.xml (in Work)", "Garden.xml (in Home)"]);
-    // In two other roots: ambiguous, both named with their root and id, nothing written.
+    // The same title here and in another top-level folder: this folder's.
+    folders_ok(&file, &["insert", "Notes", "--md", "See [[Plan]]."]);
+    assert_eq!(links("Notes"), ["Work/Plan.xml"]);
+    // Only in another top-level folder: that one.
+    folders_ok(&file, &["insert", "Work/Notes", "--md", "And [[Garden]]."]);
+    assert_eq!(links("Notes"), ["Work/Plan.xml", "Home/Garden.xml"]);
+    // A path from 主页 names exactly one.
+    folders_ok(&file, &["insert", "Notes", "--md", "Also [[Attic/Recipes]]."]);
+    assert_eq!(links("Notes"), ["Work/Plan.xml", "Home/Garden.xml", "Attic/Recipes.xml"]);
+    // In two other top-level folders: ambiguous, both by path and id, nothing written.
     let before = std::fs::read_to_string(dirs[0].join("Notes.xml")).unwrap();
-    let o = roots_run(&file, &["insert", "Notes", "--md", "Bake from [[Recipes]]."]);
+    let o = folders_run(&file, &["insert", "Notes", "--md", "Bake from [[Recipes]]."]);
     assert_eq!(o.status.code(), Some(3));
     let err = String::from_utf8_lossy(&o.stderr);
-    let ids: Vec<String> = roots_json(&file, &["ls"]).as_array().unwrap().iter().filter(|e| e["path"] == "Recipes.xml").map(|e| e["id"].as_str().unwrap().to_string()).collect();
-    assert!(err.contains("error[ambiguous]") && err.contains("(in Home, id ") && err.contains("(in Attic, id ") && ids.iter().all(|id| err.contains(id.as_str())) && err.contains("[["), "{err}");
+    let ids: Vec<String> = folders_json(&file, &["ls", "-r"]).as_array().unwrap().iter().filter(|e| e["path"].as_str().unwrap().ends_with("/Recipes.xml")).map(|e| e["id"].as_str().unwrap().to_string()).collect();
+    assert!(err.contains("error[ambiguous]") && err.contains("Home/Recipes.xml (id ") && err.contains("Attic/Recipes.xml (id ") && ids.iter().all(|id| err.contains(id.as_str())) && err.contains("[["), "{err}");
     assert_eq!(std::fs::read_to_string(dirs[0].join("Notes.xml")).unwrap(), before);
-    // An id names a document in any root.
-    let home_plan = roots_json(&file, &["ls"]).as_array().unwrap().iter().find(|e| e["root"] == "Home" && e["path"] == "Plan.xml").unwrap()["id"].as_str().unwrap().to_string();
-    roots_ok(&file, &["insert", "Notes", "--md", &format!("The other [[{home_plan}]].")]);
+    // An id names a document in any top-level folder.
+    let home_plan = folders_json(&file, &["ls", "Home"]).as_array().unwrap().iter().find(|e| e["path"] == "Home/Plan.xml").unwrap()["id"].as_str().unwrap().to_string();
+    folders_ok(&file, &["insert", "Notes", "--md", &format!("The other [[{home_plan}]].")]);
     // Read out and written back, the mentions point where they did: Home's
     // Plan by id (`[[Plan]]` would be Work's), Garden by its path.
-    let md = roots_json(&file, &["--root", "Work", "read", "Notes"])["text"].as_str().unwrap().to_string();
+    let md = folders_json(&file, &["read", "Work/Notes"])["text"].as_str().unwrap().to_string();
     assert!(md.contains("[[Plan]]") && md.contains("[[Garden]]") && md.contains(&format!("[[{home_plan}]]")), "{md}");
-    // A new document has no root yet: its links look in the root it lands in.
-    roots_ok(&file, &["new", "Copy", "--md", &md]);
-    assert_eq!(links("Copy", &[]), links("Notes", &[]));
-    assert_eq!(links("Copy", &[]), ["Plan.xml (in Work)", "Garden.xml (in Home)", "Plan.xml (in Home)"]);
-    roots_ok(&file, &["--root", "Attic", "new", "Shelf", "--md", "[[Recipes]] and [[Garden]]"]);
-    assert_eq!(links("Shelf", &["--root", "Attic"]), ["Recipes.xml", "Garden.xml"]);
-    // Several in its own root: ambiguous as before, even with one elsewhere.
-    for f in ["A", "B"] { roots_ok(&file, &["--root", "Attic", "mkdir", f]); roots_ok(&file, &["new", "Box", "--in", f]); }
-    roots_ok(&file, &["--root", "Home", "new", "Box"]);
-    let o = roots_run(&file, &["insert", "Shelf", "--md", "[[Box]]"]);
+    // A new document's links look in the top-level folder it lands in.
+    folders_ok(&file, &["new", "Copy", "--md", &md]);
+    assert_eq!(links("Copy"), links("Notes"));
+    folders_ok(&file, &["new", "Shelf", "--in", "Attic", "--md", "[[Recipes]] and [[Garden]]"]);
+    assert_eq!(links("Shelf"), ["Attic/Recipes.xml", "Home/Garden.xml"]);
+    // Several in its own top-level folder: ambiguous as before, even with one elsewhere.
+    for f in ["A", "B"] { folders_ok(&file, &["mkdir", f, "--in", "Attic"]); folders_ok(&file, &["new", "Box", "--in", &format!("Attic/{f}")]); }
+    folders_ok(&file, &["new", "Box", "--in", "Home"]);
+    let o = folders_run(&file, &["insert", "Shelf", "--md", "[[Box]]"]);
     let err = String::from_utf8_lossy(&o.stderr);
-    assert!(err.contains("error[ambiguous]") && err.contains("A/Box.xml") && err.contains("B/Box.xml") && !err.contains("in Home"), "{err}");
-    // From Work, Box is only elsewhere, in two roots.
-    assert!(String::from_utf8_lossy(&roots_run(&file, &["insert", "Notes", "--md", "[[Box]]"]).stderr).contains("other roots match"));
+    assert!(err.contains("error[ambiguous]") && err.contains("Attic/A/Box.xml") && err.contains("Attic/B/Box.xml") && !err.contains("Home/Box"), "{err}");
+    // From Work, Box is only elsewhere, in two top-level folders.
+    assert!(String::from_utf8_lossy(&folders_run(&file, &["insert", "Notes", "--md", "[[Box]]"]).stderr).contains("other top-level folders match"));
 }

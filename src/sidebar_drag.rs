@@ -241,8 +241,8 @@ impl Workspace {
     pub(crate) fn move_folder_drag(&mut self, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(d) = self.folder_drag.active.as_mut() else { return };
         d.at = at;
-        // A root's row is clicked, never dragged: roots don't move inside one another.
-        if !d.started && crate::shared_store::root_of_row(&d.id).is_none() && (f32::from(at.x - d.start.x).hypot(f32::from(at.y - d.start.y)) >= 4.) {
+        // A top-level folder's row is clicked, never dragged: top-level folders don't move inside one another.
+        if !d.started && crate::shared_store::top_of_row(&d.id).is_none() && (f32::from(at.x - d.start.x).hypot(f32::from(at.y - d.start.y)) >= 4.) {
             d.started = true; d.lift.to = 1.;
             self.folder_drag.icon_press = false;
             self.folder_drag.icon_alt = false;
@@ -400,8 +400,8 @@ impl Workspace {
         for e in &mut self.entries {
             if e.id == movement.id { e.meta.parent = movement.parent.clone(); }
             if let Some(i) = siblings.iter().position(|id| *id == e.id) {
-                if movement.parent.is_none() { e.meta.root_order = Some(i as u64 + 1); }
-                else { e.meta.order = i as u64 + 1; e.meta.root_order = None; }
+                if movement.parent.is_none() { e.meta.top_order = Some(i as u64 + 1); }
+                else { e.meta.order = i as u64 + 1; e.meta.top_order = None; }
             }
         }
     }
@@ -414,8 +414,8 @@ impl Workspace {
         self.folder_drag.saving = true;
         let history = movement.history;
         let Some((key, mut writer)) = self.store.tree_writer(Some(&movement.id)) else { self.folder_drag.saving = false; self.folder_drag.pending.pop_front(); return; };
-        // Moves stay inside a root (W7); a root's row is its top level.
-        let allowed = self.store.same_root(&movement.id, movement.parent.as_deref());
+        // Moves stay inside a top-level folder (W7); a top-level folder's row is its top level.
+        let allowed = self.store.same_top(&movement.id, movement.parent.as_deref());
         let (parent, before) = (self.store.real_parent(movement.parent.as_deref()).map(str::to_string), self.store.real_parent(movement.before.as_deref()).map(str::to_string));
         let task = cx.background_executor().spawn(async move {
             let journal = writer.track_file_changes();
@@ -437,7 +437,7 @@ impl Workspace {
                             if let Some(saved) = restored.iter().find(|e| e.id == entry.id) {
                                 entry.meta.parent = saved.meta.parent.clone();
                                 entry.meta.order = saved.meta.order;
-                                entry.meta.root_order = saved.meta.root_order;
+                                entry.meta.top_order = saved.meta.top_order;
                             }
                         }
                     }
@@ -906,7 +906,7 @@ mod tests {
     fn row(kind: &str, depth: usize) -> Row {
         let meta = crate::store::Meta { folder: (kind != "doc").then(String::new), ..Default::default() };
         let note = (kind == "page").then(|| "note".to_string());
-        Row { entry: Entry { id: kind.into(), meta, title: String::new(), icon: None, body: "".into(), reminders: vec![], links: vec![], note, root: String::new() }, depth }
+        Row { entry: Entry { id: kind.into(), meta, title: String::new(), icon: None, body: "".into(), reminders: vec![], links: vec![], note, top: String::new() }, depth }
     }
 
     /// #418: a drop on a document, one with child pages too, reorders; only a folder takes it in.

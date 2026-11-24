@@ -720,7 +720,7 @@ mod tests {
     use crate::store::Entry;
 
     fn entry(id: &str, title: &str, body: &str) -> Entry {
-        Entry { id: id.into(), meta: Default::default(), title: title.into(), icon: None, body: body.into(), reminders: vec![], links: vec![], note: None, root: String::new() }
+        Entry { id: id.into(), meta: Default::default(), title: title.into(), icon: None, body: body.into(), reminders: vec![], links: vec![], note: None, top: String::new() }
     }
 
     /// The pre-#332 ranking: lowercase each title, then each body.

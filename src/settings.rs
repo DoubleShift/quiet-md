@@ -154,10 +154,10 @@ pub struct Preferences {
     pub recent_doc_fonts: Vec<String>,
     #[serde(default)]
     pub recent_ui_fonts: Vec<String>,
-    /// 文档库 › 快速笔记保存到: the 工作区 root key quick notes go to; empty,
-    /// or a root that is gone, is the first open root (2.8).
-    #[serde(default)]
-    pub quick_note_root: String,
+    /// 文档库 › 快速笔记保存到: the folder key quick notes go to; empty,
+    /// or a top-level folder that is gone, is the first open top-level folder (2.8).
+    #[serde(default, alias = "quick_note_root")]
+    pub quick_note_folder: String,
 }
 
 /// A week between asks to move the library to real folders.
@@ -196,7 +196,7 @@ fn system_lang() -> Lang {
 impl Default for Preferences {
     fn default() -> Self {
         let lang = system_lang();
-        Preferences { theme: String::new(), feishu: true, english: lang != Lang::Zh, language: lang.code().into(), remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new(), motion: String::new(), new_default: String::new(), last_new: String::new(), search_engine: String::new(), start_home: false, browser: String::new(), opaque_window: false, ui_font: String::new(), ui_family: String::new(), doc_family: String::new(), doc_size: String::new(), migrate_later: 0, find_regex: false, backspace_to_title: true, cjk_spacing: false, font_favorites: vec![], recent_doc_fonts: vec![], recent_ui_fonts: vec![], quick_note_root: String::new() }
+        Preferences { theme: String::new(), feishu: true, english: lang != Lang::Zh, language: lang.code().into(), remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new(), motion: String::new(), new_default: String::new(), last_new: String::new(), search_engine: String::new(), start_home: false, browser: String::new(), opaque_window: false, ui_font: String::new(), ui_family: String::new(), doc_family: String::new(), doc_size: String::new(), migrate_later: 0, find_regex: false, backspace_to_title: true, cjk_spacing: false, font_favorites: vec![], recent_doc_fonts: vec![], recent_ui_fonts: vec![], quick_note_folder: String::new() }
     }
 }
 
@@ -224,11 +224,11 @@ pub(crate) fn show_lang(lang: Lang) {
 }
 
 /// The preferences: this computer's (应用级), the document theme, font and
-/// 正文字号 the root in front's own (W21: they go with its folder).
+/// 正文字号 the top-level folder in front's own (W21: they go with its folder).
 pub fn load() {
     let mut p = fdl_core::vfs::read(path()).ok().and_then(|b| serde_json::from_slice::<Preferences>(&b).ok()).unwrap_or_default();
-    if let Some(root) = look_root() {
-        let look = crate::store::Store::root_look_at(&root);
+    if let Some(root) = look_dir() {
+        let look = crate::store::Store::look_at(&root);
         let d = Preferences::default();
         p.theme = look.theme.unwrap_or(d.theme);
         p.feishu = look.feishu.unwrap_or(d.feishu);
@@ -238,21 +238,21 @@ pub fn load() {
     apply(p);
 }
 
-/// The root whose look is in use: the one in front, when a root is open.
-fn look_root() -> Option<std::path::PathBuf> {
-    let root = crate::store::Store::root_dir();
-    (cx_has_roots() && root.join(crate::store::INTERNAL).exists()).then_some(root)
+/// The top-level folder whose look is in use: the one in front, when a top-level folder is open.
+fn look_dir() -> Option<std::path::PathBuf> {
+    let root = crate::store::Store::active_dir();
+    (has_folders() && root.join(crate::store::INTERNAL).exists()).then_some(root)
 }
 
-/// Whether the 工作区 has a root (none before first launch picks one).
-fn cx_has_roots() -> bool { HAS_ROOTS.load(Ordering::Relaxed) }
-static HAS_ROOTS: AtomicBool = AtomicBool::new(false);
-pub(crate) fn set_has_roots(on: bool) { HAS_ROOTS.store(on, Ordering::Relaxed); }
+/// Whether 主页 has a folder (none before first launch picks one).
+fn has_folders() -> bool { HAS_FOLDERS.load(Ordering::Relaxed) }
+static HAS_FOLDERS: AtomicBool = AtomicBool::new(false);
+pub(crate) fn set_has_folders(on: bool) { HAS_FOLDERS.store(on, Ordering::Relaxed); }
 
-/// Another root came to the front: its own look (theme, document font,
-/// themes folder) takes over in every window. Changing look between roots is
+/// Another top-level folder came to the front: its own look (theme, document font,
+/// themes folder) takes over in every window. Changing look between top-level folders is
 /// meant (W21).
-pub(crate) fn root_switched(cx: &mut App) {
+pub(crate) fn top_switched(cx: &mut App) {
     let before = prefs();
     load();
     let now = prefs();
@@ -283,8 +283,10 @@ fn apply(p: Preferences) {
 /// families once so one that has been uninstalled since falls back to the
 /// default face (`fonts::store`) instead of GPUI's last resort, and note which
 /// punctuation it draws itself (`fonts::probe`). Without one, fonts stay
-/// unenumerated.
+/// unenumerated; only whether the Chinese punctuation face is here is
+/// looked up (`fonts::check_cjk_punct`).
 pub fn check_fonts(cx: &App) {
+    crate::fonts::check_cjk_punct(cx);
     let p = prefs();
     if p.ui_family.trim().is_empty() && p.doc_family.trim().is_empty() { return }
     crate::fonts::families(cx);
@@ -396,10 +398,10 @@ pub(crate) fn save(p: &Preferences) -> anyhow::Result<()> {
     f.write_all(&serde_json::to_vec_pretty(p)?)?;
     f.sync_all()?;
     fdl_core::vfs::rename(tmp, path())?;
-    // The document theme, font and 正文字号 are the root in front's (W21).
-    if let Some(root) = look_root() {
-        let look = crate::store::RootLook { theme: Some(p.theme.clone()), feishu: Some(p.feishu), doc_family: Some(p.doc_family.clone()), doc_size: Some(p.doc_size.clone()) };
-        if crate::store::Store::root_look_at(&root) != look { crate::store::Store::save_root_look_at(&root, &look)?; }
+    // The document theme, font and 正文字号 are the top-level folder in front's (W21).
+    if let Some(root) = look_dir() {
+        let look = crate::store::FolderLook { theme: Some(p.theme.clone()), feishu: Some(p.feishu), doc_family: Some(p.doc_family.clone()), doc_size: Some(p.doc_size.clone()) };
+        if crate::store::Store::look_at(&root) != look { crate::store::Store::save_look_at(&root, &look)?; }
     }
     apply(p.clone());
     Ok(())
@@ -1561,7 +1563,7 @@ impl Workspace {
         let errors = themes::errors();
         let where_: SharedString = match &sel_path {
             // Inside the library: the short path (the full one wraps on narrow windows).
-            Some(p) => p.strip_prefix(crate::store::Store::root_dir()).unwrap_or(p).display().to_string().into(),
+            Some(p) => p.strip_prefix(crate::store::Store::active_dir()).unwrap_or(p).display().to_string().into(),
             None => tr("内置主题", "Built in").into(),
         };
         let (edit_id, dup_id, rm_id, open_id) = (sel_id.clone(), sel_id.clone(), sel_id.clone(), sel_id);
@@ -1655,26 +1657,26 @@ impl Workspace {
         let short = |root: &std::path::Path| if cfg!(target_os = "windows") { root.display().to_string() } else {
             dirs::home_dir().and_then(|h| root.strip_prefix(h).ok().map(|r| format!("~/{}", r.display()))).unwrap_or_else(|| root.display().to_string())
         };
-        // 工作区: every root folder alike, each with its own 回收站 and history.
-        let mut folders: Vec<AnyElement> = self.store.roots().into_iter().map(|(key, name, path, error)| {
+        // 主页: every top-level folder alike, each with its own 回收站 and history.
+        let mut folders: Vec<AnyElement> = self.store.top_folders().into_iter().map(|(key, name, path, error)| {
             let (k, n, p) = (key.clone(), name.clone(), path.clone());
             let sub: SharedString = match error { Some(e) => format!("{} · {}", short(&path), diagnostic(&e)).into(), None => short(&path).into() };
             row(name, Some(sub), div().flex_none().flex().gap(px(8.))
                 .child(button(SharedString::from(format!("reveal-{key}")), reveal).on_click(move |_, _, cx| cx.reveal_path(&p)))
-                // A test run's one root (`QUIET_MD_HOME`) is fixed.
-                .when(std::env::var_os("QUIET_MD_HOME").is_none() || std::env::var_os("QUIET_MD_ROOTS").is_some(), |d| d.child(button(SharedString::from(format!("remove-{key}")), tr("移除", "Remove")).on_click(cx.listener(move |w, _, _, cx| { w.confirm = Some(crate::app::Confirm::RemoveRoot(k.clone(), n.clone())); cx.notify(); }))))).into_any_element()
+                // A test run's one top-level folder (`QUIET_MD_HOME`) is fixed.
+                .when(std::env::var_os("QUIET_MD_HOME").is_none() || std::env::var_os("QUIET_MD_FOLDERS").is_some(), |d| d.child(button(SharedString::from(format!("remove-{key}")), tr("移除", "Remove")).on_click(cx.listener(move |w, _, _, cx| { w.confirm = Some(crate::app::Confirm::RemoveFolder(k.clone(), n.clone())); cx.notify(); }))))).into_any_element()
         }).collect();
         // 快速笔记保存到 (2.8): a choice once there is one to make.
-        let open: Vec<(String, String)> = self.store.roots().into_iter().filter(|r| r.3.is_none()).map(|r| (r.0, r.1)).collect();
+        let open: Vec<(String, String)> = self.store.top_folders().into_iter().filter(|r| r.3.is_none()).map(|r| (r.0, r.1)).collect();
         if open.len() > 1 {
-            let at = self.store.quick_note_root().and_then(|k| open.iter().position(|r| r.0 == k)).unwrap_or(0);
+            let at = self.store.quick_note_folder().and_then(|k| open.iter().position(|r| r.0 == k)).unwrap_or(0);
             let keys: Vec<String> = open.iter().map(|r| r.0.clone()).collect();
             folders.push(row(tr("快速笔记保存到", "Quick notes go to"), desc(tr("「新建笔记窗口」和全局快捷键记下的笔记放在这个文件夹里。", "Notes from New Note Window and the global shortcut are saved in this folder.")),
-                self.select("quick-note-root", open.into_iter().map(|r| r.1).collect(), at, move |w, i, cx| { let k = keys[i].clone(); w.set_pref(|p| p.quick_note_root = k, cx) }, cx)).into_any_element());
+                self.select("quick-note-folder", open.into_iter().map(|r| r.1).collect(), at, move |w, i, cx| { let k = keys[i].clone(); w.set_pref(|p| p.quick_note_folder = k, cx) }, cx)).into_any_element());
         }
         folders.push(row(tr("添加文件夹", "Add a folder"), Some(tr("打开电脑上已有的文件夹，或新建一个，都会显示在侧栏里。", "Open a folder already on your computer, or make a new one; either shows in the sidebar.").into()), div().flex_none().flex().gap(px(8.))
-            .child(button("open-root", tr("打开…", "Open…")).on_click(cx.listener(|w, _, window, cx| w.open_folder_dialog(window, cx))))
-            .child(button("new-root", tr("新建…", "New…")).on_click(cx.listener(|w, _, window, cx| w.new_root_dialog(window, cx))))).into_any_element());
+            .child(button("open-folder", tr("打开…", "Open…")).on_click(cx.listener(|w, _, window, cx| w.open_folder_dialog(window, cx))))
+            .child(button("new-folder", tr("新建…", "New…")).on_click(cx.listener(|w, _, window, cx| w.new_folder_dialog(window, cx))))).into_any_element());
         div().w_full().flex().flex_col().gap(px(8.))
             .child(group("group-folders", Some(tr("文件夹", "Folders")), folders))
             .child(group("group-library", None, vec![
@@ -1683,7 +1685,7 @@ impl Workspace {
                 // #237: files no document (the Trash included) mentions.
                 row(tr("未使用资源", "Unused assets"), Some(tr("资源文件夹里没有任何文档（含回收站、版本历史和本机文件）引用的图片和文件。检查后确认才会移出。", "Images and files in the asset folder that no document mentions, including the Trash, version history and local files. Nothing is moved until you confirm.").into()),
                     button("sweep-assets", tr("检查", "Check")).on_click(cx.listener(|w, _, window, cx| {
-                        let root = crate::store::Store::root_dir();
+                        let root = crate::store::Store::active_dir();
                         let (live, outside) = w.sweep_inputs(window, cx);
                         cx.spawn(async move |this, cx| {
                             let sweep = cx.background_executor().spawn(async move { crate::store::Store::unused_assets_at(root, live, outside) }).await;

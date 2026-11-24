@@ -418,10 +418,23 @@ pub fn is_cjk_punct(ch: char) -> bool {
         | '\u{FF01}'..='\u{FF0F}' | '\u{FF1A}'..='\u{FF20}' | '\u{FF3B}'..='\u{FF40}' | '\u{FF5B}'..='\u{FF65}')
 }
 
-/// Font for full-width punctuation. When CoreText falls back from the
-/// system UI font it squeezes these (an opening paren after a CJK
-/// character loses ~5px). Browsers draw them full width with PingFang SC.
+/// Font for full-width punctuation, and curly quotes in Chinese text. When
+/// CoreText falls back from the system UI font it squeezes these (an opening
+/// paren after a CJK character loses ~5px). Browsers draw them full width
+/// with PingFang SC. Each system's own Chinese sans, which has bold: a
+/// missing family would draw every weight and style in one regular face
+/// (`cjk_punct_font`).
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub const CJK_PUNCT_FONT: &str = "PingFang SC";
+#[cfg(target_os = "windows")]
+pub const CJK_PUNCT_FONT: &str = "Microsoft YaHei";
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
+pub const CJK_PUNCT_FONT: &str = "Noto Sans CJK SC";
+
+/// `CJK_PUNCT_FONT`, unless this system was found not to have it
+/// (`fonts::check_cjk_punct`): then that text keeps its own family, as
+/// before there was one.
+pub fn cjk_punct_font() -> Option<&'static str> { crate::fonts::cjk_punct_installed().then_some(CJK_PUNCT_FONT) }
 
 /// Single-line UI text that keeps full-width punctuation at full width,
 /// with an optional colored range (search hits). Inherits the parent text
@@ -475,8 +488,8 @@ pub fn ui_runs(text: &str, style: &TextStyle, hits: &[std::ops::Range<usize>], h
     cuts.windows(2)
         .map(|w| {
             let mut run = style.to_run(w[1] - w[0]);
-            if text[w[0]..w[1]].chars().all(is_cjk_punct) && !crate::fonts::own_glyphs(&run.font.family).cjk_punct {
-                run.font.family = CJK_PUNCT_FONT.into();
+            if text[w[0]..w[1]].chars().all(is_cjk_punct) && !crate::fonts::own_glyphs(&run.font.family).cjk_punct && let Some(f) = cjk_punct_font() {
+                run.font.family = f.into();
             }
             if hits.iter().any(|r| r.start <= w[0] && w[1] <= r.end) {
                 run.color = hit_color;

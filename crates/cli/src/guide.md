@@ -63,7 +63,7 @@ quiet delete DOC#REF [--section]
 quiet move DOC#REF --after|--before|--into|--end-of REF | --start | --end [--section]
 quiet set DOC#REF [--text TEXT] [--done|--undone] [--kind text|h1..h6|bullet|ordered|todo|quote|code]
 quiet rename DOC TITLE
-quiet mv DOC FOLDER          (/ for the top of the library)
+quiet mv DOC FOLDER          (within the document's top folder; its name alone: its top)
 quiet rm DOC                 to the trash (kept 30 days)
 
 quiet table DOC[#REF] [--table NAME] [--limit N] [--offset N]
@@ -91,25 +91,28 @@ quotes, code fences, tables, links, **bold** and so on; `--md -` reads stdin.
 **Links to other documents** (@mentions, which follow a document when it
 moves and show as backlinks) are written `[[path or title]]`, e.g.
 `见 [[项目/方案]]`; a Markdown link to a library file (`[方案](项目/方案.xml)`)
-becomes one too. With several roots, `[[…]]` looks in the document's own root
-first (a new document's: the root it lands in), then in the others, `--root`
-or not; a name only one other document has is that one, and several are
-`ambiguous` (the error lists them with root and id: write the id, `[[id]]`).
+becomes one too. `[[…]]` looks in the document's own top folder first (a
+new document's: the one it lands in), then in the others; a name only one
+other document has is that one, and several are `ambiguous` (the error lists
+them by path and id: write the id, `[[id]]`, or the path from 主页).
 Reading as Markdown writes mentions back as `[[path]]`, or as `[[id]]` when
 the path would find another document from here, so copied sections keep
 their links.
 **Where the library is.** Every folder the user has open in Quiet.md on
-this computer (its sidebar's roots; `quiet roots` lists them, and says why
-one is unavailable). Documents are found in any of them; `ls` and `find`
-say which root each is in when there are several. A path or title in two
-roots is `ambiguous`: add `--root NAME` (the folder's name, any case, or its
-path), or use the document's id from `ls --json`. New documents, folders and
-imports go into the `--in` folder's root, else `--root`, else the first
-root, and the output says which; an `--in` folder in another root than
-`--root` is `root_conflict`, naming both. Each root keeps its own trash and
-versions; moving a document to another root is not supported (`cross_root`).
-Global options: `--root NAME`, `--library DIR` (that folder alone, not the
-app's list) and `--json` (every field, for parsing).
+this computer: the top folders on its 主页 (Home). Paths start there: the
+first part is the top folder's name (any case), e.g. `Quiet.md/工作/周报`;
+`quiet ls` lists the top folders, where each is on disk, and why one is
+unavailable. Every path the CLI prints is such a path. A path or title only
+one document has works without the top folder; one that several have is
+`ambiguous`, listing them by path: pass the path from 主页, or the id from
+`ls --json`. Two top folders of one name: the error lists them with their
+keys; a key works as the first part instead of the name. New documents,
+folders and imports go into the `--in` folder, else the first top folder,
+and the output's path says where. Each top folder keeps its own trash and
+versions; moving a document to another one is not supported
+(`cross_folder`). Global options: `--library DIR` (that folder on its own,
+paths starting in it, not the app's list) and `--json` (every field, for
+parsing).
 
 Kinds of blocks: text, h1…h9, bullet, ordered, todo, code, quote, callout,
 divider, image, table, grid, column, file, board, datatable, countdown,
@@ -142,16 +145,15 @@ Write the script to a file and run `quiet run script.js`; short ones go in
 Top-level `await` and `return` work; a returned value is printed. `help()` and
 `help("name")` print this section from inside a script.
 
-- `lib.ls(folder?, {recursive, kind})` → `[{path, root, id, title, kind, modified}]`
-- `lib.find(words, {folder, limit})` → `{total, results: [{path, root, title, rev, hits: [{ref, kind, text}]}]}`
+- `lib.ls(folder?, {recursive, kind})` → `[{path, id, title, kind, modified}]` (no folder: the top folders, `{path, top, dir, key, available, documents?, error?, default?}`)
+- `lib.find(words, {folder, limit})` → `{total, results: [{path, title, rev, hits: [{ref, kind, text}]}]}`
 - `lib.doc(path, {rev})` → `Doc` (throws `not_found` / `ambiguous` / `stale_rev`)
 - `lib.create(title, {folder, md, kind, fields, csv})` → `Doc` (a table: `{path}`), written when the script ends
 - `lib.mkdir(name, {folder})`
 - `lib.check()` → `{documents, issues: [{path, code, message}]}`
-- `lib.roots()` → `[{name, path, key, available, documents?, error?, default?}]`
-- `lib.trash()` → `[{id, title, root, deleted}]`; `lib.untrash(name)`
+- `lib.trash()` → `[{id, title, folder, deleted}]`; `lib.untrash(name)`
 - `lib.call(op, args)` → any operation, as `quiet call`
-- `doc.path`, `doc.root`, `doc.title`, `doc.kind`, `doc.rev`, `doc.block_count`
+- `doc.path`, `doc.title`, `doc.kind`, `doc.rev`, `doc.block_count`
 - `doc.outline()` → `{headings: [{ref, level, text, chars}], top?, chars, …}`
 - `doc.blocks({kind, grep, done, within})` → `[{ref, id, kind, text, depth, level?, done?, children?}]`
 - `doc.block(ref)`, `doc.section(ref)` → block objects

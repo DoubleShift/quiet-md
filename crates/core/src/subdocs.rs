@@ -96,7 +96,7 @@ impl Store {
         crate::vfs::create_dir_all(self.abs(&rel))?;
         let folder = uuid::Uuid::new_v4().to_string();
         // The folder sorts where the document did: its place by hand, else its last change (`Meta::place`).
-        self.index.insert(folder.clone(), Meta { folder: Some(String::new()), rel: rel.clone(), created: m.created, modified: m.modified, order: m.order, root_order: m.root_order, ..Default::default() });
+        self.index.insert(folder.clone(), Meta { folder: Some(String::new()), rel: rel.clone(), created: m.created, modified: m.modified, order: m.order, top_order: m.top_order, ..Default::default() });
         derive_tree(&mut self.index);
         let to = join_rel(&rel, &format!("{name}.{}", ext_of(&m)));
         if let Err(e) = self.relocate(&[(id.to_string(), to)]) {
@@ -105,7 +105,7 @@ impl Store {
             let _ = crate::vfs::remove_dir(self.abs(&rel));
             return Err(e);
         }
-        if let Some(d) = self.index.get_mut(id) { d.order = 1; d.root_order = None; }
+        if let Some(d) = self.index.get_mut(id) { d.order = 1; d.top_order = None; }
         self.save_index()?;
         self.record_tree_changes(&previous);
         Ok(folder)

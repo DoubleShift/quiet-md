@@ -2004,7 +2004,7 @@ impl Editor {
         let blocks = if cells { self.core.selected_cells_content() } else if whole { self.core.doc.blocks.clone() } else { self.core.selected_blocks_content() };
         // A Markdown file's title is its file name, not a line in it.
         let title = (whole && !self.markdown).then(|| self.core.doc.title.plain_text());
-        let text = crate::markdown::clipboard(title.as_deref(), &blocks, &crate::store::Store::root_dir());
+        let text = crate::markdown::clipboard(title.as_deref(), &blocks, &crate::store::Store::active_dir());
         cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 
@@ -3151,7 +3151,7 @@ fn new_table_file() -> Option<String> {
     let name = format!("{}.sqlite", uuid::Uuid::new_v4());
     let path = crate::store::Store::assets_dir().join(&name);
     crate::table::sqlite::create(&path, &crate::table::blank_base()).ok()?;
-    path.strip_prefix(crate::store::Store::root_dir()).ok().map(|r| r.to_string_lossy().replace('\\', "/"))
+    path.strip_prefix(crate::store::Store::active_dir()).ok().map(|r| r.to_string_lossy().replace('\\', "/"))
 }
 #[cfg(target_family = "wasm")]
 fn new_table_file() -> Option<String> { None }

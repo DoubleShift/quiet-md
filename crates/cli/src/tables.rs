@@ -57,9 +57,9 @@ impl Session {
     /// The table file, read once per run; and which of its tables `a` names.
     fn open_table(&mut self, a: &Value) -> R<(usize, TableId)> {
         let tref = self.table_ref(a)?;
-        // Relative to the root the document is in.
+        // Relative to the top-level folder the document is in.
         let i = self.doc_arg(a)?;
-        let path = self.root_dir(&self.docs[i].root).join(&tref.src);
+        let path = self.top_dir(&self.docs[i].top).join(&tref.src);
         let k = match self.tables.iter().position(|t| t.path == path) {
             Some(k) => k,
             None => {

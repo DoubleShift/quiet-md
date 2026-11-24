@@ -280,7 +280,7 @@ impl Run {
     /// An empty library is seeded with 开始指南, and the window draws.
     async fn first_launch(&mut self) -> Step {
         self.until("the guides in the list", 30, |w, _, _| !w.entries.is_empty()).await?;
-        let root = crate::store::Store::root_dir();
+        let root = crate::store::Store::active_dir();
         if !crate::guides::seeded(&root).map_err(|e| e.to_string())? { return Err("library not marked as seeded".into()) }
         let ids: Vec<String> = self.ws(|w, _, _| w.entries.iter().filter(|e| e.meta.folder.is_none()).map(|e| e.id.clone()).collect())?;
         if ids.len() < 3 { return Err(format!("only {} guide documents", ids.len())) }

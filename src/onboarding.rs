@@ -330,7 +330,7 @@ fn short_path(p: &Path) -> String {
 
 /// A picked folder as a library, used as it is: its Markdown and DocxXML
 /// files show up as documents (#282). Only the home folder and a disk's
-/// root get a Quiet.md folder inside; scanning all of either is never meant.
+/// top-level folder get a Quiet.md folder inside; scanning all of either is never meant.
 pub(crate) fn library_in(dir: PathBuf) -> PathBuf {
     let broad = dir.parent().is_none() || dirs::home_dir().is_some_and(|h| h == dir);
     if broad && !crate::store::Store::is_library(&dir) { dir.join("Quiet.md") } else { dir }
@@ -355,7 +355,7 @@ pub struct Onboarding {
     /// Over a running app's window (⌘⌥⇧O, Settings): a look only, nothing is written.
     replay: bool,
     page: Page,
-    /// 新建文件夹: where a new, empty root folder would go.
+    /// 新建文件夹: where a new, empty top-level folder would go.
     root: PathBuf,
     /// 打开文件夹: folders already on this computer, opened where they are
     /// (W12, the main choice); none means the new folder above.
@@ -410,7 +410,7 @@ impl Onboarding {
             cx.background_executor().timer(Duration::from_secs_f32(1. / fps)).await;
             if this.update(cx, |_, cx| cx.notify()).is_err() { break }
         });
-        let root = crate::store::Store::root_dir();
+        let root = crate::store::Store::active_dir();
         let lib = root.clone();
         cx.spawn(async move |this, cx| {
             let found = cx.background_executor().spawn(async move { discover(lib) }).await;
@@ -551,28 +551,28 @@ impl Onboarding {
             if let Some((_, t)) = self.film_tex.take() { let _ = window.drop_image(t); }
             return cx.emit(Done);
         }
-        // 工作区: the folders picked open where they are, else a new one (W12).
+        // 主页: the folders picked open where they are, else a new one (W12).
         let fixed = std::env::var_os("QUIET_MD_HOME").is_some();
-        // A test run's one folder (`QUIET_MD_HOME`) is the root; it gets the guides as a new folder would.
-        let home = crate::store::Store::legacy_root();
-        let new_root = (self.open.is_empty() && !fixed).then(|| self.root.clone());
-        let existed = crate::guides::seeded(new_root.as_ref().unwrap_or(&home)).unwrap_or(false);
+        // A test run's one folder (`QUIET_MD_HOME`) is the top-level folder; it gets the guides as a new folder would.
+        let home = crate::store::Store::legacy_dir();
+        let new_top = (self.open.is_empty() && !fixed).then(|| self.root.clone());
+        let existed = crate::guides::seeded(new_top.as_ref().unwrap_or(&home)).unwrap_or(false);
         if fixed && !self.scripted { let _ = crate::guides::initialize(&home); }
-        let mut ws = fdl_core::workspace::Workspace::load();
+        let mut ws = fdl_core::home::Home::load();
         let mut failed: Vec<String> = vec![];
-        if let Some(root) = &new_root {
+        if let Some(root) = &new_top {
             let made = if self.scripted { Ok(()) } else { crate::guides::initialize(root) };
-            if let Err(e) = made.map_err(|e| e.to_string()).and_then(|_| ws.add(root).map(|_| ()).or_else(|e| match e { fdl_core::workspace::AddError::Open(_) => Ok(()), e => Err(e.to_string()) })) {
+            if let Err(e) = made.map_err(|e| e.to_string()).and_then(|_| ws.add(root).map(|_| ()).or_else(|e| match e { fdl_core::home::AddError::Open(_) => Ok(()), e => Err(e.to_string()) })) {
                 self.error = Some(format!("{}{e}", tr("无法在这里创建文件夹：", "Couldn't create the folder here: ")));
                 return cx.notify();
             }
         }
-        let others: Vec<PathBuf> = self.open.iter().cloned().chain(if self.copy && new_root.is_some() { vec![] } else { self.imports().into_iter().map(|(p, _)| p).collect() }).collect();
+        let others: Vec<PathBuf> = self.open.iter().cloned().chain(if self.copy && new_top.is_some() { vec![] } else { self.imports().into_iter().map(|(p, _)| p).collect() }).collect();
         for d in others {
-            if let Err(e) = ws.add(&d) && !matches!(e, fdl_core::workspace::AddError::Open(_) | fdl_core::workspace::AddError::Inside(_)) { failed.push(format!("{}：{e}", short_path(&d))); }
+            if let Err(e) = ws.add(&d) && !matches!(e, fdl_core::home::AddError::Open(_) | fdl_core::home::AddError::Inside(_)) { failed.push(format!("{}：{e}", short_path(&d))); }
         }
         PENDING.store(false, Ordering::Relaxed);
-        let target = new_root.clone();
+        let target = new_top.clone();
         cx.set_global(crate::shared_store::SharedStore::with_workspace(ws));
         crate::settings::load();
         save_lang(self.lang);
@@ -772,7 +772,7 @@ impl Onboarding {
 /// Copy each folder into the library (one write for all of them); what went
 /// wrong, for a toast in the main window.
 fn import_all(root: &Path, dirs: &[(PathBuf, Option<String>)]) -> Option<String> {
-    let mut store = match crate::store::Store::open_root(root) { Ok(s) => s, Err(e) => return Some(e.to_string()) };
+    let mut store = match crate::store::Store::open_top_folder(root) { Ok(s) => s, Err(e) => return Some(e.to_string()) };
     let (mut failed, mut cloud, batch) = (0, 0, store.begin_batch().is_ok());
     for (dir, name) in dirs {
         match crate::transfer::scan_folder(dir, 0) {

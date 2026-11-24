@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 /// 导出 Markdown 设置.
 #[derive(Default)]
 pub struct Options<'a> {
-    pub library_root: Option<&'a std::path::Path>,
+    pub library_dir: Option<&'a std::path::Path>,
     /// Titles of the document's child pages (what 子页面列表 shows).
     pub sub_pages: &'a [String],
     /// 所有内容: images are kept, local ones copied into this folder next to
@@ -91,8 +91,8 @@ pub fn keepable(blocks: Vec<Block>) -> Vec<Block> {
 /// 复制为 Markdown (#60): `blocks` (and the title, for a whole document) as
 /// Markdown text. Equations stay LaTeX; local images and attachments are
 /// linked by their absolute paths, nothing is copied.
-pub fn clipboard(title: Option<&str>, blocks: &[Block], library_root: &Path) -> String {
-    let opts = Options { in_place: true, absolute: true, library_root: Some(library_root), ..Default::default() };
+pub fn clipboard(title: Option<&str>, blocks: &[Block], library_dir: &Path) -> String {
+    let opts = Options { in_place: true, absolute: true, library_dir: Some(library_dir), ..Default::default() };
     let mut w = Writer { opts: &opts, files: vec![], generated: vec![], missing: 0 };
     let mut out = title.map(str::trim).filter(|t| !t.is_empty()).map(|t| format!("# {}\n\n", escape(t))).unwrap_or_default();
     out.push_str(&w.blocks(blocks));
@@ -194,7 +194,7 @@ impl Writer<'_> {
                 Some(dir) => {
                     let n = self.generated.len() / 2 + 1;
                     let (svg, file) = (format!("{dir}/board-{n}.svg"), format!("{dir}/board-{n}.excalidraw"));
-                    let root = self.opts.library_root.map(Path::to_path_buf).unwrap_or_else(crate::store::Store::root_dir);
+                    let root = self.opts.library_dir.map(Path::to_path_buf).unwrap_or_else(crate::store::Store::active_dir);
                     self.generated.push((svg.clone(), bd.svg_in(&root)));
                     self.generated.push((file.clone(), bd.file_json()));
                     format!("[![]({})]({})", link_target(&svg), link_target(&file))
@@ -202,7 +202,7 @@ impl Writer<'_> {
                 None => bd.plain_text().lines().map(escape).collect::<Vec<_>>().join("<br>"),
             },
             // A 数据表: the shown view as a Markdown table.
-            BlockKind::DataTable(t) => crate::table::block_markdown(&self.opts.library_root.map(Path::to_path_buf).unwrap_or_else(crate::store::Store::root_dir), t),
+            BlockKind::DataTable(t) => crate::table::block_markdown(&self.opts.library_dir.map(Path::to_path_buf).unwrap_or_else(crate::store::Store::active_dir), t),
             BlockKind::File(f) => self.file_link(f).map(|url| format!("[{}]({url})", escape(&f.name))).unwrap_or_else(|| escape(&f.name)),
             BlockKind::SubPageList => {
                 self.opts.sub_pages.iter().map(|t| format!("- {}", escape(&crate::model::display_title(t)))).collect::<Vec<_>>().join("\n")
@@ -232,7 +232,7 @@ impl Writer<'_> {
         }
         if self.opts.base.is_none() && !self.opts.absolute { return src.to_string() }
         let raw = Path::new(src.strip_prefix("file://").unwrap_or(src));
-        let root = self.opts.library_root.map(Path::to_path_buf).unwrap_or_else(crate::store::Store::root_dir);
+        let root = self.opts.library_dir.map(Path::to_path_buf).unwrap_or_else(crate::store::Store::active_dir);
         // Relative sources left after `parse_file` are the library's (`.assets/…`).
         let abs = if raw.fs_is_absolute() { raw.to_path_buf() } else { root.join(raw) };
         let Some(base) = self.opts.base else { return abs.to_string_lossy().into_owned() };
@@ -288,7 +288,7 @@ impl Writer<'_> {
         if src.starts_with("http://") || src.starts_with("https://") || src.starts_with("data:image/") {
             return src.to_string();
         }
-        let Some(path) = crate::store::export_path_in(self.opts.library_root.unwrap_or(&crate::store::Store::root_dir()), src) else { self.missing += 1; return String::new() };
+        let Some(path) = crate::store::export_path_in(self.opts.library_dir.unwrap_or(&crate::store::Store::active_dir()), src) else { self.missing += 1; return String::new() };
         if let Some((_, rel)) = self.files.iter().find(|(p, _)| *p == path) {
             return rel.clone();
         }
@@ -604,7 +604,7 @@ pub fn write_file(doc: &Document, front: &str, base: Option<&Path>) -> String {
 /// `write_file` with the copies to make beside a 本机文件 (`Export::files`,
 /// relative to the file's folder).
 pub fn write_file_with(doc: &Document, front: &str, opts: &Options) -> Export {
-    let opts = Options { in_place: true, library_root: opts.library_root, base: opts.base, name: opts.name, copied: opts.copied, original: opts.original, ..Default::default() };
+    let opts = Options { in_place: true, library_dir: opts.library_dir, base: opts.base, name: opts.name, copied: opts.copied, original: opts.original, ..Default::default() };
     let mut w = Writer { opts: &opts, files: vec![], generated: vec![], missing: 0 };
     let pieces = w.pieces(&doc.blocks);
     let canonical = joined(&pieces);
@@ -958,11 +958,11 @@ mod tests {
         let mut table = Table { col_widths: vec![], header_rows: 0, header_col: false, rows: vec![vec![TableCell::empty()]] };
         table.rows[0][0].blocks = vec![Block::new(BlockKind::Text, text.clone())];
         let doc = Document { blocks: vec![Block::new(BlockKind::Text, text), Block::new(BlockKind::Table(table), RichText::default())], ..Default::default() };
-        let out = export(&doc, &Options { assets: Some("out.assets"), library_root: Some(&root), ..Default::default() });
+        let out = export(&doc, &Options { assets: Some("out.assets"), library_dir: Some(&root), ..Default::default() });
         assert_eq!(out.files.len(), 1);
         assert_eq!(out.missing, 0);
         assert_eq!(out.text.matches("[Report \\[1\\]](out.assets/report%20%281%29.pdf)").count(), 2);
-        let plain = export(&doc, &Options { library_root: Some(&root), ..Default::default() });
+        let plain = export(&doc, &Options { library_dir: Some(&root), ..Default::default() });
         assert!(plain.files.is_empty());
         assert!(!plain.text.contains("out.assets"));
         crate::vfs::remove_dir_all(root).unwrap();

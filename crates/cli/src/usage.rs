@@ -42,8 +42,8 @@ fn blocked() -> Option<&'static str> {
     if env("QUIET_NO_TELEMETRY") { return Some("QUIET_NO_TELEMETRY is set"); }
     if env("CI") { return Some("running in CI"); }
     // The app's 自动检查更新 off: the user wants it to stay offline.
-    // 应用级设置 since 工作区; before, the library's `.quiet/`.
-    let prefs = [fdl_core::store::Store::settings_dir(), fdl_core::store::Store::legacy_root().join(".quiet")].map(|d| d.join("preferences.json"));
+    // 应用级设置 since 主页; before, the library's `.quiet/`.
+    let prefs = [fdl_core::store::Store::settings_dir(), fdl_core::store::Store::legacy_dir().join(".quiet")].map(|d| d.join("preferences.json"));
     if let Some(p) = prefs.iter().find_map(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice::<Value>(&b).ok())
         && p.get("auto_update").and_then(Value::as_bool) == Some(false) {
         return Some("自动检查更新 (Check for updates automatically) is off in Quiet.md");

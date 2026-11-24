@@ -13,7 +13,7 @@ impl Workspace {
         if !self.save_before(cx, move |w, window, cx| w.create_doc(m, p.clone(), window, cx)) { return; }
         let file_before = self.store.track_file_changes();
         let made = if parent.is_some() {
-            // In a folder: written into that folder's root at once.
+            // In a folder: written into that folder's top-level folder at once.
             let doc = crate::model::Document::default();
             if markdown { self.store.create_markdown_in(&doc, "", parent.as_deref()) } else { self.store.create_from_in(&doc, parent.as_deref()) }
         } else if markdown {
@@ -171,10 +171,10 @@ impl Workspace {
         // each kind its own solid, coloured mark (assets/illus/kinds), so a glance tells them apart
         let row = |id: &'static str, kind: &'static str, label: &'static str| crate::design::MenuItem::new(id).leading(img(format!("illus/kinds/{kind}.svg")).flex_none().size(px(18.))).label(label);
         let (doc_parent, md_parent, board_parent, table_parent) = (parent.clone(), parent.clone(), parent.clone(), parent.clone());
-        // A root's own "+" (its row, or the sidebar heading when it is the only root) also brings
+        // A top-level folder's own "+" (its row, or the sidebar heading when it is the only top-level folder) also brings
         // things into it; 主页 and a folder's page have 导入 beside their "+".
-        let sidebar_heading = parent.is_none() && self.store.roots().len() == 1 && self.home.anchor("create-sidebar").is_some_and(|b| point(b.left(), b.bottom() + px(4.)) == pos);
-        let import = (sidebar_heading || parent.as_deref().is_some_and(|p| crate::shared_store::root_of_row(p).is_some())).then(|| self.import_items(parent.clone(), cx));
+        let sidebar_heading = parent.is_none() && self.store.top_folders().len() == 1 && self.home.anchor("create-sidebar").is_some_and(|b| point(b.left(), b.bottom() + px(4.)) == pos);
+        let import = (sidebar_heading || parent.as_deref().is_some_and(|p| crate::shared_store::top_of_row(p).is_some())).then(|| self.import_items(parent.clone(), cx));
         Some(deferred(anchored().anchor(Anchor::TopLeft).position(pos).snap_to_window_with_margin(px(8.)).child(
             crate::design::Popover::new("create-items").menu().min_w(px(180.))
                 .on_mouse_down_out(cx.listener(|w, _, _, cx| { w.create_menu = None; cx.notify(); }))
@@ -201,13 +201,13 @@ impl Workspace {
                 .child(ui_text(label))
                 .on_click(cx.listener(move |w, _, window, cx| match &target { Some(t) => w.open(t, window, cx), None => w.show_view(View::Home, cx) }))
         };
-        // A root's own row (two or more roots) is the first crumb, by name.
-        let path: Vec<_> = self.ancestors(&id).into_iter().filter(|e| crate::shared_store::root_of_row(&e.id).is_none()).collect();
-        // The path starts at its root folder, by that folder's name (W5).
-        let root = self.entries.iter().find(|e| e.id == id).map(|e| e.root.clone()).unwrap_or_default();
-        let first = link("home".into(), self.root_name(&root), None).into_any_element();
-        // A root's own page is the root: its name is the page's title, not a crumb before it.
-        let own = crate::shared_store::root_of_row(&id).is_some();
+        // A top-level folder's own row (two or more top-level folders) is the first crumb, by name.
+        let path: Vec<_> = self.ancestors(&id).into_iter().filter(|e| crate::shared_store::top_of_row(&e.id).is_none()).collect();
+        // The path starts at its top-level folder, by that folder's name (W5).
+        let root = self.entries.iter().find(|e| e.id == id).map(|e| e.top.clone()).unwrap_or_default();
+        let first = link("home".into(), self.folder_name(&root), None).into_any_element();
+        // A top-level folder's own page is the top-level folder: its name is the page's title, not a crumb before it.
+        let own = crate::shared_store::top_of_row(&id).is_some();
         let mut crumbs = div().min_w_0().flex().items_center().text_size(px(17.)).line_height(px(24.)).when(!own, |d| d.child(first));
         for (i, e) in path.iter().enumerate() {
             if path.len() > 2 && i > 0 && i < path.len() - 1 {

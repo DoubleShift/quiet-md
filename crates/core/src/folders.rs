@@ -4,7 +4,7 @@ impl Store {
     /// Independent handle for background tree writes; begin_write reloads under the library lock.
     /// It takes the parsed documents along, so its `list` reads only files that changed.
     pub fn tree_writer(&self) -> Self {
-        Self { file_changes: vec![], root: self.root.clone(), index: self.index.clone(), foreign: self.foreign.clone(), trash: self.trash.clone(), flat: self.flat,
+        Self { file_changes: vec![], top_dir: self.top_dir.clone(), index: self.index.clone(), foreign: self.foreign.clone(), trash: self.trash.clone(), flat: self.flat,
             loaded: Default::default(), copied: Default::default(), parsed: self.parsed.clone(), warnings: vec![], migrated: None, batch: Default::default(), view: Default::default(),
             v5: self.v5, me: self.me.clone(), clock: self.clock.clone(), seen: self.seen.clone(), merged: self.merged.clone(), key: self.key.clone(), place_by_hand: self.place_by_hand, v6: self.v6, seen_trash: self.seen_trash.clone(), purging: Default::default() }
     }
@@ -72,8 +72,8 @@ impl Store {
             changed = true;
             for (i, id) in ids.iter().enumerate() {
                 let m = self.index.get_mut(id).unwrap();
-                if parent.is_none() { m.root_order = Some(i as u64 + 1); }
-                else { m.order = i as u64 + 1; m.root_order = None; }
+                if parent.is_none() { m.top_order = Some(i as u64 + 1); }
+                else { m.order = i as u64 + 1; m.top_order = None; }
             }
         }
         if !changed && initialized { return Ok(()); }
@@ -119,8 +119,8 @@ impl Store {
         if hand_order {
             for (i, key) in siblings.iter().enumerate() {
                 let m = self.index.get_mut(key).unwrap();
-                if parent.is_none() { m.root_order = Some(i as u64 + 1); }
-                else { m.order = i as u64 + 1; m.root_order = None; }
+                if parent.is_none() { m.top_order = Some(i as u64 + 1); }
+                else { m.order = i as u64 + 1; m.top_order = None; }
             }
         }
         if let Err(e) = self.save_index() { self.index = previous; return Err(e); }

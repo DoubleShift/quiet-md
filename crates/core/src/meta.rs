@@ -3,7 +3,7 @@
 //! `[value, stamp]`, and reading takes, per (item, field), the value with the
 //! latest stamp across all devices' files (ties: the larger device id). An
 //! item is a document or folder by its id, with its place in `path` (folders
-//! end in `/`, `null`: removed); `_root` holds the root's own settings.
+//! end in `/`, `null`: removed); `_root` holds the top-level folder's own settings.
 //! A device keeps in its file only the fields it still wins.
 
 use super::*;
@@ -14,8 +14,8 @@ pub(super) const PURGED_KEPT_MS: u64 = 30 * 86_400_000;
 
 /// The folder in `.quiet/` holding one file per device.
 pub(super) const META: &str = "meta";
-/// The item holding the root's own settings (history limit, look …).
-pub(super) const ROOT_ITEM: &str = "_root";
+/// The item holding the top-level folder's own settings (history limit, look …).
+pub(super) const FOLDER_ITEM: &str = "_root";
 /// The fields of an item this build reads and writes; others (a newer
 /// build's) are kept as they are.
 pub(super) const KNOWN: &[&str] = &["path", "created", "modified", "pinned", "starred", "order", "root_order", "width", "catalogue_closed", "reading", "info", "refs_hidden"];
@@ -93,7 +93,7 @@ impl Merged {
     pub fn disk_index(&self) -> DiskIndex {
         let mut by_path: BTreeMap<String, Vec<&String>> = BTreeMap::new();
         for (id, fields) in &self.items {
-            if id == ROOT_ITEM { continue; }
+            if id == FOLDER_ITEM { continue; }
             if let Some(Value::String(p)) = fields.get("path").map(|w| &w.v) && !p.is_empty() { by_path.entry(p.clone()).or_default().push(id); }
         }
         let mut objs = vec![];
@@ -126,17 +126,17 @@ impl Merged {
             .filter_map(|(id, f)| Some((id.clone(), f.get("trashed").map(|w| &w.v).filter(|v| !v.is_null())?.clone()))).collect()
     }
 
-    /// The root's settings under `prefix` (`look.` …) as one object.
+    /// The top-level folder's settings under `prefix` (`look.` …) as one object.
     pub fn root_object(&self, prefix: &str) -> Value {
         let mut obj = serde_json::Map::new();
-        if let Some(fields) = self.items.get(ROOT_ITEM) {
+        if let Some(fields) = self.items.get(FOLDER_ITEM) {
             for (k, w) in fields { if let Some(k) = k.strip_prefix(prefix) && !w.v.is_null() { obj.insert(k.to_string(), w.v.clone()); } }
         }
         Value::Object(obj)
     }
 }
 
-/// Which field holds a page's place: `root_order` at the top of the root,
+/// Which field holds a page's place: `top_order` at the top of the top-level folder,
 /// `order` inside a folder (a path ending in `/` is a folder).
 fn place_field(path: &str) -> (&'static str, &'static str) {
     if path.trim_end_matches('/').contains('/') { ("order", "root_order") } else { ("root_order", "order") }
@@ -357,7 +357,7 @@ fn write_own(root: &Path, me: &Device, merged: &mut Merged) -> Result<()> {
 }
 
 /// This computer's id, made once and kept with its other local data; the
-/// same for every root (sync.md 3.6).
+/// same for every top-level folder (sync.md 3.6).
 pub fn device() -> Device {
     static DEVICE: std::sync::OnceLock<Device> = std::sync::OnceLock::new();
     let mut d = DEVICE.get_or_init(|| {
@@ -379,7 +379,7 @@ pub fn device() -> Device {
 
 /// The computer's name as the system shows it (macOS 电脑名称), handed in by
 /// the app at launch: the core does not ask the system. Set it before the
-/// first root opens; an empty name keeps the environment's.
+/// first top-level folder opens; an empty name keeps the environment's.
 pub fn set_device_name(name: &str) { *NAME.write().unwrap_or_else(|e| e.into_inner()) = name.trim().to_string(); }
 static NAME: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
 
@@ -481,7 +481,7 @@ pub(super) fn path_id(key: &str) -> String {
     uuid::Builder::from_sha1_bytes(b).into_uuid().to_string()
 }
 
-/// FORMAT 4 → 5: `index.json` and the root's settings become this device's
+/// FORMAT 4 → 5: `index.json` and the top-level folder's settings become this device's
 /// file, every field stamped now; `index.json` is kept as `index.json.v4`.
 /// The marker is written last, so a crash midway redoes it.
 pub(super) fn upgrade(root: &Path, me: &Device, warnings: &mut Vec<String>) -> Result<()> {
@@ -495,9 +495,9 @@ pub(super) fn upgrade(root: &Path, me: &Device, warnings: &mut Vec<String>) -> R
         for (k, v) in fields_of(key, a) { changes.push((id.clone(), k, v)); }
     }
     let settings: Value = reread(&internal.join("settings.json")).unwrap_or(Value::Null);
-    if let Some(n) = settings.get("history_limit").filter(|v| !v.is_null()) { changes.push((ROOT_ITEM.into(), "history_limit".into(), n.clone())); }
+    if let Some(n) = settings.get("history_limit").filter(|v| !v.is_null()) { changes.push((FOLDER_ITEM.into(), "history_limit".into(), n.clone())); }
     if let Some(Value::Object(look)) = settings.get("look") {
-        for (k, v) in look { changes.push((ROOT_ITEM.into(), format!("look.{k}"), v.clone())); }
+        for (k, v) in look { changes.push((FOLDER_ITEM.into(), format!("look.{k}"), v.clone())); }
     }
     if let Some(Value::Object(tops)) = settings.get("scroll_top") {
         for (id, v) in tops { if ids.contains(id) { changes.push((id.clone(), "scroll".into(), v.clone())); } }
@@ -543,7 +543,7 @@ pub(super) fn trashed_of(v: &Value) -> Option<Trashed> {
 }
 
 /// FORMAT 5 → 6 (sync.md 3.3): the 回收站's `trash/index.json` becomes this
-/// device's `trashed` fields, and the hand order (`order`, `root_order`)
+/// device's `trashed` fields, and the hand order (`order`, `top_order`)
 /// fractional indices in the order it had. This device's file is written
 /// first, the marker next and `trash/index.json` is kept as
 /// `index.json.v5` last, so a crash midway redoes it to the same result.
