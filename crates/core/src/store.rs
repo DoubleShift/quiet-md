@@ -457,11 +457,18 @@ fn lock_file(path: &Path) -> Result<crate::vfs::File> {
     Ok(f)
 }
 
-/// This computer's write lock on root `key` (sync.md 1.6): in local data, as
-/// a lock in the root would only travel to other devices and lock nothing
-/// there. Every copy of the app and the CLI on this computer opening the
-/// root by the same key share it.
-fn lock_path_for(root: &Path, key: &str) -> PathBuf { local_base(root).join("locks").join(format!("{key}.lock")) }
+/// This computer's write lock on the library at `root` (sync.md 1.6): in
+/// local data, as a lock in the root would only travel to other devices and
+/// lock nothing there. Named by the library id in `format.json`, which goes
+/// with the folder: the app (by 工作区 root key), the CLI and a lone
+/// `open_at` (by `library_key`) all take the same one. Without an id yet
+/// (before one is added, the old layout) it is `library_key`, and those
+/// formats take `.quiet/.lock` as well.
+fn lock_path_at(root: &Path) -> PathBuf {
+    let id = reread::<FormatMarker>(&root.join(INTERNAL).join("format.json")).map(|m| m.id).unwrap_or_default();
+    let name = if !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') { id } else { library_key(root) };
+    local_base(root).join("locks").join(format!("{name}.lock"))
+}
 
 /// A batch of writes (`Store::batch`): the lock is held throughout and the
 /// index is written once at the end, not once per document.
@@ -1304,7 +1311,7 @@ impl Store {
                 Some(m) => {
                     if migrate::legacy(&root) { migrate::finish(&root, &mut warnings); }
                     if m.id.is_empty() { let _ = write_atomic(&marker, &serde_json::to_vec_pretty(&FormatMarker { format: m.format, id: uuid::Uuid::new_v4().to_string() })?); }
-                    if m.format < 5 && sync_of(&root) == SyncService::Local && !tests::STAY_4.with(|k| k.get()) && let Err(e) = Self::upgrade_meta(&root, key, &me, &mut warnings) { warnings.push(format!("无法升级文档索引：{e}")); }
+                    if m.format < 5 && sync_of(&root) == SyncService::Local && !tests::STAY_4.with(|k| k.get()) && let Err(e) = Self::upgrade_meta(&root, &me, &mut warnings) { warnings.push(format!("无法升级文档索引：{e}")); }
                 }
                 None => {
                     crate::vfs::create_dir_all(&internal)?;
@@ -1355,8 +1362,8 @@ impl Store {
 
     /// FORMAT 4 → 5 under the locks a FORMAT 4 write takes: a copy opening
     /// the root at the same time waits, then finds it done.
-    fn upgrade_meta(root: &Path, key: &str, me: &Device, warnings: &mut Vec<String>) -> Result<()> {
-        let _locks = WriteLock(vec![lock_file(&lock_path_for(root, key))?, lock_file(&root.join(INTERNAL).join(".lock"))?]);
+    fn upgrade_meta(root: &Path, me: &Device, warnings: &mut Vec<String>) -> Result<()> {
+        let _locks = WriteLock(vec![lock_file(&lock_path_at(root))?, lock_file(&root.join(INTERNAL).join(".lock"))?]);
         if Self::format_at(root) >= 5 { return Ok(()); }
         meta::upgrade(root, me, warnings)
     }
@@ -1406,14 +1413,20 @@ impl Store {
     fn index_file(&self) -> PathBuf { self.internal().join("index.json") }
     fn trash_index_file(&self) -> PathBuf { self.internal().join("trash").join("index.json") }
     fn local_file(&self) -> PathBuf { local_file_for(&self.root, &self.key) }
-    fn lock_path(&self) -> PathBuf { lock_path_for(&self.root, &self.key) }
+    fn lock_path(&self) -> PathBuf { lock_path_at(&self.root) }
 
     /// The write locks, this computer's first. Before FORMAT 5 older builds,
     /// which may have the library open too, lock `.quiet/.lock` (the top's
     /// `.lock` in the old layout), so that one is held as well; FORMAT 5,
     /// which they cannot open, no longer makes it.
     fn lock_files(&self, v5: bool) -> Result<Vec<crate::vfs::File>> {
-        let mut held = vec![lock_file(&self.lock_path())?];
+        let mut held = loop {
+            let path = self.lock_path();
+            let f = lock_file(&path)?;
+            // A new library id meanwhile (`renew_library_id`): take the new one's.
+            if self.lock_path() == path { break vec![f] }
+            let _ = f.unlock();
+        };
         if !v5 { held.push(lock_file(&self.internal().join(".lock"))?); }
         Ok(held)
     }
@@ -3802,8 +3815,9 @@ mod tests {
     #[test]
     fn the_write_lock_is_local_and_shared_by_the_key() {
         let lib = Lib::new("local-lock");
+        // The app opens a root by its 工作区 key, the CLI and `open_at` by `library_key`: one lock still.
+        let mut a = Store::open_as(lib.0.clone(), &uuid::Uuid::new_v4().to_string(), device()).unwrap();
         let key = library_key(&lib.0);
-        let mut a = Store::open_as(lib.0.clone(), &key, device()).unwrap();
         a.create_from(&doc("甲")).unwrap();
         // FORMAT 5 makes no lock in the root: it would only travel to other devices.
         assert!(a.lock_path().fs_is_file() && !lib.0.join(".quiet/.lock").fs_exists());
@@ -3827,6 +3841,13 @@ mod tests {
         let mut titles: Vec<String> = a.list().into_iter().map(|e| e.title).collect();
         titles.sort();
         assert_eq!(titles, ["丙", "乙", "甲"]);
+        // Named by the library id, and a new id (a folder copied whole) moves it.
+        let was = a.lock_path();
+        assert!(was.ends_with(format!("{}.lock", a.library_id())));
+        a.renew_library_id().unwrap();
+        assert!(a.lock_path() != was && a.lock_path().ends_with(format!("{}.lock", a.library_id())));
+        a.create_from(&doc("丁")).unwrap();
+        assert!(a.lock_path().fs_is_file());
     }
 
     #[test]
