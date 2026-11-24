@@ -34,6 +34,10 @@ pub struct Options<'a> {
     /// read as pictures (`wiki_images`): `original` is read the same way, so an
     /// untouched embed is matched and written back as `![[…]]`.
     pub wiki: Option<(&'a Path, Option<&'a Path>)>,
+    /// The folder of a library Markdown file written in place (`base` is None
+    /// there): its pictures and files are written relative to it, as `base`'s
+    /// are, and the original's relative sources read from it (`resolve_present`).
+    pub dir: Option<&'a Path>,
 }
 
 pub struct Export {
@@ -234,26 +238,28 @@ impl Writer<'_> {
     }
 
     /// A source as the file being written should say it: relative to the
-    /// file's folder when under it; a library asset (`.assets/…`) stays
-    /// relative in the library and becomes absolute outside it.
+    /// file's folder (`base`, or `dir` in the library), with `/` and `../` as
+    /// needed, so it still works when the folder moves; a library asset used by
+    /// a file outside the library is copied beside it. Absolute only where no
+    /// relative path reaches (another drive) or when asked to (`absolute`).
     fn keep(&mut self, src: &str, image: bool) -> String {
         if src.contains("://") && !src.starts_with("file://") || src.starts_with("data:") {
             return src.to_string();
         }
-        if self.opts.base.is_none() && !self.opts.absolute { return src.to_string() }
+        if self.opts.base.is_none() && self.opts.dir.is_none() && !self.opts.absolute { return src.to_string() }
         let raw = Path::new(src.strip_prefix("file://").unwrap_or(src));
         let root = self.opts.library_dir.map(Path::to_path_buf).unwrap_or_else(crate::store::Store::active_dir);
         // Relative sources left after `parse_file` are the library's (`.assets/…`).
         let abs = if raw.fs_is_absolute() { raw.to_path_buf() } else { root.join(raw) };
-        let Some(base) = self.opts.base else { return abs.to_string_lossy().into_owned() };
+        let Some(base) = self.opts.base.or(self.opts.dir) else { return abs.to_string_lossy().into_owned() };
         if let Ok(rel) = abs.strip_prefix(base) {
             return rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
         }
         // The library's own image or attachment: a copy beside the file.
         let assets = crate::store::Store::assets_in(&root);
-        match self.opts.name.filter(|_| abs.starts_with(&assets) && abs.fs_is_file()) {
+        match self.opts.name.filter(|_| self.opts.base.is_some() && abs.starts_with(&assets) && abs.fs_is_file()) {
             Some(name) => self.beside(&abs, base, name, image),
-            None => abs.to_string_lossy().into_owned(),
+            None => relative(&abs, base).unwrap_or_else(|| abs.to_string_lossy().into_owned()),
         }
     }
 
@@ -316,6 +322,49 @@ impl Writer<'_> {
 }
 
 /// A link target that survives the parser: spaces and parentheses escaped.
+/// `path` from the folder `from`, `/`-separated, with `../` up to where they
+/// part; None when no relative path reaches it (another drive, or not absolute).
+fn relative(path: &Path, from: &Path) -> Option<String> {
+    if !path.fs_is_absolute() || !from.fs_is_absolute() { return None }
+    let (path, from) = (lexical(path), lexical(from));
+    let (p, f): (Vec<_>, Vec<_>) = (path.components().collect(), from.components().collect());
+    let same = p.iter().zip(&f).take_while(|(a, b)| a == b).count();
+    // Another drive (Windows' `C:` against `D:`): nothing in common to count from.
+    if same == 0 { return None }
+    let up = std::iter::repeat_n("..".to_string(), f.len() - same);
+    Some(up.chain(p[same..].iter().map(|c| c.as_os_str().to_string_lossy().into_owned())).collect::<Vec<_>>().join("/"))
+}
+
+/// `path` with its `.` and `..` folded away, without asking the disk.
+fn lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir if matches!(out.components().next_back(), Some(Component::Normal(_))) => { out.pop(); }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// `resolve_images` for a library Markdown file: a relative source is read
+/// from the file's folder when the file is there; otherwise it stays as it
+/// was, the library's own (`.assets/…`, as older builds wrote it).
+pub fn resolve_present(blocks: &mut [Block], dir: &Path) {
+    for b in blocks.iter_mut() {
+        resolve_present(&mut b.children, dir);
+        if let BlockKind::Table(t) = &mut b.kind {
+            for cell in t.rows.iter_mut().flatten() { resolve_present(&mut cell.blocks, dir); }
+        }
+        let BlockKind::Image { src, .. } = &mut b.kind else { continue };
+        if src.contains("://") || src.starts_with("data:") || Path::new(src.as_str()).fs_is_absolute() { continue }
+        let path = lexical(&dir.join(percent_decode(src)));
+        if path.fs_is_file() { *src = path.to_string_lossy().into_owned(); }
+    }
+}
+
 fn link_target(s: &str) -> String {
     s.replace(' ', "%20").replace('(', "%28").replace(')', "%29")
 }
@@ -622,7 +671,7 @@ pub fn write_file(doc: &Document, front: &str, base: Option<&Path>) -> String {
 /// `write_file` with the copies to make beside a 本机文件 (`Export::files`,
 /// relative to the file's folder).
 pub fn write_file_with(doc: &Document, front: &str, opts: &Options) -> Export {
-    let opts = Options { in_place: true, library_dir: opts.library_dir, base: opts.base, name: opts.name, copied: opts.copied, original: opts.original, wiki: opts.wiki, ..Default::default() };
+    let opts = Options { in_place: true, library_dir: opts.library_dir, base: opts.base, name: opts.name, copied: opts.copied, original: opts.original, wiki: opts.wiki, dir: opts.dir, ..Default::default() };
     let mut w = Writer { opts: &opts, files: vec![], generated: vec![], missing: 0 };
     let pieces = w.pieces(&doc.blocks);
     let canonical = joined(&pieces);
@@ -652,6 +701,7 @@ fn preserve(original: &str, pieces: &[Piece], opts: &Options, strict: bool) -> S
     let (mut blocks, spans) = crate::paste::markdown_to_blocks_with_lines(&norm, crate::paste::Off { file: true, alt: true, ..Default::default() });
     if blocks.len() != spans.len() { return joined(pieces); }
     if let Some(dir) = opts.base { resolve_images(&mut blocks, dir); }
+    if let Some(dir) = opts.dir { resolve_present(&mut blocks, dir); }
     if let Some((dir, vault)) = opts.wiki { wiki_images(&mut blocks, dir, vault); }
     // The file's blocks as written now, each with the lines it came from.
     let mut old: Vec<(String, (usize, usize))> = vec![];
@@ -741,6 +791,7 @@ fn joined(pieces: &[Piece]) -> String {
 fn reads_as(body: &str, canonical: &str, opts: &Options) -> bool {
     let mut blocks = crate::paste::markdown_to_blocks(body, crate::paste::Off { file: true, alt: true, ..Default::default() });
     if let Some(dir) = opts.base { resolve_images(&mut blocks, dir); }
+    if let Some(dir) = opts.dir { resolve_present(&mut blocks, dir); }
     if let Some((dir, vault)) = opts.wiki { wiki_images(&mut blocks, dir, vault); }
     let mut w = Writer { opts, files: vec![], generated: vec![], missing: 0 };
     joined(&w.pieces(&blocks)) == canonical
@@ -1295,8 +1346,9 @@ mod tests {
         crate::vfs::write(root.join(".obsidian/app.json"), r#"{"attachmentFolderPath":"files"}"#).unwrap();
         crate::vfs::write(root.join("files/a.png"), b"png").unwrap();
         let src = "intro\n\n![[a.png|300]]\n\n![[a.png]]\n\n![[Note]]\n\nend\n";
-        let opts = |o| Options { wiki: Some((notes.as_path(), None)), original: Some(o), ..Default::default() };
-        let read = |text: &str| { let mut d = parse_file(text, "t", None); wiki_images(&mut d.blocks, &notes, None); d };
+        let opts = |o| Options { wiki: Some((notes.as_path(), None)), original: Some(o), dir: Some(&notes), ..Default::default() };
+        // As `Store::parse_doc` reads a library file.
+        let read = |text: &str| { let mut d = parse_file(text, "t", None); resolve_present(&mut d.blocks, &notes); wiki_images(&mut d.blocks, &notes, None); d };
         let mut doc = read(src);
         assert_eq!(doc.blocks.iter().filter(|b| matches!(b.kind, BlockKind::Image { .. })).count(), 2);
         assert_eq!(write_file_with(&doc, "", &opts(src)).text, src);
@@ -1305,20 +1357,64 @@ mod tests {
         assert_eq!(out, src.replace("intro", "first"));
         // Read again, it is the same document; and stable from then on.
         assert_eq!(write_file_with(&read(&out), "", &opts(&out)).text, out);
-        // Another picture in its place is written the way Markdown writes one.
-        let b = root.join("files/b.png");
-        if let BlockKind::Image { src, .. } = &mut doc.blocks[2].kind { *src = b.to_string_lossy().into_owned(); }
+        // Another picture in its place is written the way Markdown writes one,
+        // relative to the file's folder (`../`, `/`), never as an absolute path.
+        crate::vfs::write(root.join("files/b.png"), b"png").unwrap();
+        if let BlockKind::Image { src, .. } = &mut doc.blocks[2].kind { *src = root.join("files").join("b.png").to_string_lossy().into_owned(); }
         let out = write_file_with(&doc, "", &opts(src)).text;
-        assert_eq!(out, src.replace("intro", "first").replace("![[a.png]]", &format!("![]({})", link_target(&b.to_string_lossy()))));
+        assert_eq!(out, src.replace("intro", "first").replace("![[a.png]]", "![](../files/b.png)"));
+        assert_relative(&out);
+        // Read again (relative to the file's folder), it is the same picture.
+        let again = read(&out);
+        assert!(matches!(&again.blocks[2].kind, BlockKind::Image { src, .. } if Path::new(src) == root.join("files").join("b.png")), "{:?}", again.blocks[2]);
         // A width Markdown can't hold is an `<img>` line, which reads back with it.
         if let BlockKind::Image { width, .. } = &mut doc.blocks[1].kind { *width = Some(120.); }
         let out = write_file_with(&doc, "", &opts(src)).text;
-        let a = root.join("files/a.png");
-        assert!(out.contains(&format!("<img src=\"{}\" width=\"120\">", a.to_string_lossy())), "{out}");
+        assert!(out.contains("<img src=\"../files/a.png\" width=\"120\">"), "{out}");
+        assert_relative(&out);
+        let a = root.join("files").join("a.png");
         assert!(read(&out).blocks.iter().any(|b| matches!(&b.kind, BlockKind::Image { src, width: Some(w), .. } if Path::new(src) == a && *w == 120.)));
-        // Written fresh (an import): the width as `<img>`, the rest as `![](…)`.
-        let out = write_file(&read(src), "", None);
-        assert!(out.contains(&format!("<img src=\"{}\" width=\"300\">", a.to_string_lossy())) && out.contains(&format!("![]({})", link_target(&a.to_string_lossy()))), "{out}");
+        // Written fresh (an import into the library): the width as `<img>`, the rest as `![](…)`, both relative.
+        let out = write_file_with(&read(src), "", &Options { dir: Some(&notes), ..Default::default() }).text;
+        assert!(out.contains("<img src=\"../files/a.png\" width=\"300\">") && out.contains("![](../files/a.png)"), "{out}");
+        assert_relative(&out);
+        let _ = crate::vfs::remove_dir_all(&root);
+    }
+
+    /// No picture in `out` is an absolute path: no drive (`C:`), no leading `/` or `\\`.
+    fn assert_relative(out: &str) {
+        let srcs = out.lines().filter_map(|l| l.split_once("](").map(|(_, r)| r.trim_end_matches(')')).or_else(|| l.split_once("src=\"").map(|(_, r)| r.split('"').next().unwrap())));
+        for s in srcs {
+            let drive = s.as_bytes().get(1) == Some(&b':') && s.as_bytes()[0].is_ascii_alphabetic();
+            assert!(!drive && !s.starts_with('/') && !s.starts_with('\\') && !s.contains('\\'), "{s} in {out}");
+        }
+    }
+
+    /// Written in place, a picture is relative to the Markdown file's folder:
+    /// one below it as `pics/a.png`, one beside a parent as `../files/b.png`,
+    /// on any platform with `/`. A local file (`base`) the same way.
+    #[test]
+    fn in_place_pictures_are_relative_to_the_file() {
+        let root = crate::vfs::temp_dir().join(format!("fdl-relative-{}", uuid::Uuid::new_v4()));
+        let notes = root.join("notes");
+        for d in ["notes/pics", "files", "far/away"] { crate::vfs::create_dir_all(root.join(d)).unwrap(); }
+        for f in ["notes/pics/a.png", "files/b.png", "far/away/c.png"] { crate::vfs::write(root.join(f), b"png").unwrap(); }
+        let pic = |p: PathBuf, w: Option<f32>| Block::new(BlockKind::Image { src_kind: "src".into(), src: p.to_string_lossy().into_owned(), width: w, height: None, caption: None, crop: None }, RichText::default());
+        let doc = Document { blocks: vec![pic(notes.join("pics").join("a.png"), None), pic(root.join("files").join("b.png"), Some(50.)), pic(root.join("far").join("away").join("c.png"), None)], ..Default::default() };
+        let want = "![](pics/a.png)\n\n<img src=\"../files/b.png\" width=\"50\">\n\n![](../far/away/c.png)\n";
+        assert_eq!(write_file_with(&doc, "", &Options { dir: Some(&notes), ..Default::default() }).text, want);
+        assert_eq!(write_file(&doc, "", Some(&notes)), want);
+        assert_relative(want);
+        // Read back from the file's folder, each is the picture it was.
+        let mut back = parse_file(want, "t", None);
+        resolve_present(&mut back.blocks, &notes);
+        let srcs: Vec<_> = back.blocks.iter().filter_map(|b| match &b.kind { BlockKind::Image { src, .. } => Some(PathBuf::from(src)), _ => None }).collect();
+        assert_eq!(srcs, [notes.join("pics/a.png"), root.join("files/b.png"), root.join("far/away/c.png")]);
+        // A local file's `../` source, read with `resolve_images`, is written back as it was.
+        let mut local = parse_file("![](../files/b.png)\n", "t", Some(&notes));
+        local.blocks[0].align = Align::Left;
+        assert_eq!(write_file(&local, "", Some(&notes)), "![](../files/b.png)\n");
+        assert!(srcs.iter().all(|p| p.fs_is_file()));
         let _ = crate::vfs::remove_dir_all(&root);
     }
 

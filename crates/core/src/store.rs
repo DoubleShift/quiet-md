@@ -1867,6 +1867,8 @@ impl Store {
             return Ok(doc);
         }
         let mut doc = crate::markdown::parse_file(text, &self.markdown_title(id), self.base(id).as_deref());
+        // A library file's `![](pics/a.png)` is beside it, as anywhere else.
+        if self.base(id).is_none() && let Some(dir) = self.path(id).parent() { crate::markdown::resolve_present(&mut doc.blocks, dir); }
         // Obsidian's `![[picture.png]]` shows as the picture; the file keeps saying `![[…]]`.
         if text.contains("![[") && let Some((dir, vault)) = self.wiki_dirs(id) { crate::markdown::wiki_images(&mut doc.blocks, &dir, Some(&vault)); }
         // Images a Markdown file carries inline (#133) become assets, so the
@@ -1896,9 +1898,12 @@ impl Store {
         let name = base.is_some().then(|| self.markdown_title(id));
         let copied = self.copied.borrow();
         let wiki = disk.filter(|d| d.contains("![[")).and_then(|_| self.wiki_dirs(id));
+        // A library file's pictures are written relative to its folder too, never as absolute paths.
+        let file = self.path(id);
+        let dir = file.parent().filter(|_| base.is_none());
         let out = crate::markdown::write_file_with(doc, front, &crate::markdown::Options {
             library_dir: Some(&self.top_dir), base: base.as_deref(), name: name.as_deref(), copied: copied.get(id), original: disk,
-            wiki: wiki.as_ref().map(|(d, v)| (d.as_path(), Some(v.as_path()))), ..Default::default()
+            wiki: wiki.as_ref().map(|(d, v)| (d.as_path(), Some(v.as_path()))), dir, ..Default::default()
         });
         let bom = if disk.is_some_and(|d| d.starts_with('\u{feff}')) { "\u{feff}" } else { "" };
         (format!("{bom}{}", out.text), out.files)
@@ -2631,7 +2636,9 @@ impl Store {
             self.index.insert(id.clone(), Meta { created: t, modified: t, rel, ..Default::default() });
             derive_tree(&mut self.index);
         }
-        let text = format!("{front}{}", crate::markdown::write_file(doc, "", None));
+        // Its pictures relative to its folder, as a save writes them: the library can move.
+        let file = self.path(&id);
+        let text = format!("{front}{}", crate::markdown::write_file_with(doc, "", &crate::markdown::Options { library_dir: Some(&self.top_dir), dir: file.parent(), ..Default::default() }).text);
         if let Err(e) = self.write_file(&self.path(&id), text.as_bytes()).and_then(|_| self.save_index()) { self.index.remove(&id); return Err(e); }
         self.record_file_change(&id, None);
         drop(lock);
@@ -3786,7 +3793,7 @@ mod tests {
         let in_lib = s.list().into_iter().find(|e| e.meta.rel == "vault/notes/Embeds.md").unwrap().id;
         let local = s.open_local(&outside.join("notes/Embeds.md")).unwrap();
         let real = |p: &Path| p.fs_canonicalize().unwrap();
-        for (id, v) in [(in_lib, lib.0.join("vault")), (local, outside.clone())] {
+        for (id, v) in [(in_lib, lib.0.join("vault")), (local.clone(), outside.clone())] {
             let mut doc = s.load_for_edit(&id, false).unwrap();
             let pics: Vec<(PathBuf, Option<f32>)> = doc.blocks.iter().filter_map(|b| match &b.kind {
                 crate::model::BlockKind::Image { src, width, .. } => Some((real(Path::new(src)), *width)),
@@ -3802,6 +3809,23 @@ mod tests {
             *doc.blocks.last_mut().unwrap() = crate::model::Block::text("the end");
             s.save(&id, &doc).unwrap();
             assert_eq!(crate::vfs::read_to_string(&file).unwrap(), md.replace("\nend\n", "\nthe end\n"));
+            // A changed picture is written relative to the file's folder, with `/`; a library
+            // picture too (beside it for a file outside the library). Never an absolute path.
+            if let crate::model::BlockKind::Image { width, .. } = &mut doc.blocks[2].kind { *width = Some(120.); }
+            let asset = Store::assets_in(s.top_dir()).join("pasted.png");
+            crate::vfs::create_dir_all(asset.parent().unwrap()).unwrap();
+            crate::vfs::write(&asset, b"png").unwrap();
+            doc.blocks.push(crate::model::Block::new(crate::model::BlockKind::Image { src_kind: "src".into(), src: asset.to_string_lossy().into_owned(), width: None, height: None, caption: None, crop: None }, Default::default()));
+            s.save(&id, &doc).unwrap();
+            let pasted = if id == local { "Embeds.assets/Embeds-1.png" } else { "../../.assets/pasted.png" };
+            let want = md.replace("\nend\n", "\nthe end\n").replace("![[red.png|300]]", "<img src=\"../attachments/red.png\" width=\"120\">") + &format!("\n![]({pasted})\n");
+            assert_eq!(crate::vfs::read_to_string(&file).unwrap(), want);
+            // Read back, the same pictures.
+            let back = s.load_for_edit(&id, false).unwrap();
+            let srcs: Vec<PathBuf> = back.blocks.iter().filter_map(|b| match &b.kind { crate::model::BlockKind::Image { src, .. } => Some(real(Path::new(src))), _ => None }).collect();
+            assert_eq!(srcs.len(), 5);
+            assert_eq!(srcs[1], real(&v.join("attachments/red.png")));
+            if id != local { assert_eq!(srcs[4], real(&asset)); }
         }
         let _ = crate::vfs::remove_dir_all(&outside);
     }

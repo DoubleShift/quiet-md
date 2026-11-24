@@ -963,6 +963,10 @@ mod tests {
         assert_eq!(pics.iter().map(|p| p.1).collect::<Vec<_>>(), [None, Some(300.), None, None], "{text}");
         assert!(pics.iter().all(|(p, _)| p.starts_with(&assets) && p.is_file()), "{text}");
         assert!(text.contains("width=\"300\"") && text.trim_end().ends_with("![[Other]]") && !text.contains("![[red"), "{text}");
+        // Relative to the file, so the library can move: `.assets/…` beside it, or `../.assets/…` from a folder.
+        let rel = store.file_path(&e.id).unwrap().parent().unwrap().strip_prefix(tmp.join("library")).unwrap().components().count();
+        let up = "../".repeat(rel);
+        assert!(!text.contains(&*tmp.to_string_lossy()) && text.matches(&format!("({up}.assets/")).count() == 3 && text.contains(&format!("src=\"{up}.assets/")), "{text}");
         std::fs::remove_dir_all(tmp).unwrap();
     }
 
