@@ -37,14 +37,14 @@ A document can have child pages without a second kind of tree. **A folder holdin
 Quiet.md/
 └── Plan/
     ├── Plan.xml        The page "Plan" (the folder's own document)
-    ├── Budget.md       A child page of "Plan"
+    ├── Budget.md       A child page of "Plan" (a Markdown file, which has no child pages of its own)
     └── Schedule/
         ├── Schedule.xml   A child page of "Plan" with child pages of its own
         └── Week 1.xml
 ```
 
-- **The rule reads only the disk.** The folder `X/` and the file `X/X.xml` or `X/X.md` must have the same name (exact, after the escaping of `layout::file_name_for`). A `.excalidraw` or `.sqlite` file never is the folder's document. When both `X.xml` and `X.md` exist, `X.xml` is it and `X.md` is an ordinary child page. `index.json` has no field for this and `store::FORMAT` is unchanged, so older builds read the same files as a folder holding a document.
-- **Shown as a document.** The sidebar and Home show the folder as one document row or card with the document's title, icon and format, and an expand arrow when there are other entries in it. Opening it opens `X/X.*`. The document is not repeated among the children, search and @-mentions list it once (as the document), and its breadcrumbs stop above the folder.
+- **The rule reads only the disk.** The folder `X/` and the file `X/X.xml` must have the same name (exact, after the escaping of `layout::file_name_for`). Only a document (`.xml`) is ever the folder's document: `X/X.md` is an ordinary Markdown file in an ordinary folder `X/`, and a `.excalidraw` or `.sqlite` file never is it either. Markdown files take no child pages, so 新建子文档 is not offered on them. `index.json` has no field for this and `store::FORMAT` is unchanged, so older builds read the same files as a folder holding a document.
+- **Shown as a document.** The sidebar and Home show the folder as one document row or card with the document's title and icon, and an expand arrow when there are other entries in it. Opening it opens `X/X.xml`. The document is not repeated among the children, search and @-mentions list it once (as the document), and its breadcrumbs stop above the folder.
 - **Adding the first child page** (the row's hover "+", or 新建子文档 in the row and document "…" menus) creates `X/` where `X.xml` was, moves the document into it as `X/X.xml` (first in the folder's order, the folder taking the document's place), then creates the new page last in the folder. Links to the moved document and from it are rewritten as for any move. The steps are one entry in the file-operation undo history. A document already in its folder gets the new page directly. The folder is named after the file (`Plan (2).xml` gives `Plan (2)/Plan (2).xml`), numbered when the name is taken.
 - **The pair keeps one name.** Renaming the document (in the editor or the sidebar) renames the folder and then the file after the folder. A child page that already holds that name inside the folder is numbered first. Moving, dragging and deleting the row act on the whole folder, and dropping something on the row puts it in the folder.
 - **Without children the folder stays.** When the last child page is moved out or deleted, `X/X.xml` is left as it is and still shows as a plain document. Undoing 新建子文档 moves the document back out and removes the empty folder.

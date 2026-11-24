@@ -4630,6 +4630,10 @@ mod tests {
         assert!(!s.can_have_children(&f) && s.create_child(&f, &doc("x")).is_err());
         let board = s.create_board_in("板", &crate::whiteboard::Board::default(), None).unwrap();
         assert!(!s.can_have_children(&board));
+        // Nor a Markdown file: it stays where it is, no folder is made.
+        let md = s.create_markdown(&doc("笔记"), "").unwrap();
+        assert!(!s.can_have_children(&md) && s.create_child(&md, &doc("x")).is_err());
+        assert!(s.abs("笔记.md").fs_is_file() && !s.abs("笔记").fs_exists() && s.folder_of_note(&md).is_none());
     }
 
     /// Renaming a page with children renames its folder and its file
@@ -4698,9 +4702,10 @@ mod tests {
     }
 
     /// A library v0.1.11 moved to real folders reads its old child pages as
-    /// child pages again, and a hand-made `X/X.md` does too.
+    /// child pages again. A hand-made `X/X.md` does not make `X` a page: it
+    /// is a plain Markdown file in a plain folder.
     #[test]
-    fn migrated_and_hand_made_pages_have_children() {
+    fn migrated_pages_have_children_markdown_ones_do_not() {
         let lib = Lib::new("subdoc-migrated");
         let mut old = Old::new(&lib, 1);
         let p = old.doc("父", Meta::default());
@@ -4714,14 +4719,20 @@ mod tests {
         crate::vfs::create_dir_all(lib.0.join("手写")).unwrap();
         crate::vfs::write(lib.0.join("手写/手写.md"), "# 手写\n").unwrap();
         crate::vfs::write(lib.0.join("手写/别的.md"), "x\n").unwrap();
-        // An XML 正文 wins over a Markdown one of the same name.
+        // Beside an XML 正文 of the same name, the Markdown one is a child page.
         crate::vfs::create_dir_all(lib.0.join("双")).unwrap();
         crate::vfs::write(lib.0.join("双/双.md"), "x\n").unwrap();
         crate::vfs::write(lib.0.join("双/双.xml"), docxml::serialize(&doc("双"))).unwrap();
         let list = s.list();
         let by_rel = |rel: &str| list.iter().find(|e| e.meta.rel == rel).unwrap();
-        assert_eq!(by_rel("手写").note.as_deref(), Some(by_rel("手写/手写.md").id.as_str()));
+        let (hand, md) = (by_rel("手写"), by_rel("手写/手写.md"));
+        assert!(hand.note.is_none() && hand.meta.folder.is_some() && hand.title == "手写");
+        assert_eq!(md.meta.parent.as_deref(), Some(hand.id.as_str()));
+        assert!(s.folder_of_note(&md.id).is_none() && s.note_of(&hand.id).is_none() && !s.can_have_children(&hand.id));
+        assert_eq!(by_rel("手写/别的.md").meta.parent.as_deref(), Some(hand.id.as_str()));
         assert_eq!(by_rel("双").note.as_deref(), Some(by_rel("双/双.xml").id.as_str()));
+        assert_eq!(by_rel("双/双.md").meta.parent.as_deref(), Some(by_rel("双").id.as_str()));
+        assert!(s.folder_of_note(&by_rel("双/双.md").id).is_none());
         // A 画板 is never a 正文.
         crate::vfs::create_dir_all(lib.0.join("板")).unwrap();
         crate::vfs::write(lib.0.join("板/板.excalidraw"), crate::whiteboard::Board::default().file_json()).unwrap();

@@ -155,7 +155,7 @@ impl Workspace {
     pub(crate) fn takes_children(&self, id: &str) -> bool {
         self.entries.iter().find(|e| e.id == id).is_some_and(|e| match e.meta.folder {
             Some(_) => e.note.is_some(),
-            None => !e.meta.local() && e.meta.kind.is_doc() && self.store.can_have_children(id),
+            None => !e.meta.local() && e.meta.kind.is_doc() && !e.meta.markdown && self.store.can_have_children(id),
         })
     }
 

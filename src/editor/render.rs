@@ -1504,6 +1504,7 @@ impl Editor {
             window.request_animation_frame();
         }
         let focused = self.focus.is_focused(window);
+        self.touch_frame(focused, window, cx);
         self.sync_items(focused, super::cover::cover_height(window));
         let generation = self.core.generation;
         let (units, eqnos) = match self.frame.generation == Some(generation) {
@@ -1575,12 +1576,18 @@ impl Editor {
                         }
                     });
                 }
-                // Touch screens (iOS): long press to select.
+                // Touch screens (iOS): long press to select, selection handles.
                 {
                     let e = entity.clone();
                     window.on_mouse_event(move |ev: &LongPressEvent, phase, window, cx| {
                         if phase == DispatchPhase::Bubble && (ev.phase != TouchPhase::Started || bounds.contains(&ev.start_position)) {
                             e.update(cx, |ed, cx| ed.on_long_press(ev, window, cx));
+                        }
+                    });
+                    let e = entity.clone();
+                    window.on_mouse_event(move |ev: &TouchDragEvent, phase, window, cx| {
+                        if phase == DispatchPhase::Bubble && (ev.phase != TouchPhase::Started || bounds.contains(&ev.start_position)) {
+                            e.update(cx, |ed, cx| ed.on_touch_drag(ev, window, cx));
                         }
                     });
                 }
@@ -1734,7 +1741,8 @@ impl Editor {
                     ed.end_block_drag(Some(ev.position), window, cx);
                     ed.button_release(ev.position, cx);
                     ed.gap_release(ev.position, window, cx);
-                    ed.end_drag(Some(ev.position), cx)
+                    ed.end_drag(Some(ev.position), cx);
+                    ed.touch_up(ev, window, cx)
                 }),
             );
         self.register_actions(root, cx)

@@ -179,6 +179,8 @@ pub struct Editor {
     pub dragging: bool,
     /// A touch long press selected a word and its drag extends the selection (iOS).
     pub(super) long_press: bool,
+    /// Touch mode: selection handles, the edit menu, a tap's block handle (`touch.rs`).
+    pub(super) touch: super::touch::Touch,
     /// Text drag: the pointer's last position and when the page last scrolled
     /// under it (`text_autoscroll`).
     drag_at: Option<Point<Pixels>>,
@@ -446,6 +448,7 @@ impl Editor {
             marked: None,
             dragging: false,
             long_press: false,
+            touch: Default::default(),
             drag_at: None,
             drag_scrolled: None,
             drag_active: None,
@@ -2491,6 +2494,9 @@ impl Editor {
 
     pub fn on_mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
+        let was = self.core.sel.is_collapsed().then_some(self.core.sel.head);
+        self.touch.menu = false;
+        self.touch_down(ev, window, cx);
         self.reminder_blur(window, cx);
         self.menu = None;
         self.menu_hovered = false;
@@ -2545,9 +2551,11 @@ impl Editor {
             self.set_caret(pos, false);
             self.caret_row_end = at_row_end.then_some((pos.block, pos.offset));
         }
+        self.touch_tap(was, ev.click_count, window, cx);
         // A click out of a `$x$` typed delimiters first makes it an equation.
         if self.core.equation_on_leave() { self.changed_preserving_viewport(window, cx); }
-        self.dragging = ev.click_count == 1;
+        // A finger moving pans the page: a tap starts no text drag (the handles do that).
+        self.dragging = ev.click_count == 1 && (!self.touch.on || self.touch.pinned);
         self.restart_blink(window, cx);
         cx.notify();
     }
@@ -2607,11 +2615,24 @@ impl Editor {
     /// Touch: a long press selects the word under it (as a double click does)
     /// and moving the finger extends the selection.
     pub(super) fn on_long_press(&mut self, ev: &LongPressEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.touched(cx);
+        if ev.phase != TouchPhase::Moved { log::info!("touch: long press {:?} at {:?}", ev.phase, ev.position) }
         match ev.phase {
             TouchPhase::Started => {
                 let Some((pos, _)) = self.pos_at(ev.position) else { return };
                 let text = self.core.text_of(pos.block).map(|t| t.text.clone()).unwrap_or_default();
-                if text.is_empty() { return; }
+                // An image, a divider ...: nothing to select or put a caret in.
+                if pos.block != TITLE && !self.core.block(pos.block).is_some_and(|b| b.kind.has_text()) { return; }
+                // On the caret, or on an empty line: the caret's menu (粘贴 / 选择 / 全选).
+                if text.is_empty() || self.core.sel == Selection::caret(pos) {
+                    window.focus(&self.focus, cx);
+                    if text.is_empty() { self.core.clear_block_sel(); self.set_caret(pos, false); }
+                    self.touch.menu = true;
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    return cx.notify();
+                }
+                self.touch.menu = false;
                 window.focus(&self.focus, cx);
                 self.core.clear_block_sel();
                 self.goal_x = None;
@@ -2628,7 +2649,12 @@ impl Editor {
                 cx.notify();
             }
             TouchPhase::Moved if self.long_press => self.drag_to(ev.position, cx),
-            TouchPhase::Ended | TouchPhase::Cancelled => self.long_press = false,
+            // Let go of a word or what the drag reached: its menu.
+            TouchPhase::Ended | TouchPhase::Cancelled if self.long_press => {
+                self.long_press = false;
+                self.touch.menu = true;
+                cx.notify();
+            }
             _ => {}
         }
     }
@@ -2693,6 +2719,9 @@ impl Editor {
     }
 
     pub fn on_hover_move(&mut self, ev: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.touch.moused() {
+            cx.notify();
+        }
         if self.resizing_image() {
             return match ev.pressed_button {
                 Some(MouseButton::Left) => self.resize_to(ev.position.x, cx),
@@ -2744,25 +2773,29 @@ impl Editor {
         if ev.pressed_button.is_some() || matches!(self.menu, Some(Menu::Block { .. }) | Some(Menu::Add { .. })) {
             return;
         }
-        let best = {
-            let bb = self.block_bounds.borrow();
-            let mut best: Option<(f32, BlockId)> = None;
-            for id in &self.handle_targets {
-                let Some(b) = bb.get(id) else { continue };
-                let ext = Bounds::from_corners(point(b.left() - px(60.), b.top()), b.bottom_right());
-                if ext.contains(&p) {
-                    let area = f32::from(b.size.width) * f32::from(b.size.height);
-                    if best.is_none_or(|(a, _)| area < a) {
-                        best = Some((area, *id));
-                    }
-                }
-            }
-            best.map(|(_, id)| id)
-        };
+        let best = self.hover_target(p);
         if best.is_some() && best != self.hover {
             self.hover = best;
             cx.notify();
         }
+    }
+
+    /// The block whose handle `p` would show: the smallest handle target
+    /// under it, or in the 60px left of one.
+    pub(super) fn hover_target(&self, p: Point<Pixels>) -> Option<BlockId> {
+        let bb = self.block_bounds.borrow();
+        let mut best: Option<(f32, BlockId)> = None;
+        for id in &self.handle_targets {
+            let Some(b) = bb.get(id) else { continue };
+            let ext = Bounds::from_corners(point(b.left() - px(60.), b.top()), b.bottom_right());
+            if ext.contains(&p) {
+                let area = f32::from(b.size.width) * f32::from(b.size.height);
+                if best.is_none_or(|(a, _)| area < a) {
+                    best = Some((area, *id));
+                }
+            }
+        }
+        best.map(|(_, id)| id)
     }
 
     /// Click in the empty area below the content: focus a trailing empty paragraph.
