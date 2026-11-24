@@ -4,13 +4,20 @@ of everyday team documents plus a 1,000,000-character knowledge-base
 compilation that the benchmark opens, types into and scrolls.
 
     python3 tools/perf/gen_library.py /tmp/quiet-perf/library
+    python3 tools/perf/gen_library.py --tall-start /tmp/quiet-perf/tall
+
+`--tall-start` opens the compilation with three images, a 60-row table
+and two 120-line code blocks: rows far taller than the rest, which the
+scrollbar's length estimate starts from (the scrollbar-drag benchmark).
 
 All content is synthetic. Deterministic (fixed seed)."""
 import json, os, random, sys, time
 from xml.sax.saxutils import escape as esc
 
 R = random.Random(20261023)
-out = sys.argv[1] if len(sys.argv) > 1 else "/tmp/fdl-promo/lib"
+tall = "--tall-start" in sys.argv
+args = [a for a in sys.argv[1:] if a != "--tall-start"]
+out = args[0] if args else "/tmp/fdl-promo/lib"
 os.makedirs(f"{out}/docs", exist_ok=True)
 os.makedirs(f"{out}/assets", exist_ok=True)
 
@@ -170,7 +177,15 @@ while n < 1_000_000:
     x = "".join(sec)
     parts.append(x)
     n += text_len(x)
-doc("产品知识库 · 合订本（100 万字）", "".join(parts))
+def tall_start():
+    img = '<img href="assets/weekly-active.png" width="680" caption="图 1 · 近 12 周活跃用户"/>'
+    rows = "".join(f"<tr><td><p>模块 {i}</p></td><td><p>负责人 {i}</p></td><td><p>{i}%</p></td><td><p>备注 {i}：这一行写得比较长，让表格单元格换行，从而让整张表很高。</p></td></tr>" for i in range(60))
+    tab = ('<table><colgroup><col width="180"/><col width="120"/><col width="120"/><col width="200"/></colgroup><thead><tr><th><p>模块</p></th><th><p>负责人</p></th>'
+           '<th><p>进度</p></th><th><p>备注</p></th></tr></thead><tbody>' + rows + "</tbody></table>")
+    src = '<pre lang="rust"><code>' + "\n".join(f"let line_{i} = compute({i});" for i in range(120)) + "</code></pre>"
+    return img + img + tab + src + img + src
+
+doc("产品知识库 · 合订本（100 万字）", (tall_start() if tall else "") + "".join(parts))
 
 index = {}
 t0 = int(time.time()) - 600
