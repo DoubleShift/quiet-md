@@ -365,7 +365,7 @@ impl Workspace {
         };
         let card = |rows: Vec<AnyElement>| {
             let n = rows.len();
-            div().w_full().flex().flex_col().rounded(px(R)).overflow_hidden().bg(color::muted())
+            div().w_full().flex_none().flex().flex_col().rounded(px(R)).overflow_hidden().bg(color::muted())
                 .children(rows.into_iter().enumerate().flat_map(move |(i, r)| {
                     let sep = (i + 1 < n).then(|| div().ml(px(50.)).h(px(0.5)).bg(color::border()).into_any_element());
                     std::iter::once(r).chain(sep)
@@ -414,7 +414,7 @@ impl Workspace {
         let delete = vec![row("ds-delete", "bin", t("删除").into(), true)
             .on_click(cx.listener(move |w, _, _, cx| { w.close_doc_menu(cx); w.ask_delete(&del_id, cx); })).into_any_element()];
         let body = div().id("doc-sheet-body").min_h_0().overflow_y_scroll().px(px(16.)).pb(px(16.)).flex().flex_col().gap(px(16.))
-            .child(div().w_full().flex().gap(px(8.)).children(tiles))
+            .child(div().w_full().flex_none().flex().gap(px(8.)).children(tiles))
             .child(card(make))
             .child(card(about))
             .children(switches.map(card))

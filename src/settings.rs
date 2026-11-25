@@ -944,9 +944,11 @@ pub(crate) fn phone_sheet(id: &'static str, title: SharedString, tall: bool, bod
     let (vw, vh) = (f32::from(vp.width), f32::from(vp.height));
     let r = crate::design::R + 6.;
     let done = close.clone();
-    let panel = div().id(SharedString::from(format!("{id}-sheet"))).absolute().left_0().right_0().bottom(px(ime))
-        .when(tall, |d| d.top(px(top + 12.))).max_h(px(vh - ime - top - 12.))
-        .pb(px(if ime > 0. { 0. } else { bottom })).flex().flex_col()
+    // To the window's bottom edge, behind the keyboard too: its round top
+    // corners show the sheet, not the scrim.
+    let panel = div().id(SharedString::from(format!("{id}-sheet"))).absolute().left_0().right_0().bottom_0()
+        .when(tall, |d| d.top(px(top + 12.))).max_h(px(vh - top - 12.))
+        .pb(px(if ime > 0. { ime } else { bottom })).flex().flex_col()
         .bg(crate::design::color::popover()).rounded_t(px(r)).shadow(theme::shadow_panel()).occlude()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(div().flex_none().h(px(56.)).relative().flex().items_center().justify_center()
@@ -964,7 +966,8 @@ pub(crate) fn phone_sheet(id: &'static str, title: SharedString, tall: bool, bod
 
 /// A short list of rows in a phone's sheet, scrolling when it runs long.
 fn sheet_rows(id: &'static str, rows: Vec<AnyElement>) -> AnyElement {
-    div().id(id).min_h_0().overflow_y_scroll().px(px(8.)).pb(px(8.)).flex().flex_col().children(rows).into_any_element()
+    // Rows keep their height: a short sheet scrolls rather than squeezing them.
+    div().id(id).min_h_0().overflow_y_scroll().px(px(8.)).pb(px(8.)).flex().flex_col().children(rows.into_iter().map(|r| div().flex_none().child(r))).into_any_element()
 }
 
 /// The row a dropdown on 通用 / 文档库 belongs to, as its phone sheet's title.

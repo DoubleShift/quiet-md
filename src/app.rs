@@ -1937,8 +1937,10 @@ impl Workspace {
                                 .child(canvas(move |b, _, _| record_more.set(Some(b)), |_, _, _, _| {}).absolute().inset_0())
                                 // Toggle on mouse-down from the render-time state: the menu's outside-press
                                 // handler has already cleared `doc_menu` by the time a click would fire.
-                                .on_mouse_down(MouseButton::Left, cx.listener(move |w, _, _, cx| {
+                                .on_mouse_down(MouseButton::Left, cx.listener(move |w, _, window, cx| {
                                     cx.stop_propagation();
+                                    // A phone's sheet: the keyboard and the note's edit menu step aside.
+                                    if compact && !doc_open && let Some(e) = w.editor.clone() { e.update(cx, |e, cx| e.step_aside(window, cx)); }
                                     w.doc_menu = !doc_open;
                                     w.doc_sub = None;
                                     cx.notify();
@@ -2098,6 +2100,20 @@ impl Render for Workspace {
         let page = if self.view == View::Doc { crate::editor_theme::Theme::bg_body() } else { Theme::bg_body() };
         // Under the keyboard, whose top corners are round: the note's colour, not the window's.
         let under_keyboard = (keyboard > 0.).then(|| div().absolute().bottom_0().right_0().left(px(self.sidebar_room(window))).h(px(keyboard)).bg(page));
+        // A phone's keyboard has no key to put it away: as in iOS's own apps,
+        // dragging the page down does (before anything under the finger
+        // scrolls, so every page and list behaves alike).
+        let note_editor = self.editor.clone();
+        let swipe_down = (cfg!(target_os = "ios") && keyboard > 0.).then(|| canvas(|_, _, _| {}, move |_, _, window, _| {
+            window.on_mouse_event(move |ev: &ScrollEvent, phase, window, cx| {
+                if phase == DispatchPhase::Capture && ev.source == ScrollSource::Touch && f32::from(ev.delta.pixel_delta(px(20.)).y) > 6. {
+                    // The note's block handle and edit menu go with its caret.
+                    if let Some(e) = &note_editor { e.update(cx, |e, cx| e.step_aside(window, cx)); }
+                    window.dismiss_virtual_keyboard();
+                    window.blur(cx);
+                }
+            });
+        }).absolute().size_0());
         let note = div().id("note").relative().flex_1().min_w_0().h_full().pt(px(inset_top)).flex().bg(page).shadow(theme::shadow_note()).child(main)
             // Files from the Finder dropped on 主页 or a folder's page are imported there.
             .when(matches!(self.view, View::Home | View::Folder), |d| d
@@ -2234,6 +2250,7 @@ impl Render for Workspace {
                 cx.stop_propagation();
             }))
             .children(under_keyboard)
+            .children(swipe_down)
             .children(sidebar)
             .child(note)
             .children(drawer_el)
