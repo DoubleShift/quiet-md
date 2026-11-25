@@ -3,9 +3,12 @@ file opens, an imported folder (Markdown, an Obsidian vault) shows its page,
 a 思源笔记 workspace its 导入报告.
 
 Build with --release --features devtools, then run this file. Each import
-goes through 我的文档's "+" menu and a `pick` instead of the system panel,
-into a temporary library; `showing` checks what is in front. No system
-clipboard or user library is accessed. Pass case names to run only those.
+goes through 我的文档's "+" menu (思源笔记 and Obsidian through its
+从其他应用导入… panel) and a `pick` instead of the system panel, into a
+temporary library; `showing` checks what is in front. `found_vault` imports a
+vault the panel found in a stand-in home folder (an Obsidian iCloud vault), so
+the user's own is never looked at. No system clipboard or user library is
+accessed. Pass case names to run only those.
 """
 import json
 import os
@@ -39,23 +42,34 @@ files = work / "files"
 (files / "Vault" / "Other.md").write_text("# Other\n\nlinked\n")
 shutil.copytree(repo / "crates/core/tests/fixtures/siyuan", files / "siyuan")
 
-# The "+" menu under 我的文档 (English, no 数据表): its 导入 rows.
-ROW = {"md": 308, "folder": 340, "siyuan": 372}
+# A stand-in home: what the panel finds on "this computer".
+home = work / "home"
+found = home / "Library/Mobile Documents/iCloud~md~obsidian/Documents/Thesis"
+(found / ".obsidian").mkdir(parents=True)
+(found / "Intro.md").write_text("# Intro\n\nFound.\n")
+
+# The "+" menu under 我的文档 (English): its 导入 rows, then the panel's row if any.
+APPS = "Import from Another App…"
 CASES = {
-    "markdown_file": (ROW["md"], files / "Single.md", "Single"),
-    "markdown_folder": (ROW["folder"], files / "notes", "notes"),
-    "obsidian_vault": (ROW["folder"], files / "Vault", "Vault"),
-    "siyuan": (ROW["siyuan"], files / "siyuan", "SiYuan Import Report"),
+    "markdown_file": (["Import Markdown Files…"], files / "Single.md", "Single"),
+    "markdown_folder": (["Import Folder…"], files / "notes", "notes"),
+    "obsidian_vault": (["Import Folder…"], files / "Vault", "Vault"),
+    "obsidian_app": ([APPS, "Obsidian"], files / "Vault", "Vault"),
+    "siyuan": ([APPS, "SiYuan"], files / "siyuan", "SiYuan Import Report"),
+    "found_vault": ([APPS, "Obsidian · Thesis"], None, "Thesis"),
 }
 
 failed = []
 for name in sys.argv[1:] or CASES:
-    y, path, title = CASES[name]
+    rows, path, title = CASES[name]
     script = work / f"{name}.txt"
-    script.write_text(f"move 5 5\nwait 800\nshowing Start\nanchor create-sidebar\nwait 400\npick {path}\nclick 340 {y}\nwait 2500\nshot {name}\nshowing {title}\n")
+    # The panel looks for other apps' notes as it opens; the pick waits for the row that opens the file panel.
+    steps = [f"row {rows[0]}", "wait 1500"] + [f"pick {path}"] * (path is not None) + [f"row {r}" for r in rows[1:]]
+    if len(rows) == 1: steps = [f"pick {path}", f"row {rows[0]}"]
+    script.write_text("move 5 5\nwait 800\nshowing Start\nanchor create-sidebar\nwait 400\n" + "\n".join(steps) + f"\nwait 2500\nshot {name}\nshowing {title}\n")
     out = work / name
     r = subprocess.run([sys.executable, str(here / "run.py"), str(script), str(source), str(out)],
-                       env=dict(os.environ, FDL_NOBLINK="1"), timeout=120)
+                       env=dict(os.environ, FDL_NOBLINK="1", HOME=str(home)), timeout=120)
     log = (out / "log").read_text(errors="replace") if (out / "log").exists() else ""
     said = [l for l in log.splitlines() if "showing" in l]
     if r.returncode == 0: print(f"{name}: passed", flush=True)

@@ -23,7 +23,7 @@ use web_time::Instant;
 const SAVE_DELAY: Duration = Duration::from_millis(500);
 const SAVE_MAX_DELAY: Duration = Duration::from_secs(2);
 
-actions!(workspace, [NewDoc, OpenFile, OpenFolder, ImportDoc, ImportFolder, ImportSiYuan, ToggleSidebar, FocusSearch, FindInDoc, ReplaceInDoc, OpenSettings, OpenAbout, CheckForUpdates, GoHome, CloseWindow, Quit,
+actions!(workspace, [NewDoc, OpenFile, OpenFolder, ImportDoc, ImportFolder, ImportFromApps, ToggleSidebar, FocusSearch, FindInDoc, ReplaceInDoc, OpenSettings, OpenAbout, CheckForUpdates, GoHome, CloseWindow, Quit,
     ReplayOnboarding, HideApp, HideOthers, ShowAll, Minimize, Zoom, ToggleFullScreen, ToggleDarkMode]);
 // A confirmation dialog's keys, in its own key context: ↩ is the action button, Esc 取消.
 actions!(confirm, [ConfirmOk, ConfirmCancel]);
@@ -73,7 +73,7 @@ fn menu_bar(markdown: bool) -> Vec<Menu> {
                 MenuItem::action(tr("打开文件夹…", "Open Folder…"), OpenFolder),
                 MenuItem::action(tr("导入为文档…", "Import as Document…"), ImportDoc),
                 MenuItem::action(tr("导入文件夹…", "Import Folder…"), ImportFolder),
-                MenuItem::action(tr("导入思源笔记…", "Import from SiYuan…"), ImportSiYuan),
+                MenuItem::action(tr("从其他应用导入…", "Import from Another App…"), ImportFromApps),
                 MenuItem::separator(),
                 MenuItem::action(tr("关闭窗口", "Close Window"), CloseWindow),
             ],
@@ -473,6 +473,8 @@ pub struct Workspace {
     pub move_dlg: Option<crate::tree::MoveDialog>,
     /// 导出 Markdown 设置.
     pub export_md: Option<crate::transfer::ExportMd>,
+    /// 从其他应用导入… while open.
+    pub import_apps: Option<crate::transfer::ImportApps>,
     /// 编辑 / 阅读 dropdown, and the mode button's last-frame bounds.
     pub mode_menu: bool,
     pub mode_btn_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -746,6 +748,7 @@ impl Workspace {
             sidebar_drop: None,
             move_dlg: None,
             export_md: None,
+            import_apps: None,
             focus: cx.focus_handle(),
             save_task: None,
             view_state_task: None,
@@ -2068,7 +2071,7 @@ impl Render for Workspace {
         let doc_info = self.render_doc_info(cx);
         let history = self.render_history(cx);
         // a dialog holds the keyboard while open (Esc and ↩ go to it, not to the editor behind)
-        self.dialog_focus.sync(self.export_md.is_some() || self.doc_info.is_some(), window, cx);
+        self.dialog_focus.sync(self.export_md.is_some() || self.doc_info.is_some() || self.import_apps.is_some(), window, cx);
         let confirm = self.render_confirm(cx);
         let trash_menu = self.render_trash_menu(cx);
         let home_menus = self.render_home_menus(cx);
@@ -2111,6 +2114,7 @@ impl Render for Workspace {
         };
         let move_dlg = self.render_move_dialog(cx);
         let export_md = self.render_export_md(cx);
+        let import_apps = self.render_import_apps(cx);
         // Only the note stands out: a white plane flush with the window's top,
         // right and bottom edges. The sidebar sits sunken on the window
         // surface beside it; a faint shade along the plane's left edge parts
@@ -2178,7 +2182,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|w, _: &OpenFile, window, cx| w.open_file_dialog(window, cx)))
             .on_action(cx.listener(|w, _: &OpenFolder, window, cx| w.open_folder_dialog(window, cx)))
             .on_action(cx.listener(|w, _: &ImportFolder, window, cx| w.open_import_folder(window, cx)))
-            .on_action(cx.listener(|w, _: &ImportSiYuan, window, cx| w.open_import_kind(crate::transfer::ImportKind::SiYuan, None, window, cx)))
+            .on_action(cx.listener(|w, _: &ImportFromApps, window, cx| w.open_import_apps(None, window, cx)))
             .on_action(cx.listener(|w, _: &ToggleSidebar, _, cx| {
                 w.sidebar_open = !w.sidebar_open;
                 cx.notify();
@@ -2243,10 +2247,11 @@ impl Render for Workspace {
                 }
                 if w.record_shortcut(ev, cx) { return; }
                 // Esc cancels a confirmation dialog.
-                if ev.keystroke.key == "escape" && (w.confirm.is_some() || w.export_md.is_some()) {
+                if ev.keystroke.key == "escape" && (w.confirm.is_some() || w.export_md.is_some() || w.import_apps.is_some()) {
                     w.confirm = None;
                     w.after_save = None;
                     w.export_md = None;
+                    w.import_apps = None;
                     cx.stop_propagation();
                     cx.notify();
                     return;
@@ -2283,6 +2288,7 @@ impl Render for Workspace {
             .children(confirm)
             .children(move_dlg)
             .children(export_md)
+            .children(import_apps)
             .children(search)
             .children(resize_overlay)
             .children(folder_drag_overlay)
@@ -2402,12 +2408,14 @@ mod menu_tests {
         out
     }
 
-    /// 文件's import group has what the in-window 导入 menus have, 思源笔记 next to 导入文件夹.
+    /// 文件's import group has what the in-window 导入 menus have: 从其他应用导入… (思源笔记,
+    /// Obsidian, Typora…) next to 导入文件夹.
     #[test]
-    fn the_file_menu_imports_from_siyuan() {
+    fn the_file_menu_imports_from_other_apps() {
         let file = names(&menu_bar(false));
         let at = |n: &str| file.iter().position(|d| d == n).unwrap_or_else(|| panic!("{n}"));
-        assert_eq!(at(tr("导入思源笔记…", "Import from SiYuan…")), at(tr("导入文件夹…", "Import Folder…")) + 1);
+        assert_eq!(at(tr("从其他应用导入…", "Import from Another App…")), at(tr("导入文件夹…", "Import Folder…")) + 1);
+        assert!(!file.iter().any(|d| d == "导入思源笔记…" || d == "Import from SiYuan…"), "思源笔记 is one of the apps now");
         assert_eq!(at(tr("导入文件夹…", "Import Folder…")), at(tr("导入为文档…", "Import as Document…")) + 1);
     }
 

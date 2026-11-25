@@ -33,6 +33,10 @@ const IMPORT_FILE_LIMIT: u64 = 32 * 1024 * 1024;
 /// What to do with a folder 导入文件夹 brought in (a drop puts it in its slot).
 pub(crate) type AfterImport = Box<dyn FnOnce(&mut Workspace, &str)>;
 
+/// The 从其他应用导入… panel while open: where its imports go (`import_items`' parent), and the
+/// folders of other apps found on this computer (None while still looking).
+pub(crate) struct ImportApps { parent: Option<String>, found: Option<Vec<crate::import_sources::Found>> }
+
 /// What a background 导入文件夹 did.
 /// `cloud`: what was skipped as only in iCloud (`Scanned::cloud`).
 enum Imported { Empty { cloud: usize }, TooMany(usize), Done { top: Option<String>, failed: usize, cloud: usize, saved: anyhow::Result<()>, changes: Vec<crate::store::FileDelta>, listed: Listed } }
@@ -609,6 +613,68 @@ impl Workspace {
         .detach();
     }
 
+    /// 从其他应用导入…: the panel listing the apps notes come in from, and their folders found
+    /// on this computer, which are looked for meanwhile. What it imports goes into `parent`.
+    pub(crate) fn open_import_apps(&mut self, parent: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_menus();
+        self.import_menu = None;
+        self.import_apps = Some(ImportApps { parent, found: None });
+        // Never a folder already open here, nor one around or inside it.
+        let skip: Vec<PathBuf> = self.store.top_folders().into_iter().map(|(_, _, p, _)| p).collect();
+        cx.spawn_in(window, async move |this, cx| {
+            let found = cx.background_executor().spawn(async move { crate::import_sources::discover(&skip) }).await;
+            let _ = this.update(cx, |w, cx| if let Some(a) = w.import_apps.as_mut() { a.found = Some(found); cx.notify(); });
+        }).detach();
+        cx.notify();
+    }
+
+    fn close_import_apps(&mut self, cx: &mut Context<Self>) { self.import_apps = None; cx.notify(); }
+
+    /// An app picked in the panel: its own file picker, then its import.
+    fn import_from_source(&mut self, source: crate::import_sources::Source, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(apps) = self.import_apps.take() else { return };
+        self.open_import_kind(source.kind(), apps.parent, window, cx);
+    }
+
+    /// A found folder picked in the panel: straight in, under the name it showed.
+    fn import_found(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(apps) = self.import_apps.take() else { return };
+        let Some(f) = apps.found.and_then(|f| f.into_iter().nth(i)) else { return cx.notify() };
+        match f.source().kind() {
+            ImportKind::SiYuan => self.import_siyuan(&f.path, apps.parent, window, cx),
+            _ => self.import_folder_as(&f.path, Some(f.name), apps.parent, true, None, window, cx),
+        }
+        cx.notify();
+    }
+
+    /// The 从其他应用导入… panel (`Dialog`): each app with what to pick, then what was found here.
+    pub(crate) fn render_import_apps(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use crate::design::{MenuItem, MenuLabel};
+        use crate::import_sources::Source;
+        let apps = self.import_apps.as_ref()?;
+        let chevron = || crate::design::icon("chevron-right", 16., crate::design::color::muted_foreground());
+        let sources = Source::ALL.into_iter().map(|s| MenuItem::new(SharedString::from(format!("import-app-{}", s.key()))).icon(s.icon()).label(s.name()).description(s.hint())
+            .child(chevron()).on_click(cx.listener(move |w, _, window, cx| w.import_from_source(s, window, cx))));
+        let found = apps.found.as_ref().filter(|f| !f.is_empty()).map(|found| {
+            crate::table::style::inset_list("import-found-list").max_h(px(220.)).overflow_y_scroll()
+                .child(MenuLabel::new(crate::settings::tr("在这台电脑上找到", "Found on this computer")))
+                .children(found.iter().enumerate().map(|(i, f)| MenuItem::new(("import-found", i)).icon(f.source().icon()).label(f.title()).description(f.desc())
+                    .child(chevron()).on_click(cx.listener(move |w, _, window, cx| w.import_found(i, window, cx)))))
+        });
+        let ws = cx.entity().downgrade();
+        let dialog = Dialog::new("import-apps")
+            .keys(&self.dialog_focus, move |_, cx| { let _ = ws.update(cx, |w, cx| w.close_import_apps(cx)); }, None::<fn(&mut Window, &mut App)>)
+            .relative()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .title(crate::settings::tr("从其他应用导入", "Import from Another App"))
+            .description(crate::settings::tr("笔记来自哪个应用？导入的是副本，原来的文件不会被改动。", "Which app are your notes in? Imports are copies; your files stay as they are."))
+            .closable(cx.listener(|w, _, _, cx| w.close_import_apps(cx)))
+            .child(crate::table::style::inset_list("import-app-list").children(sources))
+            .children(found);
+        Some(deferred(scrim().id("import-apps-mask").on_mouse_down(MouseButton::Left, cx.listener(|w, _, _, cx| w.close_import_apps(cx))).child(dialog))
+            .with_priority(3).into_any_element())
+    }
+
     /// The 导入 menu under the header icon.
     pub(crate) fn render_import_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (parent, pos) = self.import_menu.clone()?;
@@ -630,7 +696,11 @@ impl Workspace {
         let mut out = vec![
             item("import-md", "doc-md", crate::settings::tr("导入 Markdown 文件…", "Import Markdown Files…"), ImportKind::Markdown),
             item("import-folder", "folder", crate::settings::tr("导入文件夹…", "Import Folder…"), ImportKind::Folder),
-            item("import-siyuan", "doc-blocks", crate::settings::tr("导入思源笔记…", "Import from SiYuan…"), ImportKind::SiYuan),
+            {
+                let parent = parent.clone();
+                crate::design::MenuItem::new("import-apps").icon("import").label(crate::settings::tr("从其他应用导入…", "Import from Another App…"))
+                    .on_click(cx.listener(move |w, _, window, cx| { w.create_menu = None; w.open_import_apps(parent.clone(), window, cx) }))
+            },
             item("import-xml", "doc", crate::settings::tr("导入 DocxXML…", "Import DocxXML…"), ImportKind::DocxXml),
         ];
         if crate::DATATABLE { out.push(item("import-csv", "datatable", crate::settings::tr("从 CSV 新建数据表…", "New Data Table from CSV…"), ImportKind::Csv)); }
@@ -702,10 +772,17 @@ impl Workspace {
 
     /// `import_folder`, then `then` with the new folder once it is in.
     pub(crate) fn import_folder_then(&mut self, dir: &Path, parent: Option<String>, open: bool, then: Option<AfterImport>, window: &mut Window, cx: &mut Context<Self>) {
+        self.import_folder_as(dir, None, parent, open, then, window, cx);
+    }
+
+    /// `import_folder_then` under `name` (None: the folder's own), as an app's
+    /// iCloud folder, called Documents, comes in under the app's name.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn import_folder_as(&mut self, dir: &Path, name: Option<String>, parent: Option<String>, open: bool, then: Option<AfterImport>, window: &mut Window, cx: &mut Context<Self>) {
         if self.store.file_task_busy() || self.file_history.busy || self.tree_writes_pending() { return; }
         let held = std::rc::Rc::new(std::cell::Cell::new(then));
-        let (again, retry, later) = (dir.to_path_buf(), parent.clone(), held.clone());
-        if !self.save_before(cx, move |w, window, cx| w.import_folder_then(&again, retry.clone(), open, later.take(), window, cx)) {
+        let (again, named, retry, later) = (dir.to_path_buf(), name.clone(), parent.clone(), held.clone());
+        if !self.save_before(cx, move |w, window, cx| w.import_folder_as(&again, named.clone(), retry.clone(), open, later.take(), window, cx)) {
             return;
         }
         let then = held.take();
@@ -721,7 +798,8 @@ impl Workspace {
                 None => Imported::Empty { cloud: 0 },
                 Some(tree) if tree.files == 0 => Imported::Empty { cloud: tree.cloud },
                 Some(tree) if tree.files > IMPORT_FOLDER_LIMIT => Imported::TooMany(tree.files),
-                Some(tree) => {
+                Some(mut tree) => {
+            if let Some(n) = name { tree.name = n; }
             let journal = writer.track_file_changes();
             let mut failed = 0;
             // One write for the whole folder: each file is written where it

@@ -45,6 +45,7 @@ mod html;
 mod input;
 mod logging;
 mod modes;
+mod import_sources;
 mod onboarding;
 #[cfg(target_os = "macos")]
 mod native_header;
