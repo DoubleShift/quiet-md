@@ -224,7 +224,7 @@ impl Workspace {
         crumbs = crumbs.when(!own, |d| d.child(sep())).child(div().min_w_0().px(px(4.)).overflow_hidden().whitespace_nowrap().text_ellipsis()
             .font_weight(FontWeight::SEMIBOLD).text_color(Theme::text()).child(ui_text(title)));
         let doc = id.clone();
-        let header = crate::trash::page_header_with(self, crumbs, 26., cx)
+        let header = crate::trash::page_header_with(self, crumbs, 26., crate::trash::Nav::Back, cx)
             .child(self.place_button("folder-more", Some(id.clone()), cx))
             // A phone's bar has room for 更多 and + only: the view follows 主页's choice, 导入 is 主页's.
             .when(!phone, |d| d.child(self.import_button("folder-import", Some(id.clone()), cx)))

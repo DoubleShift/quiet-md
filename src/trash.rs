@@ -27,12 +27,19 @@ fn remaining(deleted: u64) -> String {
 /// The page header, as tall as the document's so the header pills sit in
 /// the same place: a 17pt semibold view title, and the open-sidebar
 /// button when the sidebar is hidden.
-pub(crate) fn page_header(ws: &Workspace, title: &'static str, left: f32, cx: &mut Context<Workspace>) -> Stateful<Div> {
-    page_header_with(ws, div().text_size(px(17.)).line_height(px(24.)).font_weight(FontWeight::SEMIBOLD).child(crate::settings::label(title)), left, cx)
+pub(crate) fn page_header(ws: &Workspace, title: &'static str, left: f32, nav: Nav, cx: &mut Context<Workspace>) -> Stateful<Div> {
+    page_header_with(ws, div().text_size(px(17.)).line_height(px(24.)).font_weight(FontWeight::SEMIBOLD).child(crate::settings::label(title)), left, nav, cx)
 }
 
+/// What a page header's leading button does on iOS: 主页 opens the drawer
+/// (the root), a folder's page goes back (`phone_nav`), 回收站 has 设置's.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Nav { Root, Back, Settings }
+
 /// `page_header` with any title element (a folder page puts its breadcrumbs there).
-pub(crate) fn page_header_with(ws: &Workspace, title: impl IntoElement, left: f32, cx: &mut Context<Workspace>) -> Stateful<Div> {
+pub(crate) fn page_header_with(ws: &Workspace, title: impl IntoElement, left: f32, nav: Nav, cx: &mut Context<Workspace>) -> Stateful<Div> {
+    let ios = cfg!(target_os = "ios");
+    let back = (ios && nav == Nav::Back).then(|| ws.back_button(cx)).flatten();
     div()
         .id("page-header")
         .h(px(crate::app::HEADER_H))
@@ -40,15 +47,16 @@ pub(crate) fn page_header_with(ws: &Workspace, title: impl IntoElement, left: f3
         .flex()
         .items_center()
         // Clear of the traffic lights, like the document header.
-        .pl(if ws.sidebar_open { px(left) } else { px(theme::TRAFFIC_LIGHTS_W) })
+        .pl(if ws.sidebar_open { px(left) } else if ios && nav != Nav::Settings { px(crate::sidebar::TOUCH_BUTTON_X) } else { px(theme::TRAFFIC_LIGHTS_W) })
         .pr(px(crate::ui::header_right_inset()))
         .title_bar()
-        .when(!ws.sidebar_open && cfg!(any(target_os = "windows", target_os = "ios")), |d| d.child(div().mr(px(12.)).child(ws.header_navigation(cx))))
-        .when(!ws.sidebar_open && !cfg!(any(target_os = "windows", target_os = "ios")), |d| {
+        .when(!ws.sidebar_open && (cfg!(target_os = "windows") || ios && nav == Nav::Settings), |d| d.child(div().mr(px(12.)).child(ws.header_navigation(cx))))
+        .when_some(back.filter(|_| !ws.sidebar_open), |d, b| d.child(b).child(div().w(px(6.)).flex_none()))
+        .when(!ws.sidebar_open && !cfg!(target_os = "windows") && !(ios && nav == Nav::Settings) && !(ios && nav == Nav::Back), |d| {
             d.child(
                 Button::ghost("open-sidebar")
                     .no_drag()
-                    .ml(px(4.))
+                    .when(!ios, |b| b.ml(px(4.)))
                     .mr(px(12.))
                     .icon(crate::sidebar::toggle_glyph(false))
                     .tip(crate::settings::tr("展开侧栏", "Show sidebar"), Some(crate::shortcuts::hint("workspace::ToggleSidebar", "⌘ + ]")))
@@ -88,7 +96,7 @@ impl Workspace {
         // 清空回收站: a labelled button, only when there is something to empty.
         let empty = (!self.trash.is_empty()).then(|| Button::ghost("trash-empty").no_drag().mr(px(8.)).icon("bin").label(crate::settings::text("清空回收站"))
             .on_click(cx.listener(|w, _, _, cx| { w.trash_menu = None; w.confirm = Some(Confirm::EmptyTrash); cx.notify(); })));
-        let header = page_header(self, "回收站", 26., cx).children(empty).child(
+        let header = page_header(self, "回收站", 26., Nav::Settings, cx).children(empty).child(
             crate::ui::header_icon("trash-search", "search")
                 .tip_label(crate::shortcuts::keys(crate::settings::text("搜索(⌘ + J)")).into(), crate::ui::TipSide::Below)
                 .on_click(cx.listener(|_, _, window, cx| window.dispatch_action(Box::new(crate::app::FocusSearch), cx))),

@@ -352,6 +352,8 @@ pub struct Workspace {
     pub settings_page: crate::settings::Page,
     /// The page 设置 was opened from, where 返回 goes back to.
     pub settings_from: View,
+    /// A phone's way back (「‹」 and the edge swipe).
+    pub phone_nav: crate::phone_nav::PhoneNav,
     /// A phone's 设置 shows its list of sections (iOS's Settings) until one is picked.
     pub settings_index: bool,
     /// 回收站 was opened from a phone's 设置 list, so its 返回 goes back there.
@@ -672,6 +674,7 @@ impl Workspace {
             shortcut_error: None,
             settings_page: Default::default(),
             settings_from: View::Home,
+            phone_nav: Default::default(),
             settings_index: true,
             trash_from_settings: false,
             settings_phone: std::cell::Cell::new(false),
@@ -1838,13 +1841,17 @@ impl Workspace {
         // A phone: no path, only the title, after the sidebar's button.
         let compact = theme::compact(pane_w);
         if compact {
-            crumbs = vec![
+            crumbs = match self.back_button(cx) {
+                // A pushed page, as iOS draws one: 「‹ 上一级」 and no title (the page has its own).
+                Some(back) => { title = String::new(); vec![back] }
                 // The drawer's way in from a document (the home page has its own).
-                crate::design::Button::ghost("open-sidebar").no_drag().icon(crate::sidebar::toggle_glyph(false))
-                    .on_click(cx.listener(|w, _, _, cx| { w.sidebar_open = true; cx.notify(); }))
-                    .into_any_element(),
-                div().w(px(6.)).flex_none().into_any_element(),
-            ];
+                None => vec![
+                    crate::design::Button::ghost("open-sidebar").no_drag().icon(crate::sidebar::toggle_glyph(false))
+                        .on_click(cx.listener(|w, _, _, cx| { w.sidebar_open = true; cx.notify(); }))
+                        .into_any_element(),
+                    div().w(px(6.)).flex_none().into_any_element(),
+                ],
+            };
         }
         let record_more = self.more_btn_bounds.clone();
         let doc_open = self.doc_menu;
@@ -2124,7 +2131,13 @@ impl Render for Workspace {
                 }
             });
         }).absolute().size_0());
+        // A phone's back swipe: the page slides off to the right over the one it goes back to.
+        let swipe = if drawer { self.track_place(); self.swipe_progress(window, cx) } else { None };
+        let back_layer = swipe.filter(|p| *p > 0.).and_then(|p| self.render_back_layer(p, inset_top, window, cx));
+        let can_swipe = drawer && matches!(self.view, View::Doc | View::Folder) && self.back_target().is_some();
+        let vw_now = f32::from(window.viewport_size().width);
         let note = div().id("note").relative().flex_1().min_w_0().h_full().pt(px(inset_top)).flex().bg(page).shadow(theme::shadow_note()).child(main)
+            .when_some(swipe, |d, p| d.left(px(p * vw_now)))
             // Files from the Finder dropped on 主页 or a folder's page are imported there.
             .when(matches!(self.view, View::Home | View::Folder), |d| d
                 .on_drag_move(cx.listener(|w, ev: &DragMoveEvent<ExternalPaths>, _, cx| w.file_drag_move(ev, cx)))
@@ -2259,9 +2272,12 @@ impl Render for Workspace {
                 if w.search_open { w.close_search(window, cx); } else { w.open_search(window, cx); }
                 cx.stop_propagation();
             }))
+            // On the window, which stays put: the gesture is delivered where it started.
+            .when(can_swipe, |d| d.on_back_gesture(cx.listener(|w, ev: &BackGestureEvent, window, cx| w.back_gesture(ev, window, cx))))
             .children(under_keyboard)
             .children(swipe_down)
             .children(sidebar)
+            .children(back_layer)
             .child(note)
             .children(drawer_el)
             .children(resize)

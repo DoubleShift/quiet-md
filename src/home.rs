@@ -787,7 +787,7 @@ impl Workspace {
         // A phone searches and creates from the sidebar's drawer.
         let phone_bar = crate::theme::compact(f32::from(window.viewport_size().width));
         let narrow = search.is_none() && !phone_bar;
-        let header = page_header(self, crate::settings::text("主页"), 26., cx).relative().children(search)
+        let header = page_header(self, crate::settings::text("主页"), 26., crate::trash::Nav::Root, cx).relative().children(search)
             .when(narrow, |d| d.child(crate::ui::header_icon("home-search", "search").mr(px(4.))
                 .tip(crate::settings::tr("搜索文档", "Search documents"), Some(crate::shortcuts::hint("workspace::FocusSearch", "⌘ + J")))
                 .on_click(cx.listener(|w, _, window, cx| w.open_search(window, cx)))))
