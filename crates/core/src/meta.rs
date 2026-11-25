@@ -374,6 +374,19 @@ impl Merged {
             .filter_map(|(id, f)| Some((id.clone(), f.get("trashed").map(|w| &w.v).filter(|v| !v.is_null())?.clone()))).collect()
     }
 
+    /// The pages deleted outside the app (`gone` their tombstone) since
+    /// `since` (a stamp), by the path each was at (its `from`); the latest
+    /// for a path. Not one in the 回收站.
+    pub fn gone_from(&self, since: u64) -> HashMap<String, String> {
+        let mut out: HashMap<String, (u64, String)> = HashMap::new();
+        for (id, f) in &self.items {
+            let Some(t) = tomb(f).filter(|t| t.ts >= since && f.get("trashed").is_none_or(|w| w.v.is_null())) else { continue };
+            let Some(from) = t.v.get("from").and_then(Value::as_str) else { continue };
+            if out.get(from).is_none_or(|o| o.0 < t.ts) { out.insert(from.to_string(), (t.ts, id.clone())); }
+        }
+        out.into_iter().map(|(k, (_, id))| (k, id)).collect()
+    }
+
     /// The top-level folder's settings under `prefix` (`look.` …) as one object.
     pub fn root_object(&self, prefix: &str) -> Value {
         let mut obj = serde_json::Map::new();
@@ -763,20 +776,26 @@ pub(super) fn needs_shards(root: &Path, me: &str) -> bool { dir(root).join(forma
 /// synced folder stays readable throughout). The file is copied to
 /// `<id>.json.single` (to go back: remove `<id>/`, rename the copy), the
 /// shards are written to `<id>.tmp/` and renamed to `<id>/`, and the file is
-/// removed. Each step can be redone after a crash: a `<id>.tmp/` is made
-/// again, and with `<id>/` there only the removal is left. The fields keep
-/// their values and stamps.
-pub(super) fn to_shards(root: &Path, me: &Device, warnings: &mut Vec<String>) -> Result<()> {
+/// removed with its `.bak` (the copy is its backup now). Each step can be
+/// redone after a crash: a `<id>.tmp/` is made again, and with `<id>/` there
+/// only the removal is left. The fields keep their values and stamps.
+/// Whether the file was removed now (`tend_single` counts from then).
+pub(super) fn to_shards(root: &Path, me: &Device, warnings: &mut Vec<String>) -> Result<bool> {
     let d = dir(root);
     let whole = d.join(format!("{}.json", me.id));
     let (own, tmp) = (d.join(&me.id), d.join(format!("{}.tmp", me.id)));
+    let remove = || -> Result<bool> {
+        let bak = with_suffix(&whole, ".bak");
+        if bak.fs_exists() { crate::vfs::remove_file(&bak)?; }
+        // Set aside as corrupt by `load_json`, it is gone already.
+        if !whole.fs_exists() { return Ok(false) }
+        crate::vfs::remove_file(&whole)?;
+        Ok(true)
+    };
     if tmp.fs_exists() { crate::vfs::remove_dir_all(&tmp)?; }
-    if own.fs_is_dir() {
-        if whole.fs_exists() { crate::vfs::remove_file(&whole)?; }
-        return Ok(())
-    }
-    if crate::vfs::is_dataless(&whole) { return Ok(()) }
-    let Ok(bytes) = crate::vfs::read(&whole) else { return Ok(()) };
+    if own.fs_is_dir() { return remove() }
+    if crate::vfs::is_dataless(&whole) { return Ok(false) }
+    let Ok(bytes) = crate::vfs::read(&whole) else { return Ok(false) };
     let keep = d.join(format!("{}.json.single", me.id));
     if crate::vfs::read(&keep).ok().as_deref() != Some(&bytes[..]) { write_atomic(&keep, &bytes)?; }
     let f: DeviceFile = load_json(&whole, "文档索引", warnings);
@@ -788,8 +807,17 @@ pub(super) fn to_shards(root: &Path, me: &Device, warnings: &mut Vec<String>) ->
     crate::vfs::rename(&tmp, &own)?;
     #[cfg(unix)]
     crate::vfs::File::open(&d)?.sync_all()?;
-    // Set aside as corrupt by `load_json`, it is gone already.
-    if whole.fs_exists() { crate::vfs::remove_file(&whole)?; }
+    remove()
+}
+
+/// The `.single` copy `to_shards` left, removed 30 days after the
+/// conversion (`here.converted`; a copy found with no time noted counts
+/// from now).
+pub(super) fn tend_single(root: &Path, me: &str, here: &mut Here) -> Result<()> {
+    let keep = dir(root).join(format!("{me}.json.single"));
+    if !keep.fs_exists() { here.converted = 0; return Ok(()) }
+    if here.converted == 0 { here.converted = now_ms(); return Ok(()) }
+    if now_ms().saturating_sub(here.converted) >= PURGED_KEPT_MS { crate::vfs::remove_file(&keep)?; here.converted = 0; }
     Ok(())
 }
 
@@ -804,6 +832,10 @@ pub(super) struct Here {
     /// When `clean_all` last ran (milliseconds).
     #[serde(default)]
     pub cleaned: u64,
+    /// When this device's whole file became shards (`to_shards`), while its
+    /// `.single` copy is kept (milliseconds).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub converted: u64,
 }
 
 impl Here {

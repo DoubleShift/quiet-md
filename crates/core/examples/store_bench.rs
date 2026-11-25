@@ -1,4 +1,4 @@
-//! `Store::list` and `Store::save_editor` timed on a library, for
+//! `Store::open_top_folder`, `Store::list` and `Store::save_editor` timed on a library, for
 //! docs/PERFORMANCE.md ("Large libraries"), and the bytes of device
 //! metadata (`.quiet/meta/`) each save writes. Give it a copy: it writes there.
 //!
@@ -25,7 +25,9 @@ fn meta_files(root: &std::path::Path) -> std::collections::BTreeMap<std::path::P
 fn main() {
     let root = std::path::PathBuf::from(std::env::args().nth(1).expect("a library folder"));
     let n: usize = std::env::args().nth(2).map_or(15, |s| s.parse().unwrap());
+    let t = Instant::now();
     let mut s = Store::open_top_folder(&root).unwrap();
+    println!("open {:.1} ms", ms(t));
     let t = Instant::now();
     let entries = s.list();
     println!("first list {:.1} ms, {} entries", ms(t), entries.len());
@@ -42,7 +44,8 @@ fn main() {
         bytes.push(meta_files(&root).into_iter().filter(|(p, f)| before.get(p) != Some(f)).map(|(_, f)| f.0).sum::<u64>() as f64);
         t
     }).collect();
-    println!("list median {:.1} ms, save median {:.1} ms ({n} each)", med(list), med(save[1..].to_vec()));
+    // The second carries the day's clean-up when it is due (FORMAT 6).
+    println!("list median {:.1} ms (the second {:.1} ms), save median {:.1} ms ({n} each)", med(list.clone()), list[0], med(save[1..].to_vec()));
     println!("metadata written per save: median {:.0} bytes, largest {:.0}; all of it {} bytes", med(bytes.clone()), bytes.iter().cloned().fold(0., f64::max), meta_files(&root).values().map(|f| f.0).sum::<u64>());
     // A change to the metadata each time: 置顶 on and off.
     let mut bytes = vec![];

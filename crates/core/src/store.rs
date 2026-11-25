@@ -389,6 +389,10 @@ pub struct Store {
     synced: std::cell::RefCell<Option<Synced>>,
     /// FORMAT 6: where this computer saw each page's file (`meta::Here`).
     here: meta::Here,
+    /// FORMAT 6: the day's clean-up (`clean_meta`) is due: `Some(false)`
+    /// until the first `list` is done, so it is not on the way to the first
+    /// frame; `Some(true)` then, and the next `list` does it.
+    clean_due: Option<bool>,
 }
 
 /// What `load_meta` would take in again is already in memory while no device
@@ -1391,13 +1395,17 @@ impl Store {
         let v5 = !flat && Self::format_at(&root) >= 5;
         let v6 = v5 && Self::format_at(&root) >= 6;
         let mut store = Store { file_changes: vec![], top_dir: root, index: HashMap::new(), foreign: DiskIndex::new(), trash, flat, warnings, migrated: None, loaded: Default::default(), copied: Default::default(), parsed: HashMap::new(), batch: Default::default(), view: Default::default(),
-            v5, me, clock: Default::default(), seen: Default::default(), merged: Default::default(), key: key.to_string(), place_by_hand: true, v6, seen_trash: Default::default(), purging: Default::default(), synced: Default::default(), here: Default::default() };
+            v5, me, clock: Default::default(), seen: Default::default(), merged: Default::default(), key: key.to_string(), place_by_hand: true, v6, seen_trash: Default::default(), purging: Default::default(), synced: Default::default(), here: Default::default(), clean_due: None };
         if flat {
             store.index = load_json(&base.join("index.json"), "文档索引", &mut store.warnings);
             store.flat_folders()?;
         } else if v5 {
             let mut warnings = vec![];
-            if v6 { store.here = meta::Here::read(&store.top_dir, key, &store.me.id); }
+            if v6 {
+                store.here = meta::Here::read(&store.top_dir, key, &store.me.id);
+                let due = meta::now_ms().saturating_sub(store.here.cleaned) >= meta::DAY_MS;
+                store.clean_due = (due && !crate::vfs::is_dataless(&marker)).then_some(false);
+            }
             store.load_meta(&mut warnings);
             store.mark_synced(true, HashSet::new());
             store.warnings.extend(warnings);
@@ -1439,20 +1447,27 @@ impl Store {
     }
 
     /// FORMAT 6, under the write lock: this device's metadata from one whole
-    /// file (as the development builds wrote it) to shards, and once a day
-    /// its shards cleaned (sync.md 3.3).
+    /// file (as the development builds wrote it) to shards (sync.md 3.3).
     fn tend_meta(root: &Path, me: &Device, key: &str, warnings: &mut Vec<String>) -> Result<()> {
-        let mut here = meta::Here::read(root, key, &me.id);
-        let due = meta::now_ms().saturating_sub(here.cleaned) >= meta::DAY_MS;
-        if !due && !meta::needs_shards(root, &me.id) { return Ok(()) }
+        if !meta::needs_shards(root, &me.id) { return Ok(()) }
         let _lock = WriteLock(vec![lock_file(&lock_path_at(root))?]);
-        meta::to_shards(root, me, warnings)?;
-        if due {
-            meta::clean_all(root, me, warnings)?;
-            here.cleaned = meta::now_ms();
+        if meta::to_shards(root, me, warnings)? {
+            let mut here = meta::Here::read(root, key, &me.id);
+            here.converted = meta::now_ms();
             here.save(root, key, &me.id)?;
         }
         Ok(())
+    }
+
+    /// FORMAT 6's daily clean-up (sync.md 3.3), under the write lock: this
+    /// device's shards cleaned, and its `.single` copy removed once 30 days
+    /// are up. About 30 ms for 15,000 entries, so `list` does it, not opening.
+    fn clean_meta(&mut self) -> Result<()> {
+        let _lock = WriteLock(self.lock_files(self.v5)?);
+        meta::clean_all(&self.top_dir, &self.me, &mut self.warnings)?;
+        meta::tend_single(&self.top_dir, &self.me.id, &mut self.here)?;
+        self.here.cleaned = meta::now_ms();
+        self.here.save(&self.top_dir, &self.key, &self.me.id)
     }
 
     /// The format a library is moved to on opening: `FORMAT`, unless a test
@@ -2355,6 +2370,11 @@ impl Store {
     /// All documents found on disk. Files and folders made in the Finder are
     /// picked up; entries whose files are gone are dropped.
     pub fn list(&mut self) -> Vec<Entry> {
+        // Under its own lock, before `begin_write` reads what it wrote.
+        if self.clean_due == Some(true) && self.batch.lock.is_none() {
+            self.clean_due = None;
+            if let Err(e) = self.clean_meta() { self.warnings.push(format!("无法整理文档索引：{e}")); }
+        }
         let _lock = match self.begin_write() {
             Ok(lock) => Some(lock),
             Err(e) => { self.warnings.push(format!("无法锁定文档库：{e}")); None }
@@ -2365,6 +2385,7 @@ impl Store {
         let mut keys: HashSet<String> = found.dirs.iter().map(|d| format!("{d}/")).collect();
         keys.extend(found.docs.iter().cloned());
         keys.extend(found.pending.iter().cloned());
+        if self.v6 && _lock.is_some() && self.revive(&disk, &keys) { disk = self.to_disk(); }
         let mut left_out = HashSet::new();
         let mut gone = vec![];
         if !found.partial {
@@ -2375,7 +2396,7 @@ impl Store {
             let (seen, here, v6) = (self.seen.get_mut(), &self.here.seen, self.v6);
             disk.retain(|k, a| keys.contains(k) || {
                 seen.remove(&a.id);
-                if v6 && here.get(&a.id) == Some(k) { gone.push(a.id.clone()) } else { left_out.insert(k.clone()); }
+                if v6 && here.get(&a.id) == Some(k) { gone.push((a.id.clone(), k.clone())) } else { left_out.insert(k.clone()); }
                 false
             });
         }
@@ -2464,6 +2485,7 @@ impl Store {
         // arrives (and then keeps what its device set) or a device file changes.
         // Written just above (`save_index` marked memory as the disk); unwritten, read next time.
         if disk_left_out && _lock.is_some() && let Some(s) = self.synced.get_mut() { s.absent.extend(left_out); }
+        if self.clean_due == Some(false) { self.clean_due = Some(true); }
         out
     }
 
@@ -2473,10 +2495,10 @@ impl Store {
     /// Only items with a record: one without is found from its file on
     /// every device, and nothing is written when it goes. A whole scan
     /// also forgets what is no longer listed.
-    fn saw(&mut self, disk: &DiskIndex, keys: &HashSet<String>, pending: &[String], partial: bool, gone: &[String], wrote: bool) {
+    fn saw(&mut self, disk: &DiskIndex, keys: &HashSet<String>, pending: &[String], partial: bool, gone: &[(String, String)], wrote: bool) {
         let mut changed = false;
         let seen = &mut self.here.seen;
-        if wrote { for id in gone { changed |= seen.remove(id).is_some(); } }
+        if wrote { for (id, _) in gone { changed |= seen.remove(id).is_some(); } }
         let pending: HashSet<&str> = pending.iter().map(String::as_str).collect();
         let merged = self.merged.borrow();
         let mut listed = 0;
@@ -2492,7 +2514,7 @@ impl Store {
         }
         drop(merged);
         if !partial && listed + if wrote { 0 } else { gone.len() } < seen.len() {
-            let ids: HashSet<&str> = disk.values().map(|a| a.id.as_str()).chain(gone.iter().filter(|_| !wrote).map(String::as_str)).collect();
+            let ids: HashSet<&str> = disk.values().map(|a| a.id.as_str()).chain(gone.iter().filter(|_| !wrote).map(|g| g.0.as_str())).collect();
             seen.retain(|id, _| ids.contains(id.as_str()));
             changed = true;
         }
@@ -2500,12 +2522,31 @@ impl Store {
     }
 
     /// FORMAT 6: `gone` tombstones for pages deleted outside the app, later
-    /// than everything about them. `path` goes too, at the same stamp, so a
-    /// device's own older `path` does not outlive the tombstone in its files.
-    fn write_gone(&self, ids: &[String]) -> Result<()> {
-        let at = serde_json::json!({ "at": now() });
-        let changes = ids.iter().flat_map(|id| [(id.clone(), "gone".to_string(), at.clone()), (id.clone(), "path".to_string(), serde_json::Value::Null)]).collect();
+    /// than everything about them, with the path each was at (`revive`).
+    /// `path` goes too, at the same stamp, so a device's own older `path`
+    /// does not outlive the tombstone in its files.
+    fn write_gone(&self, gone: &[(String, String)]) -> Result<()> {
+        let at = now();
+        let changes = gone.iter().flat_map(|(id, from)| [(id.clone(), "gone".to_string(), serde_json::json!({ "at": at, "from": from })), (id.clone(), "path".to_string(), serde_json::Value::Null)]).collect();
         meta::commit_over(&self.top_dir, &self.me, &self.clock, &mut self.merged.borrow_mut(), changes, &mut vec![])
+    }
+
+    /// FORMAT 6: files found with no entry (not in `disk`) where a page
+    /// deleted outside the app in the last 30 days was (its `gone`'s `from`):
+    /// they are that page back (a git branch switched back, a folder put
+    /// back), so it gets its `path` again, later than the tombstone, and with
+    /// it its id and all it had (pins, order …). Whether any did; then memory
+    /// is read again from the device files.
+    fn revive(&mut self, disk: &DiskIndex, keys: &HashSet<String>) -> bool {
+        let fresh: Vec<&String> = keys.iter().filter(|k| !disk.contains_key(*k)).collect();
+        if fresh.is_empty() { return false }
+        let from = self.merged.borrow().gone_from(meta::now_ms().saturating_sub(meta::PURGED_KEPT_MS));
+        let changes: Vec<_> = fresh.into_iter().filter_map(|k| Some((from.get(k)?.clone(), "path".to_string(), serde_json::Value::String(k.clone())))).collect();
+        if changes.is_empty() || meta::commit_over(&self.top_dir, &self.me, &self.clock, &mut self.merged.borrow_mut(), changes, &mut vec![]).is_err() { return false }
+        let mut warnings = vec![];
+        self.load_meta(&mut warnings);
+        self.warnings.extend(warnings);
+        true
     }
 
     /// What `list` parsed last launch, for the files still where they were.
@@ -4794,11 +4835,13 @@ mod tests {
         let list = listed(&lib);
         assert_eq!(list.1, vec![p[3].clone()]);
         let whole = crate::vfs::read(meta::dir(&lib.0).join("aaaa.json")).unwrap();
-        // This device converts its own file only.
+        crate::vfs::write(meta::dir(&lib.0).join("aaaa.json.bak"), &whole).unwrap();
+        // This device converts its own file only, its backup with it (`.single` is one).
         let mut a = Store::open_as(lib.0.clone(), &library_key(&lib.0), dev("aaaa")).unwrap();
         assert!(a.warnings.is_empty(), "{:?}", a.warnings);
         let d = meta::dir(&lib.0);
         assert!(d.join("aaaa").fs_is_dir() && !d.join("aaaa.json").fs_exists() && !d.join("aaaa.tmp").fs_exists());
+        assert!(!d.join("aaaa.json.bak").fs_exists());
         assert_eq!(crate::vfs::read(d.join("aaaa.json.single")).unwrap(), whole);
         assert!(d.join("bbbb.json").fs_is_file() && !d.join("bbbb").fs_exists(), "the other device's stays whole");
         assert_eq!(view(&lib), before);
@@ -4815,6 +4858,22 @@ mod tests {
         let a = Store::open_as(lib.0.clone(), &library_key(&lib.0), dev("aaaa")).unwrap();
         assert!(!meta::needs_shards(&lib.0, "aaaa") && a.warnings.is_empty());
         assert_eq!(written_stamps(&d.join("aaaa")), stamps);
+        drop(a);
+        // The `.single` copy stays 30 days, then the day's clean-up removes it.
+        let t = meta::now_ms();
+        let open_at = |days: u64| {
+            meta::CLOCK.with(|c| c.set(Some(t + days * meta::DAY_MS)));
+            let mut a = Store::open_as(lib.0.clone(), &library_key(&lib.0), dev("aaaa")).unwrap();
+            a.list();
+            assert!(d.join("aaaa.json.single").fs_is_file(), "not on the way to the first list");
+            a.list();
+            meta::CLOCK.with(|c| c.set(None));
+        };
+        open_at(29);
+        assert!(d.join("aaaa.json.single").fs_is_file());
+        open_at(31);
+        assert!(!d.join("aaaa.json.single").fs_exists() && d.join("bbbb.json.single").fs_is_file());
+        assert_eq!(view(&lib), before);
     }
 
     /// A crash midway through `to_shards`: opened again, the same result.
@@ -4888,6 +4947,47 @@ mod tests {
         crate::vfs::write(&file, &text).unwrap();
         assert!(a.list().iter().any(|e| e.id == x));
         assert!(b.list().iter().any(|e| e.id == x));
+    }
+
+    /// A file put back where one deleted outside the app was (a git branch
+    /// switched back) is that page again: its id, pin and place.
+    #[test]
+    fn a_file_put_back_where_it_was_takes_its_id_again() {
+        let lib = Lib::new("gone-back");
+        let mut a = Store::open_as(lib.0.clone(), &library_key(&lib.0), dev("aaaa")).unwrap();
+        let x = a.create_from(&doc("甲")).unwrap();
+        let y = a.create_from(&doc("乙")).unwrap();
+        a.set_pinned(&x, true).unwrap();
+        a.initialize_manual_order().unwrap();
+        a.list();
+        let (fx, fy) = (a.path(&x), a.path(&y));
+        let (tx, ty) = (crate::vfs::read(&fx).unwrap(), crate::vfs::read(&fy).unwrap());
+        let place = view(&lib)[&x]["root_order"].0.clone();
+        assert!(place.is_string());
+        let rel = a.index[&x].rel.clone();
+        crate::vfs::remove_file(&fx).unwrap();
+        crate::vfs::remove_file(&fy).unwrap();
+        assert!(!a.list().iter().any(|e| e.id == x || e.id == y));
+        assert_eq!(lib.dev_items("aaaa")["items"][&x]["gone"][0]["from"], serde_json::json!(rel));
+        // The same path: the same page, pinned and in its place.
+        crate::vfs::write(&fx, &tx).unwrap();
+        assert!(pinned(&mut a, &x));
+        assert_eq!(view(&lib)[&x]["root_order"].0, place);
+        assert!(!lib.index().values().any(|e| e.id == meta::path_id(&rel)));
+        // Elsewhere: a new page.
+        let moved = fy.with_file_name("丙.xml");
+        crate::vfs::write(&moved, &ty).unwrap();
+        let list = a.list();
+        assert!(!list.iter().any(|e| e.id == y) && list.iter().any(|e| e.id == meta::path_id("丙.xml")));
+        crate::vfs::remove_file(&moved).unwrap();
+        a.list();
+        // Back where it was after 30 days: a new page too (its tombstone may be gone).
+        meta::CLOCK.with(|c| c.set(Some(meta::now_ms() + meta::PURGED_KEPT_MS + 1)));
+        crate::vfs::write(&fy, &ty).unwrap();
+        let ry = a.index.get(&y).map(|m| m.rel.clone());
+        let list = a.list();
+        meta::CLOCK.with(|c| c.set(None));
+        assert!(ry.is_none() && !list.iter().any(|e| e.id == y));
     }
 
     #[test]
@@ -5345,7 +5445,7 @@ mod tests {
         let index = crate::vfs::read(trash.join("index.json")).unwrap();
         crate::vfs::rename(&trash, lib.0.join(".quiet/trash-away")).unwrap();
         crate::vfs::write(&trash, b"").unwrap();
-        let mut s = Store { file_changes: vec![], top_dir: lib.0.clone(), index: HashMap::new(), foreign: DiskIndex::new(), flat: false, migrated: None, trash: serde_json::from_slice(&index).unwrap(), warnings: vec![], loaded: Default::default(), copied: Default::default(), parsed: HashMap::new(), batch: Default::default(), view: Default::default(), v5: false, me: device(), clock: Default::default(), seen: Default::default(), merged: Default::default(), key: library_key(&lib.0), place_by_hand: true, v6: false, seen_trash: Default::default(), purging: Default::default(), synced: Default::default(), here: Default::default() };
+        let mut s = Store { file_changes: vec![], top_dir: lib.0.clone(), index: HashMap::new(), foreign: DiskIndex::new(), flat: false, migrated: None, trash: serde_json::from_slice(&index).unwrap(), warnings: vec![], loaded: Default::default(), copied: Default::default(), parsed: HashMap::new(), batch: Default::default(), view: Default::default(), v5: false, me: device(), clock: Default::default(), seen: Default::default(), merged: Default::default(), key: library_key(&lib.0), place_by_hand: true, v6: false, seen_trash: Default::default(), purging: Default::default(), synced: Default::default(), here: Default::default(), clean_due: None };
         assert_eq!(s.list_trash().len(), 1);
         assert_eq!(s.trash.len(), 1);
     }
