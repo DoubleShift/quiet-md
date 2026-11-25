@@ -1218,4 +1218,9 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("已读取 {} 篇", "{} notes lues"),
     ("文档库还在载入，稍后再试", "La bibliothèque est encore en cours de chargement ; réessayez dans un instant"),
     ("马上就好…", "Presque terminé…"),
+    ("添加「{}」？", "Ajouter « {} » ?"),
+    ("这个文件夹看起来是代码项目。", "Ce dossier ressemble à un projet de code. "),
+    ("这个文件夹里有 {} 多个文件。", "Ce dossier contient plus de {} fichiers. "),
+    ("Quiet.md 只显示其中的 Markdown 文件和 Quiet.md 文档，不进入依赖、构建产物和 .gitignore 忽略的文件夹；添加后，文件夹里会多一个隐藏的 .quiet 文件夹。", "Quiet.md n’affiche que ses fichiers Markdown et ses documents Quiet.md, et ignore les dépendances, les fichiers de compilation et ce que .gitignore exclut. L’ajouter crée un dossier caché .quiet à l’intérieur."),
+    ("添加", "Ajouter"),
 ];

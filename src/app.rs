@@ -323,6 +323,8 @@ pub enum Confirm {
     RemoveFolder(String, String),
     /// Dropped on the sidebar from outside: import it into the library there?
     Import { what: DropImport, target: crate::sidebar_drop::SidebarDropAt },
+    /// 打开文件夹… on a code project or a very big folder: add it? The first one is asked about.
+    AddFolder(Vec<(std::path::PathBuf, fdl_core::shown::Survey)>),
 }
 
 /// What a sidebar drop would import: files and folders from the Finder, or a 本机文件.
@@ -609,15 +611,14 @@ impl Workspace {
         });
         if !quick { crate::settings::watch_themes(cx); }
         // A file written into the library from outside (a model writing a
-        // note, say) joins it without going away and back: the library's
-        // shape is compared every couple of seconds and the list re-read only
-        // when it changed. Every top-level folder is watched the same way, and so is
-        // the open document: a clean editor takes in what another program (the
-        // `quiet` CLI, say) wrote to it.
+        // note, say) joins it without going away and back: each top-level folder's
+        // shape is compared every couple of seconds, and those that changed are
+        // listed again off the main thread (`relist`). So is the open document: a
+        // clean editor takes in what another program (the `quiet` CLI, say) wrote to it.
         cx.spawn(async move |this, cx| {
             let bg = cx.background_executor().clone();
-            let shape = |dirs: Vec<std::path::PathBuf>| bg.spawn(async move { dirs.iter().map(|d| crate::store::Store::shape_at(d)).collect::<Vec<u64>>() });
-            let dirs = |cx: &mut AsyncApp| this.update(cx, |w, _| w.store.top_dirs()).unwrap_or_default();
+            let shape = |dirs: Vec<(String, std::path::PathBuf)>| bg.spawn(async move { dirs.into_iter().map(|(k, d)| (k, crate::store::Store::shape_at(&d))).collect::<Vec<_>>() });
+            let dirs = |cx: &mut AsyncApp| this.update(cx, |w, _| w.store.top_keys_dirs()).unwrap_or_default();
             let mut last = shape(dirs(cx)).await;
             let mut last_file = None;
             loop {
@@ -636,13 +637,12 @@ impl Workspace {
                     last_file = file;
                 }
                 if now == last { continue }
+                // Only what changed; a top-level folder just added is listed as it is added.
+                let changed: Vec<String> = now.iter().filter(|(k, s)| last.iter().any(|(l, t)| l == k && t != s)).map(|(k, _)| k.clone()).collect();
                 let reloaded = this.update(cx, |w, cx| {
                     // Not mid-rename: the row under the field would be rebuilt.
                     if w.rename.is_some() || w.move_dlg.is_some() || w.store.file_task_busy() || w.store.loading() { return false }
-                    w.entries = w.store.list();
-                    w.sort();
-                    cx.notify();
-                    true
+                    w.relist(changed, cx)
                 });
                 match reloaded { Ok(true) => last = now, Ok(false) => {}, Err(_) => break }
             }
@@ -811,6 +811,29 @@ impl Workspace {
         if std::mem::take(&mut self.start_later) && self.current.is_none() && self.view == View::Home { self.open_start(window, cx); }
         self.show_warnings(cx);
         cx.notify();
+    }
+
+    /// Top-level folders `keys` listed again off the main thread (the 2 s look): each
+    /// library takes over its writer when it wrote nothing meanwhile, else is listed
+    /// here. False when another listing is still running (try again later).
+    pub(crate) fn relist(&mut self, keys: Vec<String>, cx: &mut Context<Self>) -> bool {
+        if keys.is_empty() { return true }
+        let Some(writers) = self.store.begin_relist(&keys) else { return false };
+        let task = cx.background_executor().spawn(async move {
+            writers.into_iter().map(|(k, n, mut w)| { let e = w.list(); (k, n, w, e) }).collect::<Vec<_>>()
+        });
+        cx.spawn(async move |this, cx| {
+            let done = task.await;
+            let _ = this.update(cx, |w, cx| {
+                let entries = w.store.end_relist(done);
+                // Not mid-rename: the row under the field would be rebuilt; the next look brings it.
+                if w.rename.is_some() || w.move_dlg.is_some() { return }
+                w.entries = entries;
+                w.sort();
+                cx.notify();
+            });
+        }).detach();
+        true
     }
 
     /// While the first listing runs, what needs the whole library (search,
@@ -2095,11 +2118,12 @@ impl Render for Workspace {
         crate::loading::drawn(cx);
         let load = crate::loading::phase(cx);
         if load.moving() { window.request_animation_frame(); }
-        let covers = if load.loading() { matches!(self.view, View::Home | View::Folder) } else { self.load_cover && load.moving() };
+        let cover = crate::loading::cover(cx);
+        let covers = cover > 0. && if load.loading() { matches!(self.view, View::Home | View::Folder) } else { self.load_cover && load.moving() };
         let load_layer = covers.then(|| {
             let counts = cx.try_global::<crate::loading::Load>().map(|l| l.counts()).unwrap_or_default();
             // A Markdown file let go here opens where it is, as from the Finder.
-            crate::loading::note_layer(load, crate::loading::t(cx), counts)
+            crate::loading::note_layer(load, cover, crate::loading::t(cx), counts)
                 .on_drop(cx.listener(|w, paths: &ExternalPaths, window, cx| w.file_drop_paths(paths.paths().to_vec(), window, cx)))
         });
         let note = div().id("note").relative().flex_1().min_w_0().h_full().pt(px(inset_top)).flex().bg(page).shadow(theme::shadow_note()).child(main)

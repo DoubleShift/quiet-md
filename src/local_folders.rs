@@ -8,6 +8,7 @@ use crate::theme::Theme;
 use crate::settings::tr;
 use crate::ui::ToastKind;
 use fdl_core::home::{AddError, RenameError};
+use fdl_core::shown::Survey;
 use gpui::{prelude::FluentBuilder, *};
 use std::path::{Path, PathBuf};
 
@@ -71,8 +72,33 @@ impl Workspace {
         .detach();
     }
 
-    /// Add `dirs` as top-level folders; the sidebar shows the last one.
+    /// Add `dirs` as top-level folders; the sidebar shows the last one. A folder
+    /// added for the first time is looked at first, off the main thread: a code
+    /// project or a very big one is added only once the user says so (`Confirm::AddFolder`).
     pub(crate) fn add_folders(&mut self, dirs: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        let dirs = dirs.to_vec();
+        let task = cx.background_executor().spawn(async move {
+            dirs.into_iter().map(|d| { let s = if d.join(crate::store::INTERNAL).exists() { Survey::Plain } else { fdl_core::shown::survey(&d) }; (d, s) }).collect::<Vec<_>>()
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let looked = task.await;
+            let _ = this.update_in(cx, |w, window, cx| {
+                let (plain, ask): (Vec<_>, Vec<_>) = looked.into_iter().partition(|(_, s)| *s == Survey::Plain);
+                w.add_folders_now(&plain.into_iter().map(|(d, _)| d).collect::<Vec<_>>(), window, cx);
+                if !ask.is_empty() { w.confirm = Some(crate::app::Confirm::AddFolder(ask)); cx.notify(); }
+            });
+        }).detach();
+    }
+
+    /// 添加 in `Confirm::AddFolder`: the first folder asked about is added, then the next is asked about.
+    pub(crate) fn add_asked_folder(&mut self, mut ask: Vec<(PathBuf, Survey)>, window: &mut Window, cx: &mut Context<Self>) {
+        if ask.is_empty() { return }
+        let (dir, _) = ask.remove(0);
+        self.add_folders_now(&[dir], window, cx);
+        if !ask.is_empty() { self.confirm = Some(crate::app::Confirm::AddFolder(ask)); }
+    }
+
+    fn add_folders_now(&mut self, dirs: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
         for d in dirs {
             let fresh = !d.join(crate::store::INTERNAL).exists();
             match self.store.add_folder(d) {
@@ -89,8 +115,12 @@ impl Workspace {
     fn folder_added(&mut self, key: &str, _window: &mut Window, cx: &mut Context<Self>) {
         self.folded_tops.remove(key);
         if self.store.set_active_top(key) { cx.defer(crate::settings::top_switched); }
-        self.entries = self.store.list();
-        self.sort();
+        // Listed off the main thread, as a big library is at launch (`loading`): here at
+        // once when quick, else every window takes it in when done (`Workspace::loaded`).
+        if let Some(entries) = crate::loading::begin_added(&mut self.store, key, cx) {
+            self.entries = entries;
+            self.sort();
+        }
         self.show_store_warnings_from(&self.store.take_warnings(), cx);
         cx.notify();
     }
@@ -238,5 +268,18 @@ impl Workspace {
     /// The rows of 本机文件: single files opened where they are, last opened first.
     pub(crate) fn local_rows(&self) -> Vec<(&crate::store::Entry, usize)> {
         self.local_entries().into_iter().filter(|e| e.meta.folder.is_none()).map(|e| (e, 0)).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// What `Confirm::AddFolder` says, by its Chinese key.
+    const TEXTS: [&str; 5] = ["添加「{}」？", "这个文件夹看起来是代码项目。", "这个文件夹里有 {} 多个文件。", "Quiet.md 只显示其中的 Markdown 文件和 Quiet.md 文档，不进入依赖、构建产物和 .gitignore 忽略的文件夹；添加后，文件夹里会多一个隐藏的 .quiet 文件夹。", "添加"];
+
+    #[test]
+    fn every_language_asks_before_adding_a_code_folder() {
+        for l in crate::settings::Lang::ALL.into_iter().filter(|l| !matches!(l, crate::settings::Lang::Zh | crate::settings::Lang::En)) {
+            for k in TEXTS { assert!(crate::l10n::get(l, k).is_some(), "{l:?}: {k}"); }
+        }
     }
 }

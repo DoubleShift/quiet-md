@@ -248,6 +248,28 @@ An import (Markdown files, a folder, an Obsidian vault, 思源笔记) is written
 
 Before, the 15,000-note window showed nothing for the 2.0 s of the `list` plus 1.1 s for the first folder's numbering. A file opened during loading costs one more `list` at the hand-back (264 ms for 60,000 notes). What the hand-back still takes is `begin_write` and `settings()` in opening the start folder, sorting the entries and the first frame laying out the rows.
 
+### Adding a code folder
+
+添加文件夹 on a folder of code checkouts used to stall the window for seconds: `list` went into every `node_modules`, `target` and `.venv`, wrote an entry for each of their folders and read every Markdown file there, and the 2 s check walked the whole tree again on the main thread. Now (see [What a folder shows](FORMAT.md#what-a-folder-shows)) the scan does not go into dependency and build folders or what `.gitignore` leaves out, lists only Markdown, DocxXML, whiteboards and 数据表, and writes no entry for a folder with nothing to show. The listing after adding runs on a background thread under the window's loading layer drawn over what is already shown (the sidebar keeps its rows), and when the 2 s check sees a top-level folder change, that folder is listed in the background and handed back (`SharedStore::begin_relist` / `end_relist`); if the window saved meanwhile, its own store lists again instead. Before adding, a folder with a project file at its top or one level down, or with more than 20,000 files, asks first (`shown::survey`, off the main thread; a folder that already has `.quiet/` does not ask).
+
+A generated tree of 40 checkouts (`tools/perf/gen_code_tree.py`, 315,285 files, 50,406 of them `.md` / `.xml` and folders the old scan took in), measured 2026-11-26 on the Mac mini above against `fdf3684`. Core steps with `add_folder_bench` (two runs each); the window with the harness, a timer on the main thread logging how late it fires:
+
+| | Before | After |
+|---|---:|---:|
+| First `list()` | 1,091-2,946 ms | 75-82 ms |
+| Later `list()` (window activated) | 584-611 ms | 62-66 ms |
+| `shape_at` (the 2 s check) | 521-613 ms | 60-114 ms |
+| Entries listed | 50,406 | 206 (126 notes, 80 folders) |
+| `.quiet/` written | 14 MB | 60 KB |
+| Core memory | 324 MB | 8 MB |
+| Longest main-thread stall adding it (window) | 1.26 s + 0.6 s (4.6 s cold) | under 100 ms |
+| Opening its folder page | 3.7 s, then ~110 ms frames | no stall |
+| Window peak memory | 846-852 MB | 152 MB |
+| 20 s of builds writing into `target/` | stalls up to 1.05 s, 3.07 s in all; `.quiet/` 28 MB | none over 80 ms; 128 KB |
+| 20 s of notes written into `docs/` | stalls up to 1.02 s | none over 80 ms |
+
+The same tree with its `Cargo.toml` / `package.json` / `pyproject.toml` (`--project-files`, the usual case, where `target`, `build` and `dist` are known for build output): `list()` 9-11 ms (28-30 ms the first time), `shape_at` 9-15 ms. The harness window misses its timer by 60-80 ms some 220 times a minute even idle, in both builds (its frame cadence parked off screen), so only longer delays count as stalls above. Activating the window still lists on the main thread: 63 ms at worst on this tree, 9-11 ms with project files.
+
 ### Reproduce
 
 ```sh
@@ -261,4 +283,7 @@ QUIET_MD_HOME=/tmp/quiet-big/store cargo run --release -p fdl_core --example sto
 # first open: a fresh copy under $TMPDIR (its parse cache goes there too), recorded from the first frame
 FDL_RECORD_START=/tmp/quiet-big/launch.mp4 python3 tools/harness/run.py <script> /tmp/quiet-big/vault $TMPDIR/quiet-big-run
 grep -a 'library:' $TMPDIR/quiet-big-run/log
+# adding a code folder: the tree under $TMPDIR, so what this computer keeps about it goes there too
+python3 tools/perf/gen_code_tree.py $TMPDIR/codetree        # --project-files for the usual case
+TMPDIR=$TMPDIR cargo run --release -p fdl_core --example add_folder_bench -- $TMPDIR/codetree 3
 ```

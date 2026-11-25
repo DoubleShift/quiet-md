@@ -1186,4 +1186,9 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("已读取 {} 篇", "{} not okundu"),
     ("文档库还在载入，稍后再试", "Kitaplık hâlâ yükleniyor; birazdan yeniden deneyin"),
     ("马上就好…", "Neredeyse bitti…"),
+    ("添加「{}」？", "“{}” eklensin mi?"),
+    ("这个文件夹看起来是代码项目。", "Bu klasör bir kod projesine benziyor. "),
+    ("这个文件夹里有 {} 多个文件。", "Bu klasörde {} dosyadan fazlası var. "),
+    ("Quiet.md 只显示其中的 Markdown 文件和 Quiet.md 文档，不进入依赖、构建产物和 .gitignore 忽略的文件夹；添加后，文件夹里会多一个隐藏的 .quiet 文件夹。", "Quiet.md yalnızca içindeki Markdown dosyalarını ve Quiet.md belgelerini gösterir; bağımlılıkları, derleme çıktılarını ve .gitignore'un dışarıda bıraktıklarını atlar. Eklendiğinde klasörün içinde gizli bir .quiet klasörü oluşur."),
+    ("添加", "Ekle"),
 ];

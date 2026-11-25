@@ -121,17 +121,9 @@ impl DocKind {
     }
 
     /// A library file's kind and whether it is Markdown, by its name, in any
-    /// case; Markdown by every extension 打开文件… takes. `None`: not a
-    /// library file (older builds skip `.excalidraw` the same way).
-    pub fn of_name(name: &str) -> Option<(DocKind, bool)> {
-        match name.rsplit_once('.').filter(|(s, _)| !s.is_empty())?.1.to_ascii_lowercase().as_str() {
-            "xml" => Some((DocKind::Doc, false)),
-            "md" | "markdown" | "mdown" => Some((DocKind::Doc, true)),
-            "excalidraw" => Some((DocKind::Board, false)),
-            "sqlite" => Some((DocKind::Table, false)),
-            _ => None,
-        }
-    }
+    /// case (`shown::LIBRARY_FILES`). `None`: not a library file (older builds
+    /// skip `.excalidraw` the same way). By name only: `shown::ours` looks inside.
+    pub fn of_name(name: &str) -> Option<(DocKind, bool)> { crate::shown::kind_of_name(name) }
 }
 
 /// A 数据表 file, by its name.
@@ -338,6 +330,11 @@ pub struct Store {
     /// the same: re-reading every document on each window activation stalled
     /// the main thread for seconds on big or iCloud-evicted libraries.
     parsed: HashMap<String, (web_time::SystemTime, u64, Parsed)>,
+    /// `.xml` and `.sqlite` files looked inside (`shown::ours`) this session, by path:
+    /// ours (`None`), or not as the file was then (its time and size).
+    checked: HashMap<String, Option<(web_time::SystemTime, u64)>>,
+    /// `writes`.
+    writes: std::cell::Cell<u64>,
     top_dir: PathBuf,
     /// Every document and folder by its id. Ids are handed out per library
     /// and remembered in `.quiet/index.json`, but nothing in a file refers
@@ -439,7 +436,7 @@ struct Parsed { title: String, icon: Option<String>, body: std::sync::Arc<str>, 
 /// are this machine's mtimes, so it lives in the cache folder, not in the
 /// (possibly synced) library. Bump `PARSED_CACHE` when what `list` takes from
 /// a file changes; a release discards it anyway.
-const PARSED_CACHE: u32 = 3;
+const PARSED_CACHE: u32 = 4;
 
 #[derive(Serialize, Deserialize)]
 struct ParsedCache { version: String, docs: HashMap<PathBuf, CachedDoc> }
@@ -1020,7 +1017,8 @@ impl Store {
     /// writing a note), not when one is saved. Cheap enough to poll.
     pub fn shape_at(root: &Path) -> u64 {
         use std::hash::{Hash, Hasher};
-        let found = layout::scan(&if Self::flat_at(root) { root.join("docs") } else { root.to_path_buf() });
+        // By name: a `.xml` that is not ours changes nothing shown, and `list` looks inside.
+        let found = layout::scan(&if Self::flat_at(root) { root.join("docs") } else { root.to_path_buf() }, &mut |_, _, _, _| true);
         let mut h = std::collections::hash_map::DefaultHasher::new();
         (found.dirs, found.docs, found.pending).hash(&mut h);
         h.finish()
@@ -1059,7 +1057,8 @@ impl Store {
         }
         /// The pages under `dir`; a scan that could not see them all is refused.
         fn scan(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-            let found = layout::scan(dir);
+            // Every file that may be a page is read, ours or not: nothing in use is offered.
+            let found = layout::scan(dir, &mut |_, _, _, _| true);
             if found.partial { anyhow::bail!("a folder under {} could not be read", dir.display()) }
             if let Some(p) = found.pending.first() { anyhow::bail!("{} is not downloaded from iCloud", dir.join(p).display()) }
             out.extend(found.docs.iter().map(|rel| dir.join(rel)));
@@ -1393,7 +1392,7 @@ impl Store {
         let trash = load_json(&base.join("trash").join("index.json"), "回收站索引", &mut warnings);
         let v5 = !flat && Self::format_at(&root) >= 5;
         let v6 = v5 && Self::format_at(&root) >= 6;
-        let mut store = Store { file_changes: vec![], top_dir: root, index: HashMap::new(), foreign: DiskIndex::new(), trash, flat, warnings, migrated: None, loaded: Default::default(), copied: Default::default(), parsed: HashMap::new(), batch: Default::default(), view: Default::default(),
+        let mut store = Store { file_changes: vec![], top_dir: root, index: HashMap::new(), foreign: DiskIndex::new(), trash, flat, warnings, migrated: None, loaded: Default::default(), copied: Default::default(), parsed: HashMap::new(), checked: HashMap::new(), writes: Default::default(), batch: Default::default(), view: Default::default(),
             v5, me, clock: Default::default(), seen: Default::default(), merged: Default::default(), key: key.to_string(), place_by_hand: true, v6, seen_trash: Default::default(), purging: Default::default(), synced: Default::default() };
         if flat {
             store.index = load_json(&base.join("index.json"), "文档索引", &mut store.warnings);
@@ -1963,6 +1962,7 @@ impl Store {
     /// this one last looked. Every change is written through, so memory holds
     /// nothing the disk does not. A lock failure must never allow an unguarded write.
     fn begin_write(&mut self) -> Result<WriteLock> {
+        self.writes.set(self.writes.get() + 1);
         // Inside a batch the lock is held and memory is what the disk will be.
         if self.batch.lock.is_some() { return Ok(WriteLock(vec![])); }
         crate::vfs::create_dir_all(self.internal())?;
@@ -2337,6 +2337,18 @@ impl Store {
         self.relocate(&[(id.to_string(), join_rel(&dir, &to))])
     }
 
+    /// `list`'s write lock; without it, what it found is not written down.
+    fn lock_for_list(&mut self) -> Option<WriteLock> {
+        match self.begin_write() {
+            Ok(lock) => Some(lock),
+            Err(e) => { self.warnings.push(format!("无法锁定文档库：{e}")); None }
+        }
+    }
+
+    /// Goes up with every write (and `list`): a `tree_writer` listing off the main
+    /// thread is taken over (`adopt`) only when this did not move meanwhile.
+    pub fn writes(&self) -> u64 { self.writes.get() }
+
     /// All documents found on disk. Files and folders made in the Finder are
     /// picked up; entries whose files are gone are dropped.
     pub fn list(&mut self) -> Vec<Entry> { self.list_with(None, true) }
@@ -2346,22 +2358,46 @@ impl Store {
     /// one still in iCloud is, and read on a later `list` (本机文件 are read
     /// anyway: there are few, and one may be opening right now).
     pub fn list_with(&mut self, progress: Option<&ListProgress>, parse: bool) -> Vec<Entry> {
-        let _lock = match self.begin_write() {
-            Ok(lock) => Some(lock),
-            Err(e) => { self.warnings.push(format!("无法锁定文档库：{e}")); None }
+        if self.flat {
+            let lock = self.lock_for_list();
+            return self.list_flat(lock.is_some());
+        }
+        let found = {
+            // What `list` read before is ours (the cache keeps nothing else); the rest is looked at once.
+            let (index, parsed, checked) = (&self.index, &self.parsed, &mut self.checked);
+            let mut read: Option<HashSet<&str>> = None;
+            layout::scan(&self.top_dir, &mut |rel, path, kind, md| {
+                let stamp = || crate::vfs::metadata(path).ok().and_then(|m| Some((m.modified().ok()?, m.len())));
+                match checked.get(rel) { Some(None) => return true, Some(Some(was)) if Some(*was) == stamp() => return false, _ => {} }
+                let read = read.get_or_insert_with(|| parsed.keys().filter_map(|id| index.get(id)).map(|m| m.rel.as_str()).collect());
+                let ok = read.contains(rel) || crate::shown::ours(path, kind, md);
+                checked.insert(rel.to_string(), if ok { None } else { stamp() });
+                ok
+            })
         };
-        if self.flat { return self.list_flat(_lock.is_some()); }
-        let found = layout::scan(&self.top_dir);
+        // Walked before the lock is taken: a big folder's walk holds up no one's save.
+        let _lock = self.lock_for_list();
         let mut disk = self.to_disk();
         let mut keys: HashSet<String> = found.dirs.iter().map(|d| format!("{d}/")).collect();
         keys.extend(found.docs.iter().cloned());
         keys.extend(found.pending.iter().cloned());
+        // A folder with nothing listed in it shows only when the user made it here (or
+        // pinned, starred or renamed it): a found one has the id its path gives.
+        let users = |k: &str, a: &Attached| !self.v5 || a.id != meta::path_id(k) || a.pinned || a.starred > 0;
+        for d in &found.empty {
+            let k = format!("{d}/");
+            if !disk.get(&k).is_some_and(|a| users(&k, a)) { continue }
+            let mut up = d.as_str();
+            loop { keys.insert(format!("{up}/")); match up.rsplit_once('/') { Some((p, _)) => up = p, None => break } }
+        }
+        let hidden = found.hider();
         let mut left_out = HashSet::new();
         if !found.partial {
             // Not here (yet, or gone outside the app): left out, not removed, so
             // another device's entry for a file still on its way keeps its settings.
+            // Here but not shown (`Scan::hider`): kept as it is, only not listed.
             let seen = self.seen.get_mut();
-            disk.retain(|k, a| keys.contains(k) || { seen.remove(&a.id); left_out.insert(k.clone()); false });
+            disk.retain(|k, a| keys.contains(k) || hidden(k) || { seen.remove(&a.id); left_out.insert(k.clone()); false });
         }
         let disk_left_out = !left_out.is_empty();
         let mut dirty = disk_left_out;
@@ -2384,6 +2420,8 @@ impl Store {
             self.parsed.clear();
         }
         let pending: HashSet<&str> = found.pending.iter().map(String::as_str).collect();
+        // A folder that could not be read keeps what was listed in it.
+        let shown = |k: &str| keys.contains(k) || (found.partial && !hidden(k));
         let mut out = vec![];
         let mut reparsed = false;
         let mut ids: Vec<String> = self.index.iter().filter(|(_, m)| m.folder.is_none()).map(|(k, _)| k.clone()).collect();
@@ -2392,6 +2430,7 @@ impl Store {
         for id in ids {
             if let Some(p) = progress { p.done.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
             let m = &self.index[&id];
+            if !m.local() && !shown(&m.rel) { continue; }
             let p = self.path(&id);
             if m.local() && !p.fs_exists() { continue; }
             if !m.local() && pending.contains(m.rel.as_str()) && !p.fs_exists() {
@@ -2426,7 +2465,7 @@ impl Store {
             out.push(Entry { id, meta: m.clone(), title, icon, body, reminders, links, note: None, top: String::new() });
         }
         // Folders in id order: the index is a HashMap, whose order changes every time it is re-read.
-        let mut folders: Vec<(&String, &Meta)> = self.index.iter().filter(|(_, m)| m.folder.is_some()).collect();
+        let mut folders: Vec<(&String, &Meta)> = self.index.iter().filter(|(_, m)| m.folder.is_some() && shown(&format!("{}/", m.rel))).collect();
         folders.sort_by(|a, b| a.0.cmp(b.0));
         for (id, meta) in folders {
             let title = meta.folder.clone().unwrap_or_default();
@@ -2457,6 +2496,7 @@ impl Store {
         use std::mem::take;
         (self.index, self.foreign, self.trash) = (take(&mut from.index), take(&mut from.foreign), take(&mut from.trash));
         for (id, c) in from.parsed.drain() { self.parsed.entry(id).or_insert(c); }
+        self.checked.extend(from.checked.drain());
         (self.seen, self.merged, self.synced, self.seen_trash) = (take(&mut from.seen), take(&mut from.merged), take(&mut from.synced), take(&mut from.seen_trash));
         self.clock.set(self.clock.get().max(from.clock.get()));
     }
@@ -4344,6 +4384,72 @@ mod tests {
         assert_eq!(loads(), n + 1);
     }
 
+    /// A code folder lists its notes only (docs/FORMAT.md, "What a folder shows"):
+    /// not what is in dependency and build folders or ignored by git, not another
+    /// program's `.xml` or `.sqlite`, not folders without notes; and none of that
+    /// gets an entry written down.
+    #[test]
+    fn a_code_folder_lists_its_notes_only() {
+        let lib = Lib::new("code-folder");
+        let mut s = lib.open();
+        let w = |rel: &str, text: &str| { let p = lib.0.join(rel); crate::vfs::create_dir_all(p.parent().unwrap()).unwrap(); crate::vfs::write(p, text).unwrap(); };
+        w("app/package.json", "{}");
+        w("app/README.md", "# App\n");
+        w("app/node_modules/left-pad/README.md", "# left-pad\n");
+        w("app/build/out.md", "generated\n");
+        w("app/src/deep/main.rs", "fn main() {}\n");
+        w("app/docs/guide.md", "# Guide\n");
+        w("app/docs/draft.md", "# Draft\n");
+        w("app/.gitignore", "docs/draft.md\nscratch/\n");
+        w("app/scratch/todo.md", "x\n");
+        w("app/pom.xml", "<?xml version=\"1.0\"?>\n<project><modelVersion>4.0.0</modelVersion></project>\n");
+        w("app/res/layout/main.xml", "<LinearLayout/>\n");
+        w("app/notes.xml", "<title>Notes</title>\n<p>ours</p>\n");
+        w("app/dev.sqlite", "SQLite format 3\0 but not a table of ours");
+        w("app/.git/info/exclude", "private.md\n");
+        w("app/private.md", "x\n");
+        // A folder called build with no project file beside it is a folder of notes.
+        w("journal/build/day.md", "# Day\n");
+        w("journal/target/goal.md", "# Goal\n");
+        crate::vfs::create_dir_all(lib.0.join("empty/inner")).unwrap();
+        let mine = s.create_folder("我的空文件夹", None).unwrap();
+        let list = s.list();
+        let mut rels: Vec<String> = list.iter().map(|e| if e.meta.folder.is_some() { format!("{}/", e.meta.rel) } else { e.meta.rel.clone() }).collect();
+        rels.sort();
+        assert_eq!(rels, ["app/", "app/README.md", "app/docs/", "app/docs/guide.md", "app/notes.xml", "journal/", "journal/build/", "journal/build/day.md", "journal/target/", "journal/target/goal.md", "我的空文件夹/"]);
+        assert!(list.iter().any(|e| e.id == mine), "made here: shown though empty");
+        let disk = lib.index();
+        assert!(disk.keys().all(|k| rels.contains(k)), "nothing else written down: {:?}", disk.keys().filter(|k| !rels.contains(k)).collect::<Vec<_>>());
+        // Looked inside once; a file rewritten is looked at again.
+        w("app/res/layout/main.xml", "<title>Layout notes</title>\n");
+        assert!(s.list().iter().any(|e| e.meta.rel == "app/res/layout/main.xml"));
+    }
+
+    /// An entry an older build wrote down that the rules now hide (a folder that
+    /// became build output, a file git now ignores) stays on disk as it was and is
+    /// only not listed: nothing is read again for it, and it comes back with its id.
+    #[test]
+    fn what_is_hidden_now_keeps_its_entry() {
+        let lib = Lib::new("hidden-kept");
+        let mut s = lib.open();
+        let w = |rel: &str, text: &str| { let p = lib.0.join(rel); crate::vfs::create_dir_all(p.parent().unwrap()).unwrap(); crate::vfs::write(p, text).unwrap(); };
+        w("proj/README.md", "# Proj\n");
+        w("proj/build/notes.md", "# Notes\n");
+        let id = |s: &mut Store| s.list().into_iter().find(|e| e.meta.rel == "proj/build/notes.md").map(|e| e.id);
+        let was = id(&mut s).expect("a folder called build of notes");
+        s.set_pinned(&was, true).unwrap();
+        w("proj/package.json", "{}");
+        assert_eq!(id(&mut s), None, "beside package.json, build is output");
+        let n = loads();
+        s.list();
+        s.list();
+        assert_eq!(loads(), n, "hidden, not gone: nothing read again");
+        assert!(lib.index().contains_key("proj/build/notes.md"));
+        crate::vfs::remove_file(lib.0.join("proj/package.json")).unwrap();
+        assert_eq!(id(&mut s).as_deref(), Some(was.as_str()));
+        assert!(s.list().into_iter().any(|e| e.id == was && e.meta.pinned), "its settings kept");
+    }
+
     #[test]
     fn a_file_not_here_yet_keeps_nothing_read_again_until_it_arrives() {
         // Another device's entry for a file still on its way (or gone there).
@@ -5045,7 +5151,7 @@ mod tests {
         let index = crate::vfs::read(trash.join("index.json")).unwrap();
         crate::vfs::rename(&trash, lib.0.join(".quiet/trash-away")).unwrap();
         crate::vfs::write(&trash, b"").unwrap();
-        let mut s = Store { file_changes: vec![], top_dir: lib.0.clone(), index: HashMap::new(), foreign: DiskIndex::new(), flat: false, migrated: None, trash: serde_json::from_slice(&index).unwrap(), warnings: vec![], loaded: Default::default(), copied: Default::default(), parsed: HashMap::new(), batch: Default::default(), view: Default::default(), v5: false, me: device(), clock: Default::default(), seen: Default::default(), merged: Default::default(), key: library_key(&lib.0), place_by_hand: true, v6: false, seen_trash: Default::default(), purging: Default::default(), synced: Default::default() };
+        let mut s = Store { file_changes: vec![], top_dir: lib.0.clone(), index: HashMap::new(), foreign: DiskIndex::new(), flat: false, migrated: None, trash: serde_json::from_slice(&index).unwrap(), warnings: vec![], loaded: Default::default(), copied: Default::default(), parsed: HashMap::new(), checked: HashMap::new(), writes: Default::default(), batch: Default::default(), view: Default::default(), v5: false, me: device(), clock: Default::default(), seen: Default::default(), merged: Default::default(), key: library_key(&lib.0), place_by_hand: true, v6: false, seen_trash: Default::default(), purging: Default::default(), synced: Default::default() };
         assert_eq!(s.list_trash().len(), 1);
         assert_eq!(s.trash.len(), 1);
     }
@@ -5416,6 +5522,8 @@ mod tests {
         s.load_for_edit(&a, false).unwrap();
         crate::vfs::create_dir_all(lib.0.join("附件")).unwrap();
         crate::vfs::write(lib.0.join("附件/报告 1.pdf"), b"%PDF").unwrap();
+        // A folder shows once it holds a page (`Scan::empty`).
+        crate::vfs::write(lib.0.join("附件/说明.md"), "附件\n").unwrap();
         let md = "---\ntags: [x]\n---\n见 [甲](%E7%94%B2.xml)  和 [报告](附件/报告%201.pdf)\n\n* 原样   保留\n";
         crate::vfs::write(lib.0.join("乙.md"), md).unwrap();
         let entries = s.list();
@@ -5537,6 +5645,7 @@ mod tests {
         crate::vfs::write(lib.0.join("报告 (2).md"), "x\n").unwrap();
         crate::vfs::write(lib.0.join("第 2.md"), "x\n").unwrap();
         crate::vfs::create_dir_all(lib.0.join("照片 (2)")).unwrap();
+        crate::vfs::write(lib.0.join("照片 (2)/说明.xml"), "<title>说明</title>\n").unwrap();
         let f = s.create_folder("夹", None).unwrap();
         let list = s.list();
         let ids: Vec<String> = list.iter().filter(|e| e.meta.markdown || e.title == "照片 (2)").map(|e| e.id.clone()).collect();

@@ -72,14 +72,22 @@ impl Phase {
 
 fn ease(t: f32) -> f32 { let t = t.clamp(0., 1.); t * t * (3. - 2. * t) }
 
-/// The first listing, while it runs and as it fades.
-pub struct Load { started: Instant, done: Option<Instant>, fading: Option<Instant>, frames: u8, progress: Arc<ListProgress> }
+/// The first listing, while it runs and as it fades; or a folder just added
+/// (`over`: what the window shows stays, the layer comes only if it takes a while).
+pub struct Load { started: Instant, done: Option<Instant>, fading: Option<Instant>, frames: u8, progress: Arc<ListProgress>, over: bool }
 impl Global for Load {}
 
 impl Load {
     pub fn phase(&self) -> Phase { Phase::at(self.started, self.done, self.fading, Instant::now()) }
     /// (documents gone through, of how many; 0 until the folders are scanned).
     pub fn counts(&self) -> (usize, usize) { (self.progress.done.load(Ordering::Relaxed), self.progress.total.load(Ordering::Relaxed)) }
+    /// How opaque the layer over 主页 is: over a folder being added, nothing at first
+    /// and then only as far as it faded in.
+    pub fn cover(&self) -> f32 {
+        let p = self.phase();
+        if !self.over { return p.cover() }
+        match p { Phase::Waiting | Phase::Gone => 0., Phase::Shown(a) => a, Phase::Fading { cover, content } => cover * content }
+    }
 }
 
 pub fn phase(cx: &App) -> Phase { cx.try_global::<Load>().map_or(Phase::Gone, Load::phase) }
@@ -95,18 +103,37 @@ pub fn drawn(cx: &mut App) {
 }
 pub fn t(cx: &App) -> f32 { cx.try_global::<Load>().map_or(0., |l| l.started.elapsed().as_secs_f32()) }
 pub fn active(cx: &App) -> bool { phase(cx).loading() }
+/// `Load::cover`.
+pub fn cover(cx: &App) -> f32 { cx.try_global::<Load>().map_or(0., Load::cover) }
+/// A folder being added: the sidebar keeps its rows.
+pub fn adding(cx: &App) -> bool { cx.try_global::<Load>().is_some_and(|l| l.over) }
 
 /// The entries a new window starts with: listed here when quick enough,
 /// else none for now (`None`): the listing goes on in the background and
 /// every window takes its result (`Workspace::loaded`).
 #[cfg(target_family = "wasm")]
 pub fn begin(store: &mut crate::shared_store::SharedStore, _: &mut App) -> Option<Vec<Entry>> { Some(store.list()) }
+#[cfg(target_family = "wasm")]
+pub fn begin_added(store: &mut crate::shared_store::SharedStore, _: &str, _: &mut App) -> Option<Vec<Entry>> { Some(store.list()) }
 
 #[cfg(not(target_family = "wasm"))]
 pub fn begin(store: &mut crate::shared_store::SharedStore, cx: &mut App) -> Option<Vec<Entry>> {
     // Once a launch; a window opened while it runs waits with the others.
     if let Some(l) = cx.try_global::<Load>() { return if l.done.is_some() { Some(store.list()) } else { None } }
-    let writers: Vec<(String, Store)> = store.top_folders().into_iter().filter_map(|(k, ..)| store.top_writer(&k).map(|w| (k, w))).collect();
+    let keys = store.top_folders().into_iter().map(|(k, ..)| k).collect();
+    start(store, keys, false, cx)
+}
+
+/// Top-level folder `key`, just added (打开文件夹…), listed the same way: here when
+/// quick enough, else in the background with the layer over 主页 once it takes a while.
+#[cfg(not(target_family = "wasm"))]
+pub fn begin_added(store: &mut crate::shared_store::SharedStore, key: &str, cx: &mut App) -> Option<Vec<Entry>> {
+    start(store, vec![key.to_string()], true, cx)
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn start(store: &mut crate::shared_store::SharedStore, keys: Vec<String>, over: bool, cx: &mut App) -> Option<Vec<Entry>> {
+    let writers: Vec<(String, Store)> = keys.into_iter().filter_map(|k| store.top_writer(&k).map(|w| (k, w))).collect();
     let progress = Arc::new(ListProgress::default());
     let counted = progress.clone();
     let started = Instant::now();
@@ -121,8 +148,9 @@ pub fn begin(store: &mut crate::shared_store::SharedStore, cx: &mut App) -> Opti
         }).collect::<Vec<_>>()
     });
     store.begin_loading();
-    cx.set_global(Load { started, done: None, fading: None, frames: 0, progress });
-    match cx.foreground_executor().block_with_timeout(WAIT, task) {
+    cx.set_global(Load { started, done: None, fading: None, frames: 0, progress, over });
+    // A folder added under what the window shows needs no wait: nothing is blank meanwhile.
+    match cx.foreground_executor().block_with_timeout(if over { Duration::ZERO } else { WAIT }, task) {
         Ok(done) => {
             let entries = finish(store, done);
             cx.global_mut::<Load>().done = Some(Instant::now());
@@ -190,13 +218,13 @@ pub fn progress_line(done: usize, total: usize) -> String {
 
 /// What 主页 shows meanwhile: the onboarding's drifting light, the spinner,
 /// how far it got and a thin bar of it.
-pub fn note_layer(phase: Phase, t: f32, (done, total): (usize, usize)) -> Stateful<Div> {
+pub fn note_layer(phase: Phase, cover: f32, t: f32, (done, total): (usize, usize)) -> Stateful<Div> {
     let bar = (total > 0).then(|| {
         let share = (done as f32 / total as f32).clamp(0., 1.);
         div().w(px(220.)).h(px(3.)).rounded(px(2.)).bg(color::muted()).overflow_hidden()
             .child(div().h_full().w(px(220. * share)).rounded(px(2.)).bg(color::primary()))
     });
-    div().id("library-loading").absolute().inset_0().opacity(phase.cover()).bg(color::background()).occlude()
+    div().id("library-loading").absolute().inset_0().opacity(cover).bg(color::background()).occlude()
         .child(div().absolute().inset_0().opacity(phase.content())
             .child(canvas(|b, _, _| b, move |_, b, window, _| crate::onboarding::paint_backdrop(b, t, window)).absolute().inset_0())
             .child(div().absolute().inset_0().flex().flex_col().items_center().justify_center().gap(px(14.))

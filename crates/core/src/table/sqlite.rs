@@ -76,6 +76,17 @@ pub fn stamp(path: &Path) -> Option<u64> {
     Some(h.finish())
 }
 
+/// Whether `path` is a 数据表 file: SQLite with the four `_` tables beside the data
+/// (`shown::ours`); another program's database is not one.
+pub fn is_table_file(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 16];
+    let sqlite = std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut head)).is_ok() && &head == b"SQLite format 3\0";
+    if !sqlite { return false }
+    let Ok(conn) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX) else { return false };
+    conn.query_row("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN ('_tables', '_fields', '_views', '_meta')", [], |r| r.get::<_, i64>(0)).is_ok_and(|n| n == 4)
+}
+
 fn open(path: &Path, flags: OpenFlags) -> Result<Connection> {
     let conn = Connection::open_with_flags(path, flags | OpenFlags::SQLITE_OPEN_NO_MUTEX).with_context(|| format!("opening {}", path.display()))?;
     conn.busy_timeout(std::time::Duration::from_secs(2))?;

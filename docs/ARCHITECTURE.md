@@ -101,6 +101,7 @@ This approach copies the entire document at each history step. A historical benc
 | `model.rs` | Document model, inline object types and `display_title` |
 | `docxml.rs` | DocxXML parsing and serialization, including `to_inline` for inline objects |
 | `store.rs` | Library I/O, index recovery, trash, settings and `image_path` |
+| `shown.rs` | What a folder shows: the files it lists (`LIBRARY_FILES`, checked by content for `.xml` and `.sqlite`), the folders the scan does not go into (`skips_dir`), the `.gitignore` subset (`Ignore`) and the look before 添加文件夹 (`survey`). See FORMAT.md, "What a folder shows" |
 | `home.rs` | `Home`, the one root: the top-level folders on 主页 (`TopFolder`, each its own `Store` and `.quiet/`), this computer's list of them (`folders.json`), nesting checks and ids unique across them. See docs/design/workspaces.md |
 | `paste.rs` | HTML and Markdown to blocks, shared by paste and import |
 | `markdown.rs` | Markdown export |
