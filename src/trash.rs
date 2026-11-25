@@ -50,7 +50,7 @@ pub(crate) fn page_header_with(ws: &Workspace, title: impl IntoElement, left: f3
                     .no_drag()
                     .ml(px(4.))
                     .mr(px(12.))
-                    .icon("panel-left-open")
+                    .icon(crate::sidebar::toggle_glyph(false))
                     .tip(crate::settings::tr("展开侧栏", "Show sidebar"), Some(crate::shortcuts::hint("workspace::ToggleSidebar", "⌘ + ]")))
                     .on_click(cx.listener(|w, _, _, cx| {
                         w.sidebar_open = true;

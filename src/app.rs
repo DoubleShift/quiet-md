@@ -1840,7 +1840,7 @@ impl Workspace {
         if compact {
             crumbs = vec![
                 // The drawer's way in from a document (the home page has its own).
-                crate::design::Button::ghost("open-sidebar").no_drag().icon("panel-left-open")
+                crate::design::Button::ghost("open-sidebar").no_drag().icon(crate::sidebar::toggle_glyph(false))
                     .on_click(cx.listener(|w, _, _, cx| { w.sidebar_open = true; cx.notify(); }))
                     .into_any_element(),
                 div().w(px(6.)).flex_none().into_any_element(),
@@ -1856,14 +1856,14 @@ impl Workspace {
             .items_center()
             .pr(px(crate::ui::header_right_inset()))
             // Clear of the traffic lights, which sit over the note when the sidebar is closed.
-            .pl(if compact { px(12.) } else if self.sidebar_open { px(18.) } else { px(theme::TRAFFIC_LIGHTS_W) })
+            .pl(if compact { px(crate::sidebar::TOUCH_BUTTON_X) } else if self.sidebar_open { px(18.) } else { px(theme::TRAFFIC_LIGHTS_W) })
             .title_bar()
             .when(!self.sidebar_open && !compact, |d| {
                 d.child(
                     crate::design::Button::ghost("open-sidebar")
                         .no_drag()
                         .ml(px(4.))
-                        .icon("panel-left-open")
+                        .icon(crate::sidebar::toggle_glyph(false))
                         .tip(crate::settings::tr("展开侧栏", "Show sidebar"), Some(crate::shortcuts::hint("workspace::ToggleSidebar", "⌘ + ]")))
                         .on_click(cx.listener(|w, _, _, cx| {
                             w.sidebar_open = true;

@@ -36,6 +36,16 @@ const _: () = assert!(row_sub_top(0.) == 168.5);
 /// labels start at 54pt; groups are 16pt apart, a section header is 34pt
 /// (6 above its 28pt label).
 pub(crate) const SB_X: f32 = 14.;
+
+/// The sidebar button's glyph: a phone's drawer opens and closes on the
+/// three bars, the desktop's panel on its show / hide pair.
+pub(crate) fn toggle_glyph(open: bool) -> &'static str {
+    if crate::design::touch() { "menu" } else if open { "panel-left-close" } else { "panel-left-open" }
+}
+
+/// Where the sidebar button starts on a touch screen: its glyph centred on
+/// the nav's icon column (`SB_X` + a row's 6 + half its 20pt icon box).
+pub(crate) const TOUCH_BUTTON_X: f32 = SB_X + 6. + 10. - crate::design::T.tool_h / 2.;
 /// 44pt on touch (the HIG's smallest target).
 pub(crate) const ROW_H: f32 = if crate::design::touch() { 44. } else { 30. };
 const DOC_ROW_H: f32 = ROW_H;
@@ -137,14 +147,14 @@ impl Workspace {
             .flex_none()
             .flex()
             .items_center()
-            .pl(px(theme::TRAFFIC_LIGHTS_W))
+            .pl(px(if crate::design::touch() { TOUCH_BUTTON_X } else { theme::TRAFFIC_LIGHTS_W }))
             .pr(px(12.))
             .title_bar()
             .child(
                 Button::ghost("collapse-sidebar")
                     .no_drag()
-                    .ml(px(4.))
-                    .icon("panel-left-close")
+                    .when(!crate::design::touch(), |b| b.ml(px(4.)))
+                    .icon(toggle_glyph(true))
                     .tip(crate::settings::tr("收起侧栏", "Hide sidebar"), Some(crate::shortcuts::hint("workspace::ToggleSidebar", "⌘ + ]")))
                     .on_click(cx.listener(|w, _, _, cx| {
                         w.sidebar_open = false;
@@ -184,9 +194,10 @@ impl Workspace {
                     cx.notify();
                     cx.defer_in(window, |w, window, cx| w.open_search(window, cx));
                 }))))
-            .child(item("nav-add-folder", "folder-plus", crate::settings::tr("添加文件夹", "Add a folder"), false)
+            // Not in a phone's drawer: folders aren't added there.
+            .when(!self.drawer(window), |d| d.child(item("nav-add-folder", "folder-plus", crate::settings::tr("添加文件夹", "Add a folder"), false)
                 .tip(crate::settings::tr("添加文件夹", "Add a folder"), Some(crate::shortcuts::hint("workspace::OpenFolder", "⌘ + Shift + O")))
-                .on_click(cx.listener(|w, _, window, cx| w.open_folder_dialog(window, cx))));
+                .on_click(cx.listener(|w, _, window, cx| w.open_folder_dialog(window, cx)))));
 
         let mut list = div().flex().flex_col().px(px(SB_X)).pb(px(8.));
         // Pinned docs are shortcuts: they stay in 我的文档 too.

@@ -1496,8 +1496,9 @@ impl Workspace {
     pub(crate) fn header_navigation(&self, cx: &mut Context<Self>) -> AnyElement {
         let open = self.sidebar_open;
         let bar_button = |id: &'static str, glyph: &'static str| Button::ghost(id).icon(glyph).no_drag();
-        div().flex().items_center().ml(px(4.)).gap(px(4.))
-            .child(bar_button("settings-collapse", if open { "panel-left-close" } else { "panel-left-open" })
+        // Touch: the button's glyph on the drawer's icon column, as on the document's bar.
+        div().flex().items_center().ml(px(if crate::design::touch() { sb::TOUCH_BUTTON_X - theme::TRAFFIC_LIGHTS_W } else { 4. })).gap(px(4.))
+            .child(bar_button("settings-collapse", sb::toggle_glyph(open))
                 .tip(if open { tr("收起侧栏", "Hide sidebar") } else { tr("展开侧栏", "Show sidebar") }, Some(crate::shortcuts::hint("workspace::ToggleSidebar", "⌘ + ]")))
                 .on_click(cx.listener(|w, _, _, cx| { w.sidebar_open = !w.sidebar_open; cx.notify(); })))
             // 返回, where navigation goes back (HIG): to the page 设置 was opened from, as the footer's 返回 does.
