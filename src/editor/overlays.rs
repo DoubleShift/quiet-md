@@ -336,6 +336,7 @@ impl Editor {
         out.extend(self.image_toolbar(window, cx));
         out.extend(self.file_toolbar(window, cx));
         out.extend(self.link_card(window, cx));
+        out.extend(self.link_held(window, cx));
         out.extend(self.button_layers(window, cx));
         out.extend(self.reminder_layers(window, cx));
         out.extend(self.countdown_overlays(window, cx));

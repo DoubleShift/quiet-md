@@ -2636,6 +2636,8 @@ impl Editor {
         if ev.phase != TouchPhase::Moved { log::info!("touch: long press {:?} at {:?}", ev.phase, ev.position) }
         match ev.phase {
             TouchPhase::Started => {
+                // A link: lifted over its menu, with where it leads.
+                if self.hold_link(ev.position, cx) { window.prevent_default(); cx.stop_propagation(); return }
                 let Some((pos, _)) = self.pos_at(ev.position) else { return };
                 let text = self.core.text_of(pos.block).map(|t| t.text.clone()).unwrap_or_default();
                 // An image: selected, for its toolbar (a tap opens it in the viewer).

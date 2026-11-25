@@ -143,6 +143,8 @@ const SUBMENU_W: f32 = 200.;
 
 #[derive(Default)]
 pub struct LinkUi {
+    /// Touch: the link a long press lifted over its menu.
+    held: Option<LinkRef>,
     /// The link under the pointer.
     pub(super) target: Option<LinkRef>,
     /// The link the hover card is showing.
@@ -385,6 +387,49 @@ impl Editor {
         u.more = false;
         u.over = [false; 3];
         cx.notify();
+    }
+
+    /// Touch: a long press on a link lifts it over a menu, as Safari previews one
+    /// (there is no web view to load the page in: the preview is where it leads).
+    /// Returns whether the press was a link's.
+    pub(super) fn hold_link(&mut self, p: Point<Pixels>, cx: &mut Context<Self>) -> bool {
+        if !crate::design::touch() { return false }
+        let Some(lr) = self.link_under(p) else { return false };
+        crate::phone::haptic(crate::phone::Haptic::Medium);
+        self.touch.menu = false;
+        self.link_ui.held = Some(lr);
+        cx.notify();
+        true
+    }
+
+    pub(super) fn link_held(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let lr = self.link_ui.held.clone()?;
+        let url = self.link_url(&lr)?;
+        let vp = window.viewport_size();
+        let (vw, vh) = (f32::from(vp.width), f32::from(vp.height));
+        // What the link reads as in the note, over where it goes.
+        let label = self.core.text_of(lr.0).and_then(|t| t.text.get(lr.1.clone()).map(str::to_string)).unwrap_or_default();
+        let host = url.split("://").nth(1).unwrap_or(&url).split(['/', '?', '#']).next().unwrap_or_default().to_string();
+        let row = |id: &'static str, glyph: &'static str, label: &'static str| MenuItem::new(id).icon(glyph).label(label);
+        let (go, copy, edit, remove) = (url.clone(), url.clone(), lr.clone(), lr.clone());
+        let preview = div().w(px(vw - 32.)).p(px(16.)).rounded(px(14.)).bg(color::popover()).shadow(crate::theme::shadow_panel()).occlude().flex().items_center().gap(px(12.))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(div().size(px(40.)).flex_none().rounded(px(10.)).bg(color::muted()).flex().items_center().justify_center().child(icon("globe", 22., color::muted_foreground())))
+            .child(div().flex_1().min_w_0()
+                .child(div().text_size(px(17.)).line_height(px(22.)).font_weight(FontWeight::SEMIBOLD).text_color(color::foreground()).truncate().child(crate::editor_ui::ui_text(if label.trim().is_empty() { host.clone() } else { label })))
+                .child(div().text_size(px(13.)).line_height(px(18.)).text_color(color::muted_foreground()).line_clamp(3).child(crate::editor_ui::ui_text(url.clone()))));
+        let menu = div().w(px(250.)).p(px(6.)).rounded(px(14.)).bg(color::popover()).shadow(crate::theme::shadow_panel()).occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(row("lh-open", "globe", crate::settings::tr("打开链接", "Open link")).on_click(cx.listener(move |e, _, _, cx| { e.link_ui.held = None; open(cx, &go); cx.notify(); })))
+            .child(row("lh-copy", "copy", crate::settings::tr("拷贝链接", "Copy link")).on_click(cx.listener(move |e, _, _, cx| { e.link_ui.held = None; cx.write_to_clipboard(ClipboardItem::new_string(copy.clone())); cx.notify(); })))
+            .when(!self.read_only, |d| d
+                .child(row("lh-edit", "square-pen", crate::settings::text("编辑链接")).on_click(cx.listener(move |e, _, window, cx| { e.link_ui.held = None; e.open_link_panel(edit.0, edit.1.clone(), true, window, cx); })))
+                .child(row("lh-remove", "bin", crate::settings::text("移除链接")).destructive(true).on_click(cx.listener(move |e, _, window, cx| { e.link_ui.held = None; e.remove_link(remove.clone(), window, cx); }))));
+        Some(deferred(anchored().position(point(px(0.), px(0.))).child(
+            div().id("link-held").relative().w(px(vw)).h(px(vh)).px(px(16.)).flex().flex_col().justify_center().gap(px(12.))
+                .child(div().id("link-held-scrim").absolute().inset_0().bg(gpui::black().opacity(0.28)).occlude()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|e, _, _, cx| { cx.stop_propagation(); e.link_ui.held = None; cx.notify(); })))
+                .child(preview).child(menu))).with_priority(2).into_any_element())
     }
 
     pub(super) fn hide_link_card(&mut self, cx: &mut Context<Self>) {

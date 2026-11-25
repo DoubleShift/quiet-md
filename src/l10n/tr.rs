@@ -1135,4 +1135,5 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("正在从 iCloud 下载…", "iCloud'dan indiriliyor…"),
     ("这篇文档还没有从 iCloud 下载完成", "Bu belgenin iCloud'dan indirilmesi henüz tamamlanmadı"),
     ("无法从 iCloud 下载这篇文档：{}", "Bu belge iCloud'dan indirilemedi: {}"),
+    ("拷贝链接", "Bağlantıyı kopyala"),
 ];

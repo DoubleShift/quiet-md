@@ -944,23 +944,40 @@ pub(crate) fn phone_sheet(id: &'static str, title: SharedString, tall: bool, bod
     let (vw, vh) = (f32::from(vp.width), f32::from(vp.height));
     let r = crate::design::R + 6.;
     let done = close.clone();
+    // As iOS keeps a sheet: a tall one rests at half the screen or all of it, its grabber
+    // drags it between the two, and pulled down a sheet goes away (`phone.rs`).
+    let f = crate::phone::sheet_frame(id, ime > 0., window);
+    let half = if tall { ((vh - top - 12.) * 0.42).round() } else { 0. };
+    let rest = if tall && !f.full { half } else { 0. };
+    let height = vh - top - 12. - rest;
+    if f.gone { let gone = close.clone(); cx.defer_in(window, move |w, window, cx| gone(w, window, cx)); }
+    let grab = { let ws = cx.entity(); canvas(|b, window, _| window.insert_hitbox(b, HitboxBehavior::Normal), move |_, hitbox, window, _| {
+        window.on_mouse_event(move |ev: &ScrollEvent, phase, window, cx| {
+            if phase != DispatchPhase::Capture || (ev.touch_phase == TouchPhase::Started && !hitbox.is_hovered(window)) { return }
+            if crate::phone::sheet_pan(id, ev, tall, half, height) { cx.stop_propagation(); ws.update(cx, |_, cx| cx.notify()); }
+        });
+    }).absolute().inset_0() };
     // To the window's bottom edge, behind the keyboard too: its round top
     // corners show the sheet, not the scrim.
-    let panel = div().id(SharedString::from(format!("{id}-sheet"))).absolute().left_0().right_0().bottom_0()
-        .when(tall, |d| d.top(px(top + 12.))).max_h(px(vh - top - 12.))
+    let panel = div().id(SharedString::from(format!("{id}-sheet"))).absolute().left_0().right_0().bottom(px(-f.pull.max(0.)))
+        .when(tall, |d| d.top(px(top + 12. + rest + f.pull))).max_h(px(vh - top - 12.))
         .pb(px(if ime > 0. { ime } else { bottom })).flex().flex_col()
         .bg(crate::design::color::popover()).rounded_t(px(r)).shadow(theme::shadow_panel()).occlude()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(div().flex_none().h(px(56.)).relative().flex().items_center().justify_center()
+            .child(grab)
+            .child(div().absolute().top(px(6.)).left(px(vw / 2. - 18.)).w(px(36.)).h(px(5.)).rounded_full().bg(crate::design::color::border()))
             .child(div().max_w(px(vw - 160.)).truncate().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).text_color(crate::design::color::foreground()).child(title))
             .child(div().absolute().right(px(8.)).top_0().h_full().flex().items_center()
                 .child(Button::ghost(SharedString::from(format!("{id}-done"))).label(tr("完成", "Done"))
-                    .on_click(cx.listener(move |w, _, window, cx| done(w, window, cx))))))
+                    .on_click(cx.listener(move |w, _, window, cx| { crate::phone::sheet_closed(id); done(w, window, cx) })))))
         .child(div().when(tall, |d| d.flex_1()).min_h_0().flex().flex_col().child(body));
+    // The scrim clears as the sheet leaves.
+    let dim = (1. - f.pull.max(0.) / 360.).clamp(0., 1.);
     deferred(anchored().position(point(px(0.), px(0.))).child(
         div().id(id).relative().w(px(vw)).h(px(vh))
-            .child(div().id(SharedString::from(format!("{id}-scrim"))).absolute().inset_0().bg(crate::design::color::overlay()).occlude()
-                .on_mouse_down(MouseButton::Left, cx.listener(move |w, _, window, cx| { cx.stop_propagation(); close(w, window, cx) })))
+            .child(div().id(SharedString::from(format!("{id}-scrim"))).absolute().inset_0().bg(crate::design::color::overlay()).opacity(dim).occlude()
+                .on_mouse_down(MouseButton::Left, cx.listener(move |w, _, window, cx| { cx.stop_propagation(); crate::phone::sheet_closed(id); close(w, window, cx) })))
             .child(panel))).with_priority(2).into_any_element()
 }
 

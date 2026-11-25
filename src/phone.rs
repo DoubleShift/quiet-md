@@ -247,6 +247,7 @@ impl Workspace {
 
     /// Each frame: a let-go row settles; the drawer's goes with the drawer.
     pub(crate) fn phone_tick(&mut self, window: &mut Window) {
+        sheet_tick();
         if self.phone.swipe.as_ref().is_some_and(|s| s.drawer && !self.sidebar_open) { self.phone.swipe = None; }
         let Some(s) = self.phone.swipe.as_mut() else { return };
         if let Some(a) = s.settle {
@@ -497,6 +498,91 @@ impl Workspace {
     pub(crate) fn phone_lists(&self, window: &Window) -> bool {
         self.phone(window) && self.batch.is_none() && !self.home.phone_grid
     }
+}
+
+/// A phone's bottom sheet (`settings::phone_sheet`), as `UISheetPresentationController`
+/// keeps one: it slides up, its grabber drags it between half the screen and all of
+/// it (a sheet as tall as its rows has the one size), and pulled down it goes away.
+/// One sheet shows at a time, so one state, on the UI thread.
+#[derive(Default)]
+struct Sheet {
+    id: &'static str,
+    /// A tall sheet at its full height rather than half.
+    full: bool,
+    /// How far the finger (or the slide in and out) has it below its resting place; negative: above.
+    pull: f32,
+    drag: bool,
+    settle: Option<(Instant, f32, f32)>,
+    /// Sliding out: closed once it has.
+    leaving: bool,
+    /// Drawn in the window's last frame (`sheet_tick`): a sheet closed by one of its rows is forgotten.
+    drawn: bool,
+}
+
+thread_local! { static SHEET: RefCell<Sheet> = RefCell::new(Sheet::default()); }
+
+/// What `phone_sheet` draws this frame.
+pub(crate) struct SheetFrame { pub full: bool, pub pull: f32, pub gone: bool }
+
+/// Advances sheet `id` by a frame. `keyboard`: up, which takes a tall sheet to its full height.
+pub(crate) fn sheet_frame(id: &'static str, keyboard: bool, window: &Window) -> SheetFrame {
+    SHEET.with_borrow_mut(|s| {
+        // Newly shown: it slides up from the bottom edge.
+        if s.id != id { *s = Sheet { id, pull: 360., settle: Some((Instant::now(), 360., 0.)), ..Default::default() }; }
+        s.drawn = true;
+        if keyboard && !s.full { s.full = true; }
+        let mut gone = false;
+        if let Some(a) = s.settle {
+            let (v, moving) = settle(a);
+            s.pull = v;
+            if moving { window.request_animation_frame(); } else { s.settle = None; gone = s.leaving; }
+        }
+        if gone { *s = Sheet::default(); }
+        SheetFrame { full: s.full, pull: s.pull, gone }
+    })
+}
+
+/// Each frame of the window, before its sheets are drawn: one not drawn last frame is gone.
+pub(crate) fn sheet_tick() { SHEET.with_borrow_mut(|s| if !std::mem::take(&mut s.drawn) && !s.id.is_empty() { *s = Sheet::default(); }) }
+
+/// No sheet shows any more (closed some other way): the next one slides in afresh.
+pub(crate) fn sheet_closed(id: &'static str) { SHEET.with_borrow_mut(|s| if s.id == id { *s = Sheet::default(); }) }
+
+/// A finger panning the sheet's grabber and title. `tall`: it has the two sizes;
+/// `half`: how far below the full height the half one rests; `height`: the sheet's own.
+/// Returns whether to redraw.
+pub(crate) fn sheet_pan(id: &'static str, ev: &ScrollEvent, tall: bool, half: f32, height: f32) -> bool {
+    if ev.source != ScrollSource::Touch { return false }
+    let dy = f32::from(ev.delta.pixel_delta(px(20.)).y);
+    SHEET.with_borrow_mut(|s| {
+        if s.id != id || s.leaving { return false }
+        match ev.touch_phase {
+            TouchPhase::Started => { s.drag = true; s.settle = None; s.pull += dy; }
+            TouchPhase::Moved if s.drag => s.pull += dy,
+            TouchPhase::Moved => return false,
+            TouchPhase::Ended | TouchPhase::Cancelled => {
+                if !std::mem::take(&mut s.drag) { return false }
+                let now = Instant::now();
+                // Where it rests from here: its other size, away, or back.
+                if tall && s.full && s.pull > 60. && s.pull < half + 80. {
+                    (s.full, s.pull) = (false, s.pull - half);
+                    haptic(Haptic::Selection);
+                } else if tall && !s.full && s.pull < -40. {
+                    (s.full, s.pull) = (true, s.pull + half);
+                    haptic(Haptic::Selection);
+                } else if s.pull > 80. {
+                    s.leaving = true;
+                    s.settle = Some((now, s.pull, height));
+                    return true;
+                }
+                s.settle = Some((now, s.pull, 0.));
+            }
+        }
+        // It stretches a little past its top, no more.
+        let floor = if tall && !s.full { -half } else { 0. };
+        if s.pull < floor { s.pull = floor - (floor - s.pull).min(24.) * 0.5; }
+        true
+    })
 }
 
 /// The Taptic Engine's vocabulary (`UIFeedbackGenerator`).

@@ -274,8 +274,41 @@ impl Editor {
                 out.push(at(self.rel(b.origin), Anchor::TopLeft, el));
             }
         }
+        out.extend(self.loupe(window));
         out.extend(self.touch_menu(window, cx));
         out
+    }
+
+    /// The loupe: while a finger drags a selection's end (a handle, or on from a long
+    /// press) it covers the text it moves through, so the line shows again above it,
+    /// larger, with the caret where the end is. GPUI cannot magnify what is drawn, so
+    /// this is the line's plain text around the end rather than a lens over the page.
+    fn loupe(&self, window: &Window) -> Option<AnyElement> {
+        if self.touch.grab.is_none() && !self.long_press { return None }
+        let head = self.core.sel.head;
+        let (hp, lh) = self.point_of(head)?;
+        let text = &self.core.text_of(head.block)?.text;
+        if !text.is_char_boundary(head.offset.min(text.len())) { return None }
+        let (before, after) = text.split_at(head.offset.min(text.len()));
+        // A dozen characters each side, without the line breaks inside a block.
+        let clean = |s: String| s.replace(['\n', '\u{2028}'], " ");
+        let b: String = clean(before.chars().rev().take(14).collect::<Vec<_>>().into_iter().rev().collect());
+        let a: String = clean(after.chars().take(14).collect());
+        let (w, h) = (188., 44.);
+        let size = (crate::editor_theme::body_size() * 1.2).round();
+        let vw = f32::from(window.viewport_size().width);
+        let x = (f32::from(hp.x) - w / 2.).clamp(8., (vw - w - 8.).max(8.));
+        // Above the line, clear of the finger; under it when the line is at the top.
+        let above = hp.y - px(h + 14.) >= self.list.viewport_bounds().top();
+        let y = if above { hp.y - px(h + 14.) } else { hp.y + lh + px(28.) };
+        let side = || div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().flex();
+        let el = div().w(px(w)).h(px(h)).rounded_full().bg(crate::design::color::popover()).border_1().border_color(crate::design::color::border())
+            .shadow(crate::theme::shadow_menu()).overflow_hidden().flex().items_center().px(px(14.))
+            .text_size(px(size)).text_color(Theme::text())
+            .child(side().justify_end().child(crate::editor_ui::ui_text(b)))
+            .child(div().flex_none().w(px(2.)).h(px(size + 6.)).mx(px(1.)).rounded_full().bg(Theme::primary()))
+            .child(side().child(crate::editor_ui::ui_text(a)));
+        Some(at(self.rel(point(px(x), y)), Anchor::TopLeft, el))
     }
 
     /// Whether the format toolbar shows this frame (`overlays::toolbar`'s own test).

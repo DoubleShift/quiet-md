@@ -1392,4 +1392,5 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("正在从 iCloud 下载…", "正在從 iCloud 下載…"),
     ("这篇文档还没有从 iCloud 下载完成", "這篇文件還沒有從 iCloud 下載完成"),
     ("无法从 iCloud 下载这篇文档：{}", "無法從 iCloud 下載這篇文件：{}"),
+    ("拷贝链接", "拷貝連結"),
 ];
