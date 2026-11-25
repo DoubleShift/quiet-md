@@ -393,7 +393,7 @@ impl Editor {
                     .bg(Theme::bg_body()).shadow(crate::theme::shadow_panel()).occlude().cursor(CursorStyle::Arrow)
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     // Named, as a panel is: 目录.
-                    .child(div().h(px(44.)).pl(px(12.)).flex().items_center().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text())
+                    .child(div().h(px(44.)).pl(px(24.)).flex().items_center().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text())
                         .child(crate::settings::tr("目录", "Outline")))
                     .child(body)),
         )).with_priority(3).into_any_element()
@@ -439,9 +439,13 @@ impl Editor {
                     let (e, parent) = &rows[ix];
                     let folded = collapsed.contains(&e.id);
                     let title = e.id == TITLE;
-                    let size = if title { 14. } else { 13. };
-                    let indent = INDENT * (e.level - 1) as f32;
-                    let avail = text_w - indent - 16.;
+                    // Touch: an iOS list's density, body-size text centred in
+                    // its 44pt row, the deeper levels a step smaller.
+                    let touch = crate::design::touch();
+                    let size = match (touch, title || e.level <= 2) { (true, true) => 17., (true, false) => 15., (false, _) => if title { 14. } else { 13. } };
+                    let fold_w = if touch { 24. } else { 16. };
+                    let indent = if touch { 16. } else { INDENT } * (e.level - 1) as f32;
+                    let avail = text_w - indent - fold_w;
                     let runs = crate::editor_ui::ui_runs(&e.text, &TextStyle { font_size: px(size).into(), ..style.clone() }, &[], style.color);
                     let full_w = window.text_system().shape_line(e.text.clone(), px(size), &runs, None).width;
                     // The outline: quiet secondary rows, the current one in full text colour.
@@ -454,7 +458,8 @@ impl Editor {
                         .group(group.clone())
                         .w(px(text_w))
                         .h(px(ROW_H))
-                        .pb(px(8.))
+                        .when(!touch, |d| d.pb(px(8.)))
+                        .when(touch, |d| d.items_center())
                         .pl(px(indent))
                         .flex()
                         .cursor_pointer()
@@ -462,17 +467,18 @@ impl Editor {
                             div()
                                 .id(("cat-fold", ix))
                                 .flex_none()
-                                .w(px(16.))
-                                .h(px(22.))
-                                .px(px(3.))
-                                .py(px(6.))
+                                .w(px(fold_w))
+                                .h(px(if touch { ROW_H } else { 22. }))
+                                .when(!touch, |d| d.px(px(3.)).py(px(6.)))
+                                .when(touch, |d| d.flex().items_center().justify_center())
+                                // Touch has no hover: the triangles always show.
                                 .when(*parent, |d| {
                                     d.child(
                                         div()
-                                            .size(px(10.))
-                                            .when(!folded, |d| d.opacity(0.).group_hover(group.clone(), |s| s.opacity(1.)))
+                                            .size(px(if touch { 12. } else { 10. }))
+                                            .when(!folded && !touch, |d| d.opacity(0.).group_hover(group.clone(), |s| s.opacity(1.)))
                                             .child(
-                                                icon(if folded { "triangle-right" } else { "triangle-down" }, 10., Theme::icon())
+                                                icon(if folded { "triangle-right" } else { "triangle-down" }, if touch { 12. } else { 10. }, Theme::icon())
                                                     .hover(|s| s.text_color(Theme::text())),
                                             ),
                                     )
@@ -503,7 +509,7 @@ impl Editor {
                                 .child(ui_text(e.text.clone())),
                         )
                         .on_click(move |_, _, cx| ent.update(cx, |ed, cx| ed.jump_to_heading(id, cx)));
-                    if f32::from(full_w) > avail { row.tip_label(e.text.to_string(), TipSide::Right) } else { row }
+                    if !touch && f32::from(full_w) > avail { row.tip_label(e.text.to_string(), TipSide::Right) } else { row }
                 })
                 .collect()
         })
