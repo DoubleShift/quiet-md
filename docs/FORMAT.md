@@ -56,7 +56,16 @@ The same mapping (a page with children ⇄ a folder with its own document) is me
 ### Links and images
 
 - Document links are relative to the current file. DocxXML uses `<cite type="doc" href="../Work/Weekly report.xml">` and Markdown uses standard links. On read, the app resolves paths to runtime IDs. On write, it converts them back, so copying the whole folder preserves the links. The reader still accepts legacy `doc-id` links.
-- Image and attachment paths are relative to the library folder (`.assets/…`).
+- **Every path a file in the library keeps is relative and uses `/`, on every system**, so a library written on Windows reads the same on a Mac and the other way round. What it is relative to depends on the format:
+  - **DocxXML pages** (our own format): relative to the library folder. Image `src`, attachment `<source path>` and `<title cover>` are `.assets/…`. A board's `files[].path` is the same.
+  - **Markdown files in the library**: relative to the file's own folder, as Obsidian, Typora and GitHub read them: `.assets/x.png` from the top, `../.assets/x.png` from a folder. Moving the file rewrites them. Reading, a relative source is looked for beside the file first, then in the library (`.assets/…`, as older builds wrote it); a picture found only that way is written again relative to the file.
+  - Document and plain file links are relative to the current file in both formats (below).
+- `fdl_core::paths` holds the one set of functions for this: `portable` / `portable_in` write a path relative to a folder (the library, or the file's), and `resolve` reads one back, either `/` or `\` taken.
+  - In memory a page's own files are absolute paths on this computer; `Store` and the Markdown writer convert when they read and write, so editing, copying and exporting need not.
+  - A file outside the library keeps its absolute path, as written.
+  - Pages from before the rule keep absolute paths, this system's or another's (`C:\Users\…\.assets\x.png` on a Mac, `/Users/…/.assets/x.png` on Windows). The reader finds the same file under this library's `.assets/` (the part after the path's last `assets` / `.assets` folder), and the next save writes it relative.
+  - Older versions already read a DocxXML page's `.assets/…` relative to the library, so the rule did not change FORMAT. (A Markdown file's `../.assets/…` in a folder, written relative to the file, older builds do not find.)
+  - `no_writer_keeps_a_platform_path` (store tests) scans what every writer leaves (DocxXML, Markdown imported, in a folder, moved, and outside the library, 思源导入, boards, the library's records) for a `\`, a drive letter or the library's absolute path, and checks each Markdown file's sources from its own folder.
 - Plain links to files, such as `[Report](attachments/Report.pdf)` or `[Weekly report](../Work/Weekly%20report.md)` in Markdown and `<a href>` in DocxXML, are relative to the current file. Moving or renaming a document, the file a link points at or a folder holding either rewrites them like document links; a link that leaves the library still points at the same file. Clicking one opens a library document or a Markdown file in the app, opens another file in its system app, and only reveals a folder or a file that would run a program.
 
 ### Metadata by device (.quiet/meta/, FORMAT 5 and 6)
