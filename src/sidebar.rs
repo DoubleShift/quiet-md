@@ -625,8 +625,12 @@ impl Workspace {
         let folder = e.meta.folder.is_some() && note.is_none();
         let lib_batch = self.batch.is_some() && key == "doc";
         let float = key == "doc" && !lib_batch && self.rename.as_ref().is_none_or(|r| r.id != e.id);
+        // Touch: a long press is the row's menu (`phone.rs`), so "…" goes; a folder keeps its "+".
+        let touch = crate::design::touch();
+        let pulled = if touch && key == "doc" { self.swiped(&e.id) } else { 0. };
         let menu_open = self.row_menu.as_ref().is_some_and(|m| m.id == e.id && !m.batch && m.pos.x < px(0.)) || (folder && self.create_menu.as_ref().is_some_and(|(p, _)| p.as_deref() == Some(e.id.as_str())));
-        let give = if float { (if folder { 52. } else { 28. }) * if menu_open { 1. } else { self.folder_drag.reveal(&e.id) } } else { 0. };
+        let give = if float { (if folder && !touch { 52. } else if touch && !folder { 0. } else { 28. }) * if menu_open { 1. } else { self.folder_drag.reveal(&e.id) } } else { 0. };
+        let give = give.max(pulled);
         let selected = (self.view == View::Doc && (self.current.as_deref() == Some(e.id.as_str()) || (note.is_some() && self.current.as_deref() == note))) || (self.view == View::Folder && self.folder_current.as_deref() == Some(e.id.as_str()));
         let renaming = self.rename.as_ref().filter(|r| r.id == e.id).map(|r| r.field.clone());
         let title = match renaming {
@@ -683,11 +687,15 @@ impl Workspace {
         let blocked = batch.is_some_and(|b| !checked && b.len() >= BATCH_LIMIT);
         // Touch: a long press lifts a 我的文档 row, as a press and a move does with the mouse.
         let hold = (key == "doc" && batch.is_none() && !renaming).then(|| self.sidebar_row_hold(&e.id, cx));
+        // Touch: pulled left, the row gives way to 置顶 / 收藏 / 删除.
+        let swipe = (touch && hold.is_some()).then(|| self.drawer_row_swipe(&e.id, cx));
+        let strip = (pulled > 0.).then(|| self.swipe_strip(e, pulled, cx));
         self.row_base(e, key, cx)
             .h(px(DOC_ROW_H))
             .w_full()
             .relative()
             .children(hold)
+            .children(swipe)
             .flex()
             .items_center()
             // In 我的文档 the selection pill and the hover wash are drawn under the row (`sidebar_drag.rs`).
@@ -753,9 +761,12 @@ impl Workspace {
             // menu's last entry, so a separate new-folder button would be a third entry).
             .when(float, |d| {
                 let end = div().absolute().top_0().bottom_0().right_0().flex().items_center();
-                d.child(if folder { end.child(self.more_button(e, key, cx).mr(px(0.))).child(self.add_button(e, key, cx).ml(px(2.)).mr(px(4.))) }
+                d.child(if folder && touch { end.child(self.add_button(e, key, cx).mr(px(4.))) }
+                    else if folder { end.child(self.more_button(e, key, cx).mr(px(0.))).child(self.add_button(e, key, cx).ml(px(2.)).mr(px(4.))) }
+                    else if touch { end }
                     else { end.child(self.more_button(e, key, cx)) })
             })
+            .children(strip)
             .when(!renaming && key != "doc" && batch.is_none(), |d| d.child(self.more_button(e, key, cx)))
     }
 

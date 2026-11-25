@@ -238,7 +238,7 @@ impl Workspace {
         let children = self.level_entries(Some(&id));
         let body = if children.is_empty() {
             crate::trash::empty_state("illus/empty-list.svg", tr("这个文件夹还是空的", "This folder is empty")).into_any_element()
-        } else if self.home.grid {
+        } else if self.shows_grid(window) {
             self.render_home_grid(&children, true, window, cx)
         } else {
             self.render_home_list(&children, true, cx)

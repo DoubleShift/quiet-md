@@ -915,7 +915,17 @@ fn start_recording(handle: AnyWindowHandle, path: &str, cx: &mut AsyncApp) -> st
     stop
 }
 
-#[cfg(not(target_os = "macos"))]
+// iOS: the simulator's host takes the picture (`xcrun simctl io <device> screenshot`)
+// when it reads this line in the console, status bar and keyboard included; the
+// pause gives it the time to.
+#[cfg(target_os = "ios")]
+fn capture(_: &mut Window, _: &mut App, path: &str) -> anyhow::Result<()> {
+    eprintln!("devtools: shot {path}");
+    std::thread::sleep(Duration::from_millis(1200));
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
 fn capture(_: &mut Window, _: &mut App, _: &str) -> anyhow::Result<()> {
     anyhow::bail!("capture is only implemented on macOS")
 }

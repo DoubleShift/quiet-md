@@ -377,6 +377,8 @@ impl HomeSort {
 pub struct Home {
     pub tab: HomeTab,
     pub grid: bool,
+    /// A phone's own choice: its pages are lists unless the grid is asked for there.
+    pub phone_grid: bool,
     grid_scroll: UniformListScrollHandle,
     list_scroll: ScrollHandle,
     /// A folder's page has its own scroll positions, so 主页 keeps its place.
@@ -402,6 +404,7 @@ impl Default for Home {
         Home {
             tab: HomeTab::Recent,
             grid: true,
+            phone_grid: false,
             grid_scroll: Default::default(),
             list_scroll: Default::default(),
             folder_grid_scroll: Default::default(),
@@ -524,7 +527,7 @@ fn weight3(mut d: Div) -> Div {
 }
 
 /// A document's icon: its emoji, or the monochrome page glyph.
-fn entry_icon(e: &Entry) -> AnyElement {
+pub(crate) fn entry_icon(e: &Entry) -> AnyElement {
     if e.meta.folder.is_some() && e.note.is_none() { return icon("folder", 22., Theme::icon()).mr(px(13.)).into_any_element(); }
     match &e.icon {
         _ if e.meta.named_by_file() => crate::search::doc_icon_named(crate::search::file_glyph(&e.meta)).mr(px(12.)).into_any_element(),
@@ -755,6 +758,12 @@ impl Workspace {
             .child(toggle("home-list", "view-list", !self.home.grid, crate::settings::text("切换为列表视图"), false))
     }
 
+    /// 主页 and folder pages as cards: the desktop's choice, or a phone's own (its pages
+    /// are lists unless asked, `phone.rs`; 批量管理 there keeps the cards it had).
+    pub(crate) fn shows_grid(&self, window: &Window) -> bool {
+        if crate::theme::compact(f32::from(window.viewport_size().width)) { self.home.phone_grid || self.batch.is_some() } else { self.home.grid }
+    }
+
     /// A newly opened folder page starts at its top.
     pub(crate) fn reset_folder_scroll(&self) {
         self.home.folder_grid_scroll.scroll_to_item(0, ScrollStrategy::Top);
@@ -765,6 +774,7 @@ impl Workspace {
     pub(crate) fn load_home(&mut self) {
         let s = self.store.settings();
         self.home.grid = !s.home_list;
+        self.home.phone_grid = s.home_phone_grid;
         self.home.folders_first = s.home_folders_first;
         self.home.sort = s.home_sort.as_deref().map(HomeSort::of).unwrap_or(HomeSort::Manual);
         // Settings from before directions existed keep the order they used to show.
@@ -775,6 +785,7 @@ impl Workspace {
     fn save_home(&mut self) {
         let mut s = self.store.settings();
         s.home_folders_first = self.home.folders_first;
+        s.home_phone_grid = self.home.phone_grid;
         (s.home_list, s.home_sort) = (!self.home.grid, Some(self.home.sort.key().to_string()));
         s.home_sort_dir = Some(self.home.sort_dir.key().to_string());
         self.store.set_place_by_hand(self.home.sort == HomeSort::Manual);
@@ -782,6 +793,8 @@ impl Workspace {
     }
 
     pub(crate) fn render_home(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        // A phone: an iOS list under a large title (`phone.rs`); its grid and 批量管理 stay here.
+        if self.phone_lists(window) && !self.store.top_folders().is_empty() { return self.render_phone_list(false, window, cx) }
         // Too narrow for the search box: a search icon beside +, in the same style.
         let search = self.header_search(window, cx);
         // A phone searches and creates from the sidebar's drawer.
@@ -792,7 +805,7 @@ impl Workspace {
                 .tip(crate::settings::tr("搜索文档", "Search documents"), Some(crate::shortcuts::hint("workspace::FocusSearch", "⌘ + J")))
                 .on_click(cx.listener(|w, _, window, cx| w.open_search(window, cx)))))
             .child(self.place_button("home-more", None, cx))
-            .child(self.import_button("home-import", None, cx))
+            .when(!phone_bar, |d| d.child(self.import_button("home-import", None, cx)))
             .when(!phone_bar, |d| d.child(
             // 主页 makes no documents (which top-level folder they would land in isn't shown here): its one
             // creation control adds a folder beside the others, as 添加文件夹 under 主页 does.
@@ -888,9 +901,10 @@ impl Workspace {
             return div().flex_1().min_w_0().h_full().flex().flex_col().child(header).child(self.empty_main(cx)).into_any_element();
         }
         let entries = self.home_entries();
-        let body = if entries.is_empty() && (self.home.grid || self.lists_library()) {
+        let grid = self.shows_grid(window);
+        let body = if entries.is_empty() && (grid || self.lists_library()) {
             empty_state("illus/empty-list.svg", crate::settings::text("当前列表暂无内容")).into_any_element()
-        } else if self.home.grid {
+        } else if grid {
             self.render_home_grid(&entries, false, window, cx)
         } else {
             self.render_home_list(&entries, false, cx)
@@ -1137,13 +1151,14 @@ impl Workspace {
                     .on_mouse_down_out(cx.listener(|w, _, _, cx| { w.home.sort_menu = false; cx.notify(); }));
                 // A phone's toolbar has only this button: 批量管理 and the view come first.
                 if crate::theme::compact(f32::from(window.viewport_size().width)) {
-                    let grid = self.home.grid;
+                    // The phone's own view (a list unless asked): the desktop's choice is left alone.
+                    let grid = self.home.phone_grid;
                     menu = menu
                         .child(MenuItem::new("home-menu-batch").icon("batch").label(crate::settings::label(crate::settings::text("批量管理")))
                             .on_click(cx.listener(|w, _, _, cx| { w.batch = Some(vec![]); w.row_menu = None; w.home.sort_menu = false; cx.notify(); })))
                         .child(MenuItem::new("home-menu-view").icon(if grid { "view-list" } else { "view-grid" })
                             .label(if grid { crate::settings::text("切换为列表视图") } else { crate::settings::text("切换为宫格视图") })
-                            .on_click(cx.listener(move |w, _, _, cx| { w.home.grid = !grid; w.save_home(); w.home.sort_menu = false; cx.notify(); })))
+                            .on_click(cx.listener(move |w, _, _, cx| { w.home.phone_grid = !grid; w.save_home(); w.home.sort_menu = false; cx.notify(); })))
                         .child(MenuSeparator::new());
                 }
                 for (index, order) in [HomeSort::Manual, HomeSort::Visited, HomeSort::Modified, HomeSort::Created, HomeSort::Title].into_iter().enumerate() {
@@ -1171,6 +1186,8 @@ impl Workspace {
                 menu = menu.child(MenuSeparator::new()).child(MenuItem::new("home-folders-first").label(crate::settings::tr("文件夹优先", "Folders first")).checked(self.home.folders_first && self.home.sort != HomeSort::Manual)
                     .when(self.home.sort == HomeSort::Manual, |d| d.opacity(0.4))
                     .on_click(cx.listener(|w, _, _, cx| { if w.home.sort == HomeSort::Manual { return; } w.home.folders_first = !w.home.folders_first; w.save_home(); w.home.sort_menu = false; cx.notify(); })));
+                // A phone's bar has no 导入 button: its entries end this menu.
+                if crate::theme::compact(f32::from(window.viewport_size().width)) { menu = menu.child(MenuSeparator::new()).children(self.import_items(None, cx)); }
                 out.push(place(point(b.right(), b.bottom() + px(4.)), Anchor::TopRight, menu));
             }
         out

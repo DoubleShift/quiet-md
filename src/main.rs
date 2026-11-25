@@ -51,6 +51,7 @@ mod native_header;
 mod mermaid;
 mod printing;
 mod search;
+mod phone;
 mod phone_nav;
 #[cfg(not(target_family = "wasm"))]
 mod selftest;

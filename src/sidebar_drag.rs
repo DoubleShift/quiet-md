@@ -262,6 +262,12 @@ impl Workspace {
     /// does with the mouse). Returns whether it did.
     fn touch_row_press(&mut self, id: &str, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if crate::shared_store::top_of_row(id).is_some() { return false; }
+        // A phone's drawer: the row's menu first; the finger moving on carries the row (`on_row_long_press`).
+        if self.drawer(window) { self.hold_drawer_row(id, at, cx); return true; }
+        self.lift_row(id, at, window, cx)
+    }
+
+    fn lift_row(&mut self, id: &str, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) -> bool {
         self.arm_folder_drag(id, at, cx);
         if self.folder_drag.active.is_none() { return false; }
         log::info!("touch: sidebar row {id} picked up at {at:?}");
@@ -271,7 +277,12 @@ impl Workspace {
     }
 
     /// Touch: the rest of a long press that lifted a row.
-    fn on_row_long_press(&mut self, ev: &LongPressEvent, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_row_long_press(&mut self, ev: &LongPressEvent, window: &mut Window, cx: &mut Context<Self>) {
+        match self.held_moved(ev, cx) {
+            Ok(id) => { if !self.lift_row(&id, ev.position, window, cx) { return; } }
+            Err(true) => return,
+            Err(false) => {}
+        }
         if !self.folder_drag.active.as_ref().is_some_and(|d| d.started) { return; }
         match ev.phase {
             TouchPhase::Started => {}

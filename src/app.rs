@@ -354,6 +354,7 @@ pub struct Workspace {
     pub settings_from: View,
     /// A phone's way back (「‹」 and the edge swipe).
     pub phone_nav: crate::phone_nav::PhoneNav,
+    pub phone: crate::phone::Phone,
     /// A phone's 设置 shows its list of sections (iOS's Settings) until one is picked.
     pub settings_index: bool,
     /// 回收站 was opened from a phone's 设置 list, so its 返回 goes back there.
@@ -675,6 +676,7 @@ impl Workspace {
             settings_page: Default::default(),
             settings_from: View::Home,
             phone_nav: Default::default(),
+            phone: Default::default(),
             settings_index: true,
             trash_from_settings: false,
             settings_phone: std::cell::Cell::new(false),
@@ -1979,6 +1981,7 @@ pub(crate) const HEADER_ACTIONS_H: f32 = if crate::design::touch() { 44. } else 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_note_rows();
+        self.phone_tick(window);
         // iOS: the status bar's text is light over the dark look, dark over the light one.
         #[cfg(target_os = "ios")]
         {
@@ -2044,6 +2047,7 @@ impl Render for Workspace {
         // A phone: over the note instead of beside it.
         let (sidebar, drawer_el) = if drawer { (None, sidebar.map(|s| self.render_drawer(s, window, cx))) } else { (sidebar, None) };
         let row_menu = self.render_row_menu(window, cx);
+        let phone_held = self.render_phone_held(window, cx);
         let resize = (self.sidebar_open && !drawer).then(|| self.render_resize_handle(window, cx));
         let resize_overlay = self.render_resize_overlay(cx);
         let folder_drag_overlay = self.render_folder_drag_overlay(cx);
@@ -2094,6 +2098,7 @@ impl Render for Workspace {
                 )
                 .into_any_element(),
             View::Home => self.render_home(window, cx),
+            View::Folder if self.phone_lists(window) => self.render_phone_list(true, window, cx),
             View::Folder => self.render_folder(window, cx),
             View::Trash => self.render_trash(cx),
             View::Settings => self.render_settings(window, cx),
@@ -2283,6 +2288,7 @@ impl Render for Workspace {
             .children(resize)
             .children(crate::ui::window_controls(window))
             .children(row_menu)
+            .children(phone_held)
             .children(doc_menu)
             .children(mode_menu)
             .children(doc_info)
