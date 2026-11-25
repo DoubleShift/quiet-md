@@ -1923,7 +1923,7 @@ impl Workspace {
                     .items_center()
                     // A phone: the outline opens from here (the page has no margin for its button).
                     .when_some(compact.then(|| self.editor.as_ref().and_then(|e| e.read(cx).outline())).flatten(), |d, open| d.child(
-                        seg("doc-outline", "catalogue-list").selected(open)
+                        seg("doc-outline", "catalogue-tree").selected(open)
                             .on_click(cx.listener(|w, _, window, cx| if let Some(e) = w.editor.clone() { e.update(cx, |e, cx| e.toggle_outline(window, cx)); })),
                     ))
                     .when(self.current.is_some(), |d| {
