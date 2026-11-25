@@ -81,7 +81,7 @@ const HOVER_IN: (f32, f32) = (1100., 66.);
 const HOVER_OUT: (f32, f32) = (300., 35.);
 /// The row the pointer just left for another one: gone in about 80 ms.
 const HOVER_SWITCH: (f32, f32) = (2500., 100.);
-const QUICK: Fade = Fade::new(0., 520., 46.);
+pub(crate) const QUICK: Fade = Fade::new(0., 520., 46.);
 const VANISH: Fade = Fade::new(0., 900., 60.);
 
 /// Everything a row animates besides its place: entering, hover wash, the glow

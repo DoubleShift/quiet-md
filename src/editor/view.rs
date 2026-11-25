@@ -255,6 +255,12 @@ pub struct Editor {
     pub(super) col_drag: Option<super::grid::ColDrag>,
     /// Blocks moved by their handle.
     pub(super) block_drag: Option<super::drag::BlockDrag>,
+    /// Blocks sliding aside for dragged blocks and gliding in once dropped.
+    pub(super) drag_fx: RefCell<super::drag::DragFx>,
+    /// The first and last top-level blocks the page drew rows of this frame.
+    pub(super) rendered_top: Cell<Option<(usize, usize)>>,
+    /// The selected blocks' word count, for the document version and selection.
+    pub(super) sel_words: Cell<Option<((u64, super::core::BlockSel), usize)>>,
     /// Blocks just dropped, flashing since.
     pub(super) drop_flash: Option<(Vec<BlockId>, web_time::Instant)>,
     /// The fold arrow turning after a click: block → start.
@@ -496,6 +502,9 @@ impl Editor {
             gap_hover: None,
             col_drag: None,
             block_drag: None,
+            drag_fx: Default::default(),
+            rendered_top: Cell::new(None),
+            sel_words: Cell::new(None),
             drop_flash: None,
             fold_anim: None,
             col_anim: HashMap::default(),

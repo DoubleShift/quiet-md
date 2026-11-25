@@ -105,6 +105,36 @@ Measured 2026-11-25 on the same Mac mini, but with another build of the app busy
 - Rendering is unchanged: screenshots of the compilation (top and three wheel positions), the guides (Writing and formatting, Welcome, Playground), and a Chinese page with quotes in the default face, Songti SC, PingFang SC, Hiragino Sans GB and Heiti SC are identical to main's, pixel for pixel (`tools/harness/compare.py`).
 - Wheel scrolling did not slow down: five alternating runs of 300 steps of 40 pt each way, mean 3.48 / 2.90 ms (down / up) against main's 3.57 / 2.92, with fewer frames over 8.3 ms (65 against 160). Opening the compilation, first frame 30.8-34.0 ms against 33.2-35.8. Typing and backspacing ([readme-performance.txt](../tools/harness/examples/readme-performance.txt)) are unchanged within the noise.
 
+## Dragging blocks
+
+[block-drag.txt](../tools/harness/examples/block-drag.txt) opens the 1,000,000-character compilation, presses the handle of its first paragraph and drags it 4 pt a step: 120 steps down (480 pt, past 14 blocks), 120 back up, then 120 frames held at the window's bottom edge, where the page scrolls under it. `bench` draws a frame after each step. Dragged blocks now open a grey slot their size where they would land and the blocks between slide aside on springs; the slides are drawn moved (`Shift`, an offset at prepaint), not laid out again, so no row is measured again while it slides.
+
+Measured 2026-11-25 on an Apple M6 Mac mini (16 GiB, macOS 27.2.1), 1280 × 800 pt window, Craft theme, `--features devtools` release builds, three runs each, alternating. Means of the three: frame mean, frames over 16.7 ms and over 8.3 ms (of 120), and the p50 of the step (the drag event: finding the drop), of the frame and of the editor's own `render`:
+
+| Build | Phase | Frame mean | Over 16.7 / 8.3 | Step p50 | Frame p50 | Render p50 |
+|---|---|---:|---:|---:|---:|---:|
+| main (cc0a4c0) | down | 14.9 ms | 59 / 101 | 5.6 ms | 16.5 ms | 14.2 ms |
+| main | up | 18.6 ms | 100 / 118 | 6.9 ms | 19.4 ms | 16.4 ms |
+| main | held at the edge | 20.0 ms | 100 / 118 | 6.9 ms | 20.8 ms | 16.3 ms |
+| this change | down | 4.1 ms | 0 / 0 | 0.04 ms | 4.1 ms | 0.07 ms |
+| this change | up | 4.2 ms | 0 / 0 | 0.05 ms | 4.3 ms | 0.08 ms |
+| this change | held at the edge | 6.9 ms | 1 / 27 | 0.04 ms | 6.4 ms | 0.09 ms |
+
+- Before, a drag cost about 16 ms of `render` a frame whatever moved, from three walks of the whole document: the selection's word count and the set of selected blocks each listed the selected blocks again every frame (`block_sel_ids` walks every block twice and indexes their paths), and the word count built an index of every block. A dragged block is selected, so every frame paid it. Both are now kept until the selection or the document changes. The same cost was paid by any frame with blocks selected, not only while dragging.
+- Finding the drop under the pointer (each drag event and each frame) walked every top-level block (tens of thousands) and indexed every block: 5-7 ms. It now walks only the top-level blocks the page drew rows of.
+- Held at the edge, the page scrolls 600 pt/s and lays out rows it has not shown yet; that is what is left (as when scrolling).
+- Pages not being dragged draw as before: screenshots of the test document (still, hovered, block menu, selected, scrolled), the compilation (top and two wheel positions) and [menus.txt](../tools/harness/examples/menus.txt) are identical to main's, pixel for pixel (`tools/harness/compare.py`).
+
+Reproduce (the same temporary library as above):
+
+```sh
+cargo build --release --locked --features devtools
+python3 tools/harness/run.py tools/harness/examples/block-drag.txt /tmp/quiet-perf/library /tmp/quiet-perf/block-drag
+grep -a bench /tmp/quiet-perf/block-drag/log
+```
+
+To watch the slides themselves in a scripted run, set `FDL_ANIMATE=1` (tools/harness/README.md): a scripted window's animation frames are otherwise throttled.
+
 ## Large libraries
 
 A user who imported an Obsidian vault of more than 15,000 Markdown notes found browsing almost unusable. This section measures that case before and after the fix on `perf/big-library`.

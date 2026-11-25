@@ -83,6 +83,9 @@ fn ease(t: f32) -> f32 {
 }
 
 thread_local! { static CURRENT: std::cell::Cell<Option<(AnyWindowHandle, usize)>> = const { std::cell::Cell::new(None) }; }
+/// The recording under way: its start, and where its frames go.
+type Frames = std::sync::mpsc::Sender<(f64, usize, usize, Vec<u8>)>;
+thread_local! { static RECORDING: std::cell::RefCell<Option<(Instant, Frames)>> = const { std::cell::RefCell::new(None) }; }
 static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Move a scripted window off screen where it still renders (unless `FDL_NOPARK`).
@@ -191,6 +194,31 @@ pub fn start(window: &mut Window, cx: &mut App) {
                 // Draw invalidated frames ourselves: the display link stops
                 // while the screen is locked, and nothing would render.
                 let end = Instant::now() + Duration::from_millis(rest.trim().parse().unwrap_or(100));
+                // `FDL_ANIMATE`: a frame every 16ms, as the display link would
+                // draw them for animations, recorded as drawn. Timers can't
+                // keep that pace with the display asleep, so the main thread
+                // waits between frames itself.
+                if std::env::var_os("FDL_ANIMATE").is_some() {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        while Instant::now() < end {
+                            let t = Instant::now();
+                            window.refresh();
+                            window.draw(cx).clear(cx);
+                            RECORDING.with(|r| {
+                                if let Some((start, tx)) = &*r.borrow()
+                                    && let Ok((w, h, px)) = frame(window, cx)
+                                {
+                                    let _ = tx.send((start.elapsed().as_secs_f64(), w, h, px));
+                                }
+                            });
+                            // Spinning: a sleep, too, oversleeps several times over.
+                            while t.elapsed() < Duration::from_millis(16) && Instant::now() < end {
+                                std::thread::yield_now();
+                            }
+                        }
+                    });
+                    continue;
+                }
                 while Instant::now() < end {
                     cx.background_executor().timer(Duration::from_millis(16).min(end - Instant::now())).await;
                     let _ = handle.update(cx, |_, window, cx| {
@@ -256,6 +284,7 @@ pub fn start(window: &mut Window, cx: &mut App) {
             if cmd == "record" || (quit && recording.is_some()) {
                 if let Some(stop) = recording.take() {
                     stop.set(true);
+                    RECORDING.with(|r| *r.borrow_mut() = None);
                     *CURSOR_LOG.lock().unwrap() = None;
                     // Lets the writer drain and ffmpeg finish the file.
                     cx.background_executor().timer(Duration::from_millis(300)).await;
@@ -1048,6 +1077,7 @@ fn start_recording(handle: AnyWindowHandle, path: &str, cx: &mut AsyncApp) -> st
         }
         eprintln!("devtools: recorded {out} ({next} frames)");
     });
+    RECORDING.with(|r| *r.borrow_mut() = Some((start, tx.clone())));
     let flag = stop.clone();
     cx.spawn(async move |cx| {
         while !flag.get() {
