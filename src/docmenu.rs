@@ -141,6 +141,9 @@ impl Workspace {
         // references either
         let (board, board_file) = self.editor.as_ref().map_or((false, false), |e| { let e = e.read(cx); (e.board_open(), e.board_file) });
         let reading = self.reading();
+        if crate::theme::compact(f32::from(window.viewport_size().width)) {
+            return vec![self.render_doc_sheet(&id, (pinned, starred, refs_shown, reading), (board, board_file), window, cx)];
+        }
         let sub = self.doc_sub;
         let hover_sub = |s: Option<DocSub>| {
             cx.listener(move |w: &mut Workspace, hovered: &bool, _, cx| {
@@ -338,6 +341,87 @@ impl Workspace {
             );
         }
         out
+    }
+
+    /// A phone's "…": as iOS presents more actions, a sheet up from the
+    /// bottom edge (it scrolls on a short screen) instead of a tall menu off
+    /// the button. The everyday four (置顶, 收藏, 查找, 移动到) are tiles on top,
+    /// the rest grouped rows, 删除 red and last; 页宽设置 (a phone's page is
+    /// its width), 打印 and 快捷键 (no keyboard) aren't offered.
+    fn render_doc_sheet(&self, id: &str, (pinned, starred, refs_shown, reading): (bool, bool, bool, bool), (board, board_file): (bool, bool), window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        use crate::design::{color, icon, R};
+        let t = crate::settings::text;
+        let tile = |tid: &'static str, glyph: &'static str, label: SharedString, on: bool| {
+            div().id(tid).flex_1().min_w_0().h(px(72.)).flex().flex_col().items_center().justify_center().gap(px(6.))
+                .rounded(px(R)).bg(color::muted()).cursor_pointer().active(|s| s.bg(color::accent()))
+                .child(icon(glyph, 22., if on { color::primary() } else { color::foreground() }))
+                .child(div().max_w_full().px(px(4.)).truncate().text_size(px(13.)).text_color(color::foreground()).child(label))
+        };
+        let row = |rid: &'static str, glyph: &'static str, label: SharedString, danger: bool| {
+            let fg = if danger { color::destructive() } else { color::foreground() };
+            div().id(rid).h(px(48.)).px(px(16.)).flex().items_center().gap(px(12.)).cursor_pointer().active(|s| s.bg(color::accent()))
+                .child(icon(glyph, 22., fg))
+                .child(div().flex_1().min_w_0().truncate().text_size(px(17.)).text_color(fg).child(label))
+        };
+        let card = |rows: Vec<AnyElement>| {
+            let n = rows.len();
+            div().w_full().flex().flex_col().rounded(px(R)).overflow_hidden().bg(color::muted())
+                .children(rows.into_iter().enumerate().flat_map(move |(i, r)| {
+                    let sep = (i + 1 < n).then(|| div().ml(px(50.)).h(px(0.5)).bg(color::border()).into_any_element());
+                    std::iter::once(r).chain(sep)
+                }))
+                .into_any_element()
+        };
+        let (pin_id, star_id, mv_id, del_id, dup_id, child_id, md_id) = (id.to_string(), id.to_string(), id.to_string(), id.to_string(), id.to_string(), id.to_string(), id.to_string());
+        let mut tiles = vec![
+            tile("ds-pin", if pinned { "pin-off" } else { "pin" }, if pinned { t("从“置顶”移除") } else { crate::settings::tr("置顶", "Pin") }.into(), pinned)
+                .on_click(cx.listener(move |w, _, _, cx| { w.toggle_pin(&pin_id, cx); w.close_doc_menu(cx); })).into_any_element(),
+            tile("ds-star", if starred { "star-off" } else { "star" }, if starred { t("取消收藏") } else { crate::settings::tr("收藏", "Star") }.into(), starred)
+                .on_click(cx.listener(move |w, _, _, cx| { w.toggle_star(&star_id, cx); w.close_doc_menu(cx); })).into_any_element(),
+        ];
+        if !board { tiles.push(tile("ds-find", "text-search", crate::settings::tr("查找", "Find").into(), false)
+            .on_click(cx.listener(|w, _, window, cx| w.find_in_doc(false, window, cx))).into_any_element()); }
+        tiles.push(tile("ds-move", "folder-input", t("移动到").into(), false)
+            .on_click(cx.listener(move |w, _, window, cx| { w.close_doc_menu(cx); w.open_move(vec![mv_id.clone()], window, cx); })).into_any_element());
+        let mut make = vec![];
+        if !board_file && self.takes_children(id) {
+            make.push(row("ds-child", "plus", crate::settings::tr("新建子文档", "New child page").into(), false)
+                .on_click(cx.listener(move |w, _, window, cx| { w.close_doc_menu(cx); w.new_child(&child_id, window, cx); })).into_any_element());
+        }
+        make.push(row("ds-copy", "copy", t("创建副本").into(), false)
+            .on_click(cx.listener(move |w, _, window, cx| w.duplicate_doc(&dup_id, window, cx))).into_any_element());
+        if !board_file {
+            make.push(row("ds-copy-md", "doc-md", t("复制为 Markdown").into(), false)
+                .on_click(cx.listener(|w, _, _, cx| {
+                    w.close_doc_menu(cx);
+                    if let Some(ed) = w.editor.clone() { ed.update(cx, |e, cx| e.copy_markdown(cx)); w.show_toast(crate::settings::text("已复制为 Markdown"), cx); }
+                })).into_any_element());
+        }
+        make.push(row("ds-export-md", "export", crate::settings::tr("导出 Markdown", "Export Markdown").into(), false)
+            .on_click(cx.listener(move |w, _, _, cx| { w.close_doc_menu(cx); w.open_export_md(&md_id, cx); })).into_any_element());
+        let about = vec![
+            row("ds-info", "info", t("文档信息").into(), false)
+                .on_click(cx.listener(|w, _, window, cx| w.open_doc_info(window, cx))).into_any_element(),
+            row("ds-history", "restore", crate::settings::tr("版本历史", "Version history").into(), false)
+                .on_click(cx.listener(|w, _, window, cx| { w.close_doc_menu(cx); if let Some(id) = w.current.clone() { w.open_history(&id, window, cx) } })).into_any_element(),
+        ];
+        let switches = (!board_file).then(|| vec![
+            row("ds-read", "eye-open", t("阅读模式").into(), false).child(crate::design::Switch::new(reading))
+                .on_click(cx.listener(move |w, _, window, cx| { w.close_doc_menu(cx); w.set_mode(!reading, window, cx); })).into_any_element(),
+            row("ds-refs", "list", t("显示引用列表").into(), false).child(crate::design::Switch::new(refs_shown))
+                .on_click(cx.listener(move |w, _, _, cx| { w.close_doc_menu(cx); w.ask_refs(!refs_shown, cx); })).into_any_element(),
+        ]);
+        let delete = vec![row("ds-delete", "bin", t("删除").into(), true)
+            .on_click(cx.listener(move |w, _, _, cx| { w.close_doc_menu(cx); w.ask_delete(&del_id, cx); })).into_any_element()];
+        let body = div().id("doc-sheet-body").min_h_0().overflow_y_scroll().px(px(16.)).pb(px(16.)).flex().flex_col().gap(px(16.))
+            .child(div().w_full().flex().gap(px(8.)).children(tiles))
+            .child(card(make))
+            .child(card(about))
+            .children(switches.map(card))
+            .child(card(delete))
+            .into_any_element();
+        let title: SharedString = self.entries.iter().find(|e| e.id == id).map(|e| display_title(&e.title).to_string()).unwrap_or_default().into();
+        crate::settings::phone_sheet("doc-sheet", title, false, body, |w, _, cx| w.close_doc_menu(cx), window, cx)
     }
 
     /// 为当前窗口选择合适页宽: 默认 / 较宽 / 全宽 cards. The panel takes its width from its

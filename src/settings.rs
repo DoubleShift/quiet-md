@@ -937,7 +937,7 @@ fn popup_button(id: impl Into<ElementId>, label: impl Into<SharedString>, open: 
 /// over a scrim, its title centred and 完成 at the right; tapping the scrim
 /// or 完成 closes it. `tall` sheets reach near the top (a long, searched
 /// list), the rest are as tall as their rows.
-fn phone_sheet(id: &'static str, title: SharedString, tall: bool, body: AnyElement, close: impl Fn(&mut Workspace, &mut Window, &mut Context<Workspace>) + Clone + 'static, window: &Window, cx: &mut Context<Workspace>) -> AnyElement {
+pub(crate) fn phone_sheet(id: &'static str, title: SharedString, tall: bool, body: AnyElement, close: impl Fn(&mut Workspace, &mut Window, &mut Context<Workspace>) + Clone + 'static, window: &Window, cx: &mut Context<Workspace>) -> AnyElement {
     let vp = window.viewport_size();
     let insets = window.insets();
     let (top, bottom, ime) = (f32::from(insets.safe_area.top), f32::from(insets.safe_area.bottom), f32::from(insets.ime.bottom));
@@ -950,7 +950,7 @@ fn phone_sheet(id: &'static str, title: SharedString, tall: bool, body: AnyEleme
         .bg(crate::design::color::popover()).rounded_t(px(r)).shadow(theme::shadow_panel()).occlude()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(div().flex_none().h(px(56.)).relative().flex().items_center().justify_center()
-            .child(div().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).text_color(crate::design::color::foreground()).child(title))
+            .child(div().max_w(px(vw - 160.)).truncate().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).text_color(crate::design::color::foreground()).child(title))
             .child(div().absolute().right(px(8.)).top_0().h_full().flex().items_center()
                 .child(Button::ghost(SharedString::from(format!("{id}-done"))).label(tr("完成", "Done"))
                     .on_click(cx.listener(move |w, _, window, cx| done(w, window, cx))))))

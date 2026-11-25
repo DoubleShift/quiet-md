@@ -27,8 +27,8 @@ const RESPONSE_MAX: f32 = 265.;
 const CAT_TOP: f32 = 54.;
 const PIN_H: f32 = 40.;
 /// Item height: a 22px line plus 8px padding-bottom.
-/// 44pt on touch (the HIG's smallest target).
-const ROW_H: f32 = if crate::design::touch() { 44. } else { 30. };
+/// 36pt on touch: denser than a 44pt list, a long outline reads at a glance.
+const ROW_H: f32 = if crate::design::touch() { 36. } else { 30. };
 /// Indent per level.
 const INDENT: f32 = 14.;
 /// A heading this close below the viewport top already counts as current.
@@ -395,7 +395,8 @@ impl Editor {
                     // Named, as a panel is: 目录.
                     .child(div().h(px(44.)).pl(px(24.)).flex().items_center().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text())
                         .child(crate::settings::tr("目录", "Outline")))
-                    .child(body)),
+                    // Clipped under the header: a scrolled row doesn't show above it.
+                    .child(div().overflow_hidden().child(body))),
         )).with_priority(3).into_any_element()
     }
 
