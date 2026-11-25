@@ -1915,7 +1915,7 @@ impl Workspace {
                     // A phone: the outline opens from here (the page has no margin for its button).
                     .when_some(compact.then(|| self.editor.as_ref().and_then(|e| e.read(cx).outline())).flatten(), |d, open| d.child(
                         seg("doc-outline", "catalogue-list").selected(open)
-                            .on_click(cx.listener(|w, _, _, cx| if let Some(e) = w.editor.clone() { e.update(cx, |e, cx| e.toggle_outline(cx)); })),
+                            .on_click(cx.listener(|w, _, window, cx| if let Some(e) = w.editor.clone() { e.update(cx, |e, cx| e.toggle_outline(window, cx)); })),
                     ))
                     .when(self.current.is_some(), |d| {
                         d.child(
@@ -1961,6 +1961,16 @@ pub(crate) const HEADER_ACTIONS_H: f32 = if crate::design::touch() { 44. } else 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_note_rows();
+        // iOS: the status bar's text is light over the dark look, dark over the light one.
+        #[cfg(target_os = "ios")]
+        {
+            use std::sync::atomic::{AtomicU8, Ordering};
+            static SHOWN: AtomicU8 = AtomicU8::new(u8::MAX);
+            let dark = theme::dark() as u8;
+            if SHOWN.swap(dark, Ordering::Relaxed) != dark {
+                gpui_ios::ios::set_status_bar_style(if dark == 1 { gpui_ios::StatusBarContentStyle::Light } else { gpui_ios::StatusBarContentStyle::Dark });
+            }
+        }
         // The menu bar is the front window's: a Markdown file's 插入 / 格式 leave out what it can't hold.
         if window.is_window_active() {
             let markdown = self.view == View::Doc && self.editor.as_ref().is_some_and(|e| e.read(cx).markdown);
@@ -2007,6 +2017,8 @@ impl Render for Workspace {
         }
         self.sidebar_was_open = self.sidebar_open;
         let drawer = self.drawer(window);
+        // The drawer opening (it remembers nothing yet): the note's keyboard and edit menu step aside.
+        if drawer && self.sidebar_open && self.drawer_from.is_none() && let Some(e) = self.editor.clone() { e.update(cx, |e, cx| e.step_aside(window, cx)); }
         if !crate::sidebar::drawer_stays(&mut self.drawer_from, drawer && self.sidebar_open, &(self.view, self.current.clone())) && drawer { self.sidebar_open = false; }
         let sidebar = if self.sidebar_open { Some(if matches!(self.view, View::Settings | View::Trash) { self.render_settings_sidebar(window, cx) } else { self.render_sidebar(window, cx) }) } else { None };
         let sidebar = sidebar.map(|s| if inset_top + inset_bottom > 0. { div().flex_none().h_full().pt(px(inset_top)).pb(px(if keyboard > 0. { 0. } else { inset_bottom })).child(s).into_any_element() } else { s });
@@ -2027,7 +2039,7 @@ impl Render for Workspace {
         let history = self.render_history(cx);
         // a dialog holds the keyboard while open (Esc and ↩ go to it, not to the editor behind)
         self.dialog_focus.sync(self.export_md.is_some() || self.doc_info.is_some(), window, cx);
-        let confirm = self.render_confirm(cx);
+        let confirm = self.render_confirm(window, cx);
         let trash_menu = self.render_trash_menu(cx);
         let home_menus = self.render_home_menus(window, cx);
         let theme_menu = self.render_theme_menu(cx);

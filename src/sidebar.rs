@@ -266,7 +266,8 @@ impl Workspace {
             .child(header)
             .child(nav)
             .child(self.sidebar_drop_zone(div().id("doc-list").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.list_scroll).child(list), cx))
-            .children(crate::changelog::card(cx.listener(|_, _, _, cx| cx.notify())))
+            // A phone's drawer leaves the notes out: iOS tells what is new on the App Store.
+            .when(!self.drawer(window), |d| d.children(crate::changelog::card(cx.listener(|_, _, _, cx| cx.notify()))))
             .child(footer)
             .into_any_element()
     }

@@ -27,7 +27,8 @@ const RESPONSE_MAX: f32 = 265.;
 const CAT_TOP: f32 = 54.;
 const PIN_H: f32 = 40.;
 /// Item height: a 22px line plus 8px padding-bottom.
-const ROW_H: f32 = 30.;
+/// 44pt on touch (the HIG's smallest target).
+const ROW_H: f32 = if crate::design::touch() { 44. } else { 30. };
 /// Indent per level.
 const INDENT: f32 = 14.;
 /// A heading this close below the viewport top already counts as current.
@@ -278,7 +279,22 @@ impl Editor {
     /// It has its own state, never saved: the document's pinned outline is the desktop's.
     pub fn outline(&self) -> Option<bool> { (!self.cat_entries.is_empty()).then_some(self.cat_float) }
 
-    pub fn toggle_outline(&mut self, cx: &mut Context<Self>) { self.cat_float = !self.cat_float; cx.notify(); }
+    pub fn toggle_outline(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cat_float = !self.cat_float;
+        // Opened over the note: its keyboard, edit menu and handles step aside.
+        if self.cat_float { self.step_aside(window, cx); }
+        cx.notify();
+    }
+
+    /// Something opens over the note (a drawer, the outline): the keyboard
+    /// goes with the focus, and with it the touch edit menu, the selection's
+    /// handles and the format toolbar (all drawn only while focused).
+    pub fn step_aside(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.touch.menu = false;
+        self.touch.handle = None;
+        if self.focus.is_focused(window) { window.blur(cx); }
+        cx.notify();
+    }
 
     fn set_cat_pinned(&mut self, pinned: bool, cx: &mut Context<Self>) {
         self.cat_pinned = pinned;
@@ -368,7 +384,7 @@ impl Editor {
         let insets = window.insets();
         let (top, bottom) = (f32::from(insets.safe_area.top), f32::from(insets.safe_area.bottom));
         let w = (vw * 0.8).min(300.);
-        let body = self.catalogue_list(w - 16., vh - top - bottom - 24., window, cx);
+        let body = self.catalogue_list(w - 16., vh - top - bottom - 24. - 44., window, cx);
         deferred(anchored().position(point(px(0.), px(0.))).child(
             div().id("outline-drawer").relative().w(px(vw)).h(px(vh))
                 .child(div().id("outline-scrim").absolute().inset_0().bg(crate::design::color::overlay()).occlude()
@@ -376,6 +392,9 @@ impl Editor {
                 .child(div().id("outline-panel").absolute().top_0().right_0().h_full().w(px(w)).pt(px(top + 12.)).pb(px(bottom)).pl(px(8.))
                     .bg(Theme::bg_body()).shadow(crate::theme::shadow_panel()).occlude().cursor(CursorStyle::Arrow)
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    // Named, as a panel is: 目录.
+                    .child(div().h(px(44.)).pl(px(12.)).flex().items_center().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text())
+                        .child(crate::settings::tr("目录", "Outline")))
                     .child(body)),
         )).with_priority(3).into_any_element()
     }

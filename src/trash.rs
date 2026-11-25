@@ -407,7 +407,32 @@ impl Workspace {
 
     /// The confirmation dialog: a `Dialog` with its title, one line of body,
     /// 取消 and the action button on the right.
-    pub(crate) fn render_confirm(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// A phone's confirmation of a destructive step (HIG action sheet): the
+    /// question small and centred over the red action, 取消 apart below it,
+    /// both clear of the home indicator; the scrim cancels.
+    fn action_sheet(&self, title: String, body: String, action: &str, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let bottom = f32::from(window.insets().safe_area.bottom).max(8.);
+        let card = || div().w_full().flex().flex_col().rounded(px(crate::design::R + 2.)).bg(crate::design::color::popover()).overflow_hidden();
+        let row = |id: &'static str| div().id(id).h(px(56.)).w_full().flex().items_center().justify_center().text_size(px(19.)).cursor_pointer();
+        let sheet = div().absolute().left(px(8.)).right(px(8.)).bottom(px(bottom)).flex().flex_col().gap(px(8.))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(card()
+                .child(div().px(px(16.)).py(px(14.)).flex().flex_col().items_center().gap(px(4.)).text_center()
+                    .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).text_color(crate::design::color::muted_foreground()).child(ui_text(title)))
+                    .child(div().text_size(px(13.)).line_height(px(18.)).text_color(crate::design::color::muted_foreground()).child(ui_text(body))))
+                .child(div().h(px(0.5)).bg(crate::design::color::border()))
+                .child(row("confirm-ok").text_color(crate::design::color::destructive()).child(ui_text(action.to_string()))
+                    .on_click(cx.listener(|w, _, window, cx| w.confirm_ok(window, cx)))))
+            .child(card().child(row("confirm-cancel").font_weight(FontWeight::SEMIBOLD).text_color(crate::design::color::foreground()).child(crate::settings::text("取消"))
+                .on_click(cx.listener(|w, _, _, cx| w.dismiss_confirm(cx)))));
+        deferred(
+            crate::design::scrim().id("confirm-mask")
+                .on_mouse_down(MouseButton::Left, cx.listener(|w, _, _, cx| { cx.stop_propagation(); w.dismiss_confirm(cx); }))
+                .child(sheet),
+        ).with_priority(3).into_any_element()
+    }
+
+    pub(crate) fn render_confirm(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let c = self.confirm.as_ref()?;
         let title_of = |id: &str| {
             self.entries
@@ -501,6 +526,10 @@ impl Workspace {
             Confirm::Refs { show: false, no_ask } => Some(*no_ask),
             _ => None,
         };
+        // A phone confirms a destructive step it started as iOS does: an action sheet up from the bottom.
+        if danger && no_ask.is_none() && theme::compact(f32::from(window.viewport_size().width)) {
+            return Some(self.action_sheet(title, body, action, window, cx));
+        }
         let ok = if danger { Button::destructive("confirm-ok") } else { Button::primary("confirm-ok") }.label(action);
         // The dialog holds focus while it is up (`sync_confirm_focus`): ↩ and Esc are its own keys.
         let dialog = Dialog::alert("confirm-dialog")
@@ -508,7 +537,12 @@ impl Workspace {
             .track_focus(&self.confirm_focus)
             .on_action(cx.listener(|w, _: &ConfirmOk, window, cx| w.confirm_ok(window, cx)))
             .on_action(cx.listener(|w, _: &ConfirmCancel, _, cx| w.dismiss_confirm(cx)))
-            .w(px(if matches!(c, Confirm::SaveFailed | Confirm::Migrate(_)) { 520. } else { 400. }))
+            .w(px({
+                let w: f32 = if matches!(c, Confirm::SaveFailed | Confirm::Migrate(_)) { 520. } else { 400. };
+                // A phone keeps 16pt clear on each side.
+                let vw = f32::from(window.viewport_size().width);
+                if theme::compact(vw) { w.min(vw - 32.) } else { w }
+            }))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .title(title)
             .description(body)

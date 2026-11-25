@@ -207,9 +207,11 @@ impl Workspace {
         let root = self.entries.iter().find(|e| e.id == id).map(|e| e.top.clone()).unwrap_or_default();
         let first = link("home".into(), self.folder_name(&root), None).into_any_element();
         // A top-level folder's own page is the top-level folder: its name is the page's title, not a crumb before it.
-        let own = crate::shared_store::top_of_row(&id).is_some();
+        // A phone: the folder's name only (no path), as iOS titles a pushed page.
+        let phone = crate::theme::compact(f32::from(window.viewport_size().width));
+        let own = crate::shared_store::top_of_row(&id).is_some() || phone;
         let mut crumbs = div().min_w_0().flex().items_center().text_size(px(17.)).line_height(px(24.)).when(!own, |d| d.child(first));
-        for (i, e) in path.iter().enumerate() {
+        for (i, e) in path.iter().enumerate().filter(|_| !phone) {
             if path.len() > 2 && i > 0 && i < path.len() - 1 {
                 if i == 1 {
                     let hidden: Vec<String> = path[1..path.len() - 1].iter().map(|e| display_title(&e.title)).collect();
@@ -224,14 +226,15 @@ impl Workspace {
         let doc = id.clone();
         let header = crate::trash::page_header_with(self, crumbs, 26., cx)
             .child(self.place_button("folder-more", Some(id.clone()), cx))
-            .child(self.import_button("folder-import", Some(id.clone()), cx))
+            // A phone's bar has room for 更多 and + only: the view follows 主页's choice, 导入 is 主页's.
+            .when(!phone, |d| d.child(self.import_button("folder-import", Some(id.clone()), cx)))
             .child(crate::ui::header_icon("folder-new", "plus")
                 .child(self.home.track("create-folder"))
                 .selected(self.create_menu.as_ref().is_some_and(|(_, pos)| self.home.anchor("create-folder").is_some_and(|b| point(b.left(), b.bottom() + px(4.)) == *pos)))
                 .tip(tr("新建", "New"), Some(crate::shortcuts::hint("workspace::NewDoc", "⌘ + N")))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |w, ev: &ClickEvent, _, cx| { let pos = w.home.anchor("create-folder").map_or(ev.position(), |b| point(b.left(), b.bottom() + px(4.))); let p = Some(doc.clone()); w.create_menu = if w.create_menu.is_some() { None } else { Some((p, pos)) }; cx.notify(); })))
-            .child(div().id("folder-view-switch").no_drag().ml(px(12.)).child(self.view_switch(cx)));
+            .when(!phone, |d| d.child(div().id("folder-view-switch").no_drag().ml(px(12.)).child(self.view_switch(cx))));
         let children = self.level_entries(Some(&id));
         let body = if children.is_empty() {
             crate::trash::empty_state("illus/empty-list.svg", tr("这个文件夹还是空的", "This folder is empty")).into_any_element()

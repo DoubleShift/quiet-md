@@ -4322,6 +4322,7 @@ dependencies = [
  "futures",
  "gpui",
  "gpui_apple",
+ "gpui_ios",
  "gpui_platform",
  "gpui_web",
  "gpui_wgpu",
