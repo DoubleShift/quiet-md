@@ -118,7 +118,7 @@ impl Workspace {
         // Listed off the main thread, as a big library is at launch (`loading`): here at
         // once when quick, else every window takes it in when done (`Workspace::loaded`).
         if let Some(entries) = crate::loading::begin_added(&mut self.store, key, cx) {
-            self.entries = entries;
+            self.entries.set(entries);
             self.sort();
         }
         self.show_store_warnings_from(&self.store.take_warnings(), cx);
@@ -131,7 +131,7 @@ impl Workspace {
             AddError::Open(key) => { self.folded_tops.remove(&key); cx.notify(); }
             AddError::Inside(key) => {
                 self.folded_tops.remove(&key);
-                self.entries = self.store.list();
+                self.entries.set(self.store.list());
                 self.sort();
                 let found = self.entries.iter().find(|e| e.top == key && e.meta.folder.is_some() && self.store.folder_dir(Some(&e.id)).is_some_and(|p| p == dir)).map(|e| e.id.clone());
                 if let Some(id) = found { self.reveal_in_tree(&id); self.open_folder(&id, window, cx); }
@@ -163,7 +163,7 @@ impl Workspace {
         let _ = window;
         if let Err(e) = self.store.remove_folder(key) { self.show_toast_kind(ToastKind::Error, &crate::settings::diagnostic(&e.to_string()), cx); }
         cx.defer(crate::settings::top_switched);
-        self.entries = self.store.list();
+        self.entries.set(self.store.list());
         self.trash = self.store.list_trash();
         self.sort();
         cx.notify();
@@ -178,12 +178,12 @@ impl Workspace {
         self.flush_view_state();
         match self.store.rename_folder_top(key, name) {
             Ok(_) => {
-                self.entries = self.store.list();
+                self.entries.set(self.store.list());
                 self.sort();
                 // Every window lists the top-level folder by its new name.
                 let me = window.window_handle().window_id();
                 for h in cx.windows().into_iter().filter(|w| w.window_id() != me).filter_map(|w| w.downcast::<Workspace>()) {
-                    let _ = h.update(cx, |ws, _, cx| { if !ws.store.file_task_busy() && !ws.store.loading() { ws.entries = ws.store.list(); ws.sort(); } cx.notify(); });
+                    let _ = h.update(cx, |ws, _, cx| { if !ws.store.file_task_busy() && !ws.store.loading() { ws.entries.set(ws.store.list()); ws.sort(); } cx.notify(); });
                 }
             }
             Err(e) => {
@@ -213,7 +213,7 @@ impl Workspace {
             menu = menu.child(row("rr-retry", "folder", tr("重新查找", "Look again")).on_click(cx.listener(move |w, _, _, cx| {
                 w.row_menu = None;
                 w.store.retry_folder(&k1);
-                w.entries = w.store.list();
+                w.entries.set(w.store.list());
                 w.sort();
                 cx.notify();
             })));

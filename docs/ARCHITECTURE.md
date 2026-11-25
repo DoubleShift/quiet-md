@@ -136,6 +136,7 @@ Whiteboard and history modules in core:
 | `main.rs` | Entry point, `FDL_SCRIPT` mode (devtools builds only), `--self-test` and core module re-exports |
 | `guides.rs` | Seeds an empty library with the bundled Getting Started guides once |
 | `app.rs` | `Workspace`, the two-pane window, open/create/save/delete actions, save state and reminder scheduling |
+| `entries.rs` | `Entries`, the window's pages and folders: read as a slice, changed only through `set` / `edit` / `take`, which move its `generation`; the sidebar's rows and Home's cards are rebuilt when it moves |
 | `shared_store.rs` | The `Home` the windows share: each call goes to the top-level folder a document is in; with two or more, each folder shows as a row of the sidebar tree (`top_row`) |
 | `html.rs` / `printing.rs` / `transfer.rs` | HTML/PDF export, printing and import/export UI |
 | `clipboard.rs` | System clipboard HTML and the simulated clipboard in script mode |

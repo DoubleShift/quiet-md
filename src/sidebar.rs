@@ -447,7 +447,7 @@ impl Workspace {
         for id in &ids {
             self.copy_doc(id, cx);
         }
-        self.entries = self.store.list();
+        self.entries.set(self.store.list());
         self.sort();
         self.batch = None;
         self.row_menu = None;

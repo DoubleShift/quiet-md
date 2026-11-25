@@ -378,7 +378,8 @@ pub struct Workspace {
     pub settings_filter: Entity<TextField>,
     native_sidebar: crate::native_header::NativeSidebar,
     pub store: SharedStore,
-    pub entries: Vec<Entry>,
+    /// Changed only through `set` / `edit` / `take`, which move its `generation` (entries.rs).
+    pub entries: crate::entries::Entries,
     pub current: Option<String>,
     pub editor: Option<Entity<Editor>>,
     pub search: Entity<TextField>,
@@ -524,7 +525,7 @@ impl Workspace {
             if !handle.is_active(cx).is_some_and(|yes| yes) || handle.entity(cx).is_ok_and(|e| e.entity_id() == me) { continue }
             let (entries, trash) = (entries.to_vec(), trash.map(<[_]>::to_vec));
             let _ = handle.update(cx, |ws, _, cx| {
-                ws.entries = entries; if let Some(trash) = trash { ws.trash = trash; } ws.sort();
+                ws.entries.set(entries); if let Some(trash) = trash { ws.trash = trash; } ws.sort();
                 cx.notify();
             });
         }
@@ -575,7 +576,7 @@ impl Workspace {
                     // Several windows share one top-level folder in front: the one coming forward
                     // puts its own back (its pasted images, its look).
                     if let Some(id) = this.current.clone().or_else(|| this.folder_current.clone()) && this.store.set_active(&id) { cx.defer(crate::settings::top_switched); }
-                    if !this.store.file_task_busy() && !this.store.loading() { this.entries = this.store.list(); this.sort(); this.refresh_external(Some(window.window_handle().window_id()), cx); }
+                    if !this.store.file_task_busy() && !this.store.loading() { this.entries.set(this.store.list()); this.sort(); this.refresh_external(Some(window.window_handle().window_id()), cx); }
                     crate::update::check_if_stale(cx); cx.notify();
                 }
                 else if !this.store.file_task_busy() { this.cancel_home_drag(cx); this.end_folder_drag(true, cx); this.cancel_shortcut_recording(cx); this.flush(cx); }
@@ -689,7 +690,7 @@ impl Workspace {
             font_anchors: Default::default(),
             settings_filter,
             store,
-            entries,
+            entries: entries.into(),
             current: None,
             editor: None,
             search,
@@ -812,7 +813,7 @@ impl Workspace {
     /// the window starts on unless one was opened meanwhile. The loading
     /// layer fades out over whatever the note area shows then.
     pub(crate) fn loaded(&mut self, entries: Vec<Entry>, window: &mut Window, cx: &mut Context<Self>) {
-        self.entries = entries;
+        self.entries.set(entries);
         self.sort();
         self.load_home();
         self.load_cover = matches!(self.view, View::Home | View::Folder);
@@ -836,7 +837,7 @@ impl Workspace {
                 let entries = w.store.end_relist(done);
                 // Not mid-rename: the row under the field would be rebuilt; the next look brings it.
                 if w.rename.is_some() || w.move_dlg.is_some() { return }
-                w.entries = entries;
+                w.entries.set(entries);
                 w.sort();
                 cx.notify();
             });
@@ -855,7 +856,7 @@ impl Workspace {
     /// Most recently modified first.
     pub(crate) fn sort(&mut self) {
         self.reapply_pending_tree_moves();
-        self.entries.sort_by(|a, b| b.meta.modified.cmp(&a.meta.modified).then_with(|| a.id.cmp(&b.id)));
+        self.entries.edit().sort_by(|a, b| b.meta.modified.cmp(&a.meta.modified).then_with(|| a.id.cmp(&b.id)));
         self.sync_note_rows();
     }
 
@@ -882,7 +883,7 @@ impl Workspace {
                 w.downloading = None;
                 match r {
                     // Listed by its name until now: its title and words come with it.
-                    Ok(()) if w.store.cloud_only(&target).is_none() => { w.entries = w.store.list(); w.sort(); w.open(&target, window, cx); }
+                    Ok(()) if w.store.cloud_only(&target).is_none() => { w.entries.set(w.store.list()); w.sort(); w.open(&target, window, cx); }
                     Ok(()) => w.show_toast_kind(ToastKind::Error, crate::settings::tr("这篇文档还没有从 iCloud 下载完成", "This document hasn't finished downloading from iCloud"), cx),
                     Err(e) => w.show_toast_kind(ToastKind::Error, &crate::localized_format!("无法从 iCloud 下载这篇文档：{}", "Could not download this document from iCloud: {}", e), cx),
                 }
@@ -1010,7 +1011,7 @@ impl Workspace {
             EditorEvent::Leave => cx.defer_in(window, |this, window, cx| this.leave_board(window, cx)),
             EditorEvent::Catalogue(pinned) => {
                 if let Some(id) = this.current.clone() {
-                    if let Some(e) = this.entries.iter_mut().find(|e| e.id == id) {
+                    if let Some(e) = this.entries.edit().iter_mut().find(|e| e.id == id) {
                         e.meta.catalogue_closed = !pinned;
                     }
                     let _ = this.store.set_catalogue(&id, *pinned);
@@ -1025,7 +1026,7 @@ impl Workspace {
         // A 画板 opens straight into its board, over the whole window.
         editor.update(cx, |e, cx| { e.open_board_file(window, cx); e.open_table_file(window, cx); });
         if let Some(m) = self.store.touch(id)
-            && let Some(e) = self.entries.iter_mut().find(|e| e.id == id) {
+            && let Some(e) = self.entries.edit().iter_mut().find(|e| e.id == id) {
                 e.meta.opened = m.opened;
             }
         self.schedule_view_state(cx);
@@ -1138,7 +1139,7 @@ impl Workspace {
         // The rows go now; the list read back when the files have moved
         // replaces this, bringing back anything that could not go.
         let all: std::collections::HashSet<String> = all.into_iter().collect();
-        self.entries.retain(|e| !all.contains(&e.id));
+        self.entries.edit().retain(|e| !all.contains(&e.id));
         self.batch = None;
         self.row_menu = None;
         cx.notify();
@@ -1146,7 +1147,7 @@ impl Workspace {
             let _task_guard = task_guard;
             let (done, lists) = task.await;
             let _ = this.update_in(cx, |w, window, cx| {
-                let mut listed = ListedDocs { root: String::new(), entries: w.entries.clone(), trash: w.trash.clone(), warnings: vec![] };
+                let mut listed = ListedDocs { root: String::new(), entries: w.entries.to_vec(), trash: w.trash.clone(), warnings: vec![] };
                 for l in lists {
                     listed.entries = w.store.merge_entries(&l.root, l.entries);
                     listed.trash = w.store.merge_trash(&l.root, l.trash);
@@ -1160,7 +1161,7 @@ impl Workspace {
                     w.editor_sub = None;
                 }
                 w.sync_peers(cx, &listed.entries, Some(&listed.trash));
-                w.entries = listed.entries; w.trash = listed.trash;
+                w.entries.set(listed.entries); w.trash = listed.trash;
                 if w.folder_current.as_ref().is_some_and(|id| done.deleted.contains(id)) {
                     w.folder_current = None;
                     if w.view == View::Folder { w.view = View::Home; }
@@ -1190,7 +1191,7 @@ impl Workspace {
 
     pub fn toggle_pin(&mut self, id: &str, cx: &mut Context<Self>) {
         let mut on = false;
-        if let Some(e) = self.entries.iter_mut().find(|e| e.id == id) {
+        if let Some(e) = self.entries.edit().iter_mut().find(|e| e.id == id) {
             e.meta.pinned = !e.meta.pinned;
             on = e.meta.pinned;
             let _ = self.store.set_pinned(id, e.meta.pinned);
@@ -1203,7 +1204,7 @@ impl Workspace {
 
     /// 收藏 / 取消收藏 (listed under 主页 → 收藏).
     pub fn toggle_star(&mut self, id: &str, cx: &mut Context<Self>) {
-        let Some(e) = self.entries.iter_mut().find(|e| e.id == id) else { return };
+        let Some(e) = self.entries.edit().iter_mut().find(|e| e.id == id) else { return };
         let on = e.meta.starred == 0;
         if let Ok(t) = self.store.set_starred(id, on) {
             e.meta.starred = t;
@@ -1323,12 +1324,12 @@ impl Workspace {
                 let file_before = self.store.track_file_changes();
                 match self.store.rename(&r.id, &title) {
                     Ok(meta) => {
-                        if let Some(e) = self.entries.iter_mut().find(|e| e.id == r.id) {
+                        if let Some(e) = self.entries.edit().iter_mut().find(|e| e.id == r.id) {
                             e.title = title.clone();
                             e.meta = meta;
                         }
                         // The folder of a 正文 was renamed with it: its path, and those inside, changed.
-                        if self.entries.iter().any(|e| e.note.as_deref() == Some(r.id.as_str())) { self.entries = self.store.list(); }
+                        if self.entries.iter().any(|e| e.note.as_deref() == Some(r.id.as_str())) { self.entries.set(self.store.list()); }
                         self.sort();
                         if self.current.as_deref() == Some(r.id.as_str()) && let Some(ed) = &self.editor {
                             ed.update(cx, |e, cx| e.receive_file_title(&title, cx));
@@ -1389,7 +1390,7 @@ impl Workspace {
         for peer in peers { peer.update(cx, |e, cx| e.receive_document(&core, cx)); }
         for handle in cx.windows().into_iter().filter(|w| w.window_id() != window.window_handle().window_id()).filter_map(|w| w.downcast::<Workspace>()) {
             let _ = handle.update(cx, |ws, _, cx| {
-                if let Some(entry) = ws.entries.iter_mut().find(|e| e.id == id) {
+                if let Some(entry) = ws.entries.edit().iter_mut().find(|e| e.id == id) {
                     entry.title = core.doc.title.text.clone();
                     entry.icon = core.doc.icon.clone();
                 }
@@ -1415,7 +1416,7 @@ impl Workspace {
         // Keep the list title live while typing; the body/snippet updates on save.
         if let (Some(id), Some(ed)) = (&self.current, &self.editor) {
             let title = ed.read(cx).core.doc.title.text.clone();
-            if let Some(e) = self.entries.iter_mut().find(|e| &e.id == id) {
+            if let Some(e) = self.entries.edit().iter_mut().find(|e| &e.id == id) {
                 e.title = title;
             }
         }
@@ -1497,7 +1498,7 @@ impl Workspace {
             w.unsaved = false;
             w.dirty_since = None;
             w.status = SaveStatus::Saved;
-            if let Some(entry) = w.entries.iter_mut().find(|e| e.id == id) {
+            if let Some(entry) = w.entries.edit().iter_mut().find(|e| e.id == id) {
                 entry.title = core.doc.title.text.clone();
                 entry.body = core.doc.plain_text().into();
                 entry.reminders = core.doc.reminders();
@@ -1536,7 +1537,7 @@ impl Workspace {
         let (title, icon, body, reminders, links) = (doc.title.text.clone(), doc.icon.clone(), doc.plain_text(), doc.reminders(), doc.doc_links());
         match self.store.with(Some(&id), |s| s.save_editor(&id, doc)) {
             Ok(meta) => {
-                if let Some(e) = self.entries.iter_mut().find(|e| e.id == id) {
+                if let Some(e) = self.entries.edit().iter_mut().find(|e| e.id == id) {
                     e.title = title;
                     e.icon = icon;
                     e.body = body.into();
@@ -1638,7 +1639,7 @@ impl Workspace {
                     self.unsaved = false;
                     self.status = SaveStatus::Idle;
                     self.dirty_since = None;
-                    self.entries = self.store.list();
+                    self.entries.set(self.store.list());
                     self.sort();
                 }
                 Err(e) => {
@@ -1660,7 +1661,7 @@ impl Workspace {
         doc.title = crate::model::RichText::plain(format!("{}{}", doc.title.text, crate::settings::tr("（恢复副本）", " (recovered copy)")));
         match self.store.create_from(&doc) {
             Ok(_) => {
-                self.entries = self.store.list();
+                self.entries.set(self.store.list());
                 self.sort();
                 self.confirm = None;
                 self.resolve_save_failed(false, window, cx);
@@ -1738,7 +1739,7 @@ impl Workspace {
     pub(crate) fn set_refs_hidden(&mut self, hidden: bool, cx: &mut Context<Self>) {
         let Some(id) = self.current.clone() else { return };
         if self.store.update_meta(&id, |m| m.refs_hidden = hidden).is_ok()
-            && let Some(e) = self.entries.iter_mut().find(|e| e.id == id)
+            && let Some(e) = self.entries.edit().iter_mut().find(|e| e.id == id)
         {
             e.meta.refs_hidden = hidden;
         }

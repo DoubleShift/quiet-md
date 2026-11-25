@@ -39,7 +39,7 @@ pub(crate) struct HomeFolders {
     pub(crate) file_drop: Option<FileDrop>,
     /// Last-frame window bounds of the folder and document cards, by entry id.
     bounds: Rc<RefCell<HashMap<String, Bounds<Pixels>>>>,
-    /// The folder cards' papers and counts, kept while the entries' shape (`tree::shape_key`) holds.
+    /// The folder cards' papers and counts, kept while the entries hold (`Entries::generation`).
     papers: RefCell<Papers>,
 }
 
@@ -260,7 +260,7 @@ fn glass(o: Point<Pixels>, p: &Pose, window: &mut Window) {
 
 impl Workspace {
     fn folder_papers(&self, id: &str, front: Option<&String>) -> (Vec<Entry>, usize) {
-        let key = crate::tree::shape_key(&self.entries);
+        let key = self.entries.generation();
         let mut p = self.home.folders.papers.borrow_mut();
         if p.key != Some(key) {
             let mut children: HashMap<String, Vec<usize>> = HashMap::new();

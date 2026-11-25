@@ -393,7 +393,8 @@ pub struct Home {
     anchors: Rc<RefCell<HashMap<&'static str, Bounds<Pixels>>>>,
     /// Folder cards and dragging into them (`home_folder.rs`).
     pub(crate) folders: crate::home_folder::HomeFolders,
-    /// The level last shown, kept while nothing its cards show changed:
+    /// The level last shown, kept while the entries (`Level::key`: their
+    /// `generation`) and the order stay as they were:
     /// copying and sorting a folder of 3,000 notes took most of a frame.
     level: RefCell<Option<Level>>,
 }
@@ -566,7 +567,7 @@ impl Workspace {
     /// One level of the tree as 主页 shows it (a folder's page uses it too).
     /// Cards show no body, links or reminders: the entries come without them (`tree::face`).
     pub(crate) fn level_entries(&self, parent: Option<&str>) -> Rc<Vec<Entry>> {
-        let (key, order) = (crate::tree::shape_key(&self.entries), self.home.order());
+        let (key, order) = (self.entries.generation(), self.home.order());
         let mut level = self.home.level.borrow_mut();
         if let Some(l) = level.as_ref().filter(|l| l.key == key && l.order == order && l.parent.as_deref() == parent) { return l.entries.clone(); }
         // A folder's 正文 is the folder's own card, not one inside it.
@@ -583,7 +584,7 @@ impl Workspace {
             Err(e) => { self.show_toast_kind(crate::ui::ToastKind::Error, &e.to_string(), cx); return false; }
             // Already in order: nothing written, the rows stand.
             Ok(false) => return true,
-            Ok(true) => self.entries = self.store.list(),
+            Ok(true) => self.entries.set(self.store.list()),
         }
         self.remember_files(previous, crate::settings::tr("初始化手动排序", "Initialize manual order"));
         true

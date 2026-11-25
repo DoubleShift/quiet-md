@@ -110,21 +110,6 @@ impl<'a> Tree<'a> {
     }
 }
 
-/// A hash of everything of the entries that the sidebar's rows and Home's cards
-/// show or are ordered by: all but the body, links and reminders. Each field is named, so a new one is decided here.
-pub(crate) fn shape_key(entries: &[Entry]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = rustc_hash::FxHasher::default();
-    entries.len().hash(&mut h);
-    for Entry { id, meta, title, icon, body: _, reminders: _, links: _, note, top } in entries {
-        let crate::store::Meta { folder, top_order, created, modified, pinned, opened, width, catalogue_closed, parent, order, starred, reading, info, refs_hidden, markdown, path, name, rel, kind } = meta;
-        (id, title, icon, note, top, folder, top_order, created, modified, pinned, opened).hash(&mut h);
-        (catalogue_closed, parent, order, starred, reading, refs_hidden, markdown, path, name, rel).hash(&mut h);
-        (std::mem::discriminant(width), info.hidden, info.created, info.modified, std::mem::discriminant(kind)).hash(&mut h);
-    }
-    h.finish()
-}
-
 /// What a sidebar row or a Home card shows of `e`: its links, reminders and body stay behind.
 pub(crate) fn face(e: &Entry) -> Entry {
     Entry { id: e.id.clone(), meta: e.meta.clone(), title: e.title.clone(), icon: e.icon.clone(), body: Default::default(),
@@ -185,7 +170,10 @@ impl Workspace {
         let notes: HashMap<String, usize> = self.entries.iter().enumerate().filter(|(_, e)| e.note.is_some()).map(|(i, e)| (e.note.clone().unwrap(), i)).collect();
         if notes.is_empty() { return; }
         let picks: Vec<(usize, String, Option<String>)> = self.entries.iter().filter_map(|e| notes.get(&e.id).map(|&f| (f, e.title.clone(), e.icon.clone()))).collect();
-        for (f, title, icon) in picks { let e = &mut self.entries[f]; e.title = title; e.icon = icon; }
+        // Only when one differs: this runs on every list, and a change rebuilds the rows.
+        if picks.iter().all(|(f, title, icon)| self.entries[*f].title == *title && self.entries[*f].icon == *icon) { return; }
+        let entries = self.entries.edit();
+        for (f, title, icon) in picks { let e = &mut entries[f]; e.title = title; e.icon = icon; }
     }
 
     /// Expand the sidebar down to `id`.
@@ -223,7 +211,7 @@ impl Workspace {
             else { self.store.create_child(parent, &crate::model::Document::default()) };
         match made {
             Ok(id) => {
-                self.entries = self.store.list();
+                self.entries.set(self.store.list());
                 self.sort();
                 if let Some(folder) = self.entries.iter().find(|e| e.id == id).and_then(|e| e.meta.parent.clone()) {
                     self.expanded.insert(folder.clone());
@@ -278,7 +266,7 @@ impl Workspace {
             }
             match self.store.set_parent(id, target.as_deref()) {
                 Ok(meta) => {
-                    if let Some(e) = self.entries.iter_mut().find(|e| &e.id == id) {
+                    if let Some(e) = self.entries.edit().iter_mut().find(|e| &e.id == id) {
                         e.meta = meta;
                     }
                 }
@@ -290,7 +278,7 @@ impl Workspace {
             self.reveal_in_tree(&t.clone());
         }
         self.sync_sub_pages(cx);
-        self.entries = self.store.list(); self.sort();
+        self.entries.set(self.store.list()); self.sort();
         if !failed { self.show_toast(crate::settings::text("移动成功"), cx); }
         self.remember_files(file_before, crate::settings::tr("移动", "Move"));
         cx.notify();

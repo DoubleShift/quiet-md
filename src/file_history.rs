@@ -119,25 +119,25 @@ impl Workspace {
             }
         }
         self.file_history.busy = true;
-        let previous = self.entries.clone();
+        let previous = self.entries.to_vec();
         for (a, b) in &record.entries {
             let target = if redo { b } else { a };
             let id = a.as_ref().or(b.as_ref()).unwrap().id.clone();
             if let Some(target) = target {
-                if let Some(entry) = self.entries.iter_mut().find(|e| e.id == id) {
+                if let Some(entry) = self.entries.edit().iter_mut().find(|e| e.id == id) {
                     let delta = record.changes.iter().find(|c| c.id == id).unwrap();
                     let fields_changed = delta.before.as_ref().zip(delta.after.as_ref());
                     if fields_changed.is_some_and(|(a,b)| a.title != b.title) { entry.title = target.title.clone(); entry.meta.folder = target.meta.folder.clone(); }
                     if fields_changed.is_some_and(|(a,b)| (a.parent.clone(),a.order,a.top_order) != (b.parent.clone(),b.order,b.top_order)) {
                         entry.meta.parent = target.meta.parent.clone(); entry.meta.order = target.meta.order; entry.meta.top_order = target.meta.top_order;
                     }
-                } else { self.entries.push(target.clone()); }
+                } else { self.entries.edit().push(target.clone()); }
                 if let Some(parent) = &target.meta.parent { self.expanded.insert(parent.clone()); }
-            } else { self.entries.retain(|e| e.id != id); }
+            } else { self.entries.edit().retain(|e| e.id != id); }
         }
         // What one step changed is in one top-level folder (nothing moves between them).
         let key = record.changes.iter().find_map(|c| self.store.top_of(&c.id).or_else(|| self.store.trash_top(&c.id)));
-        let Some((key, mut writer)) = key.and_then(|k| Some((k.clone(), self.store.top_writer(&k)?))) else { self.file_history.busy = false; self.entries = previous; self.file_history.requests.clear(); return; };
+        let Some((key, mut writer)) = key.and_then(|k| Some((k.clone(), self.store.top_writer(&k)?))) else { self.file_history.busy = false; self.entries.set(previous); self.file_history.requests.clear(); return; };
         let changes = record.changes.clone();
         let task = cx.background_executor().spawn(async move {
             let result = writer.apply_file_history(&changes, redo);
@@ -151,7 +151,7 @@ impl Workspace {
                 w.file_history.busy = false;
                 match result {
                     Ok(()) => {
-                        w.entries = entries;
+                        w.entries.set(entries);
                         if redo { w.file_history.redo.pop(); w.file_history.undo.push(record.clone()); }
                         else { w.file_history.undo.pop(); w.file_history.redo.push(record.clone()); }
                         if let Some(id) = w.current.clone() {
@@ -166,7 +166,7 @@ impl Workspace {
                         w.show_toast(&format!("{}{}", if redo { crate::settings::tr("已重做：", "Redone: ") } else { crate::settings::tr("已撤销：", "Undone: ") }, record.label), cx);
                     }
                     Err(e) => {
-                        w.entries = if entries.is_empty() && !previous.is_empty() { previous } else { entries };
+                        w.entries.set(if entries.is_empty() && !previous.is_empty() { previous } else { entries });
                         w.file_history.requests.clear();
                         w.show_toast_kind(crate::ui::ToastKind::Error, &e.to_string(), cx);
                     }

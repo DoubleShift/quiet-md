@@ -233,7 +233,7 @@ impl Workspace {
                 self.status = crate::app::SaveStatus::Failed(msg);
             }
         }
-        self.entries = self.store.list();
+        self.entries.set(self.store.list());
         self.sort();
         self.sync_sub_pages(cx);
         self.trash = self.store.list_trash();

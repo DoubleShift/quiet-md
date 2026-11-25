@@ -18,7 +18,8 @@ const INDENT: f32 = 18.;
 #[derive(Clone)]
 struct Row { entry: Rc<Entry>, depth: usize }
 
-/// The tree's rows, kept while nothing they are made of changes: building them
+/// The tree's rows, kept while the entries (`key`: their `generation`), order and
+/// expanded folders stay as they were: building them
 /// walks every entry, most of a frame in a vault of 15,000 notes.
 #[derive(Default)]
 struct RowCache { key: u64, order: Option<crate::home::Order>, expanded: HashSet<String>, rows: Vec<Row>, parents: HashSet<String> }
@@ -225,7 +226,7 @@ fn faded(shadows: Vec<BoxShadow>, a: f32) -> Vec<BoxShadow> {
 
 impl Workspace {
     fn drag_rows(&self) -> Vec<Row> {
-        let (key, order) = (crate::tree::shape_key(&self.entries), self.home.order());
+        let (key, order) = (self.entries.generation(), self.home.order());
         let mut c = self.folder_drag.rows.borrow_mut();
         if c.key != key || c.order != Some(order) || c.expanded != self.expanded {
             c.rows = crate::tree::Tree::with_order(&self.entries, Some(order)).rows(|id| self.expanded.contains(id)).into_iter()
@@ -381,7 +382,7 @@ impl Workspace {
         if self.expanded.contains(&movement.id) { self.folder_drag.reopen = Some(movement.id.clone()); }
         if !cancel {
             if let Some(parent) = &movement.parent { self.expanded.insert(parent.clone()); }
-            let file_before = self.entries.clone();
+            let file_before = self.entries.to_vec();
             self.apply_tree_move(&movement);
             movement.history = self.remember_tree_move(file_before, crate::settings::tr("拖拽移动", "Drag move"));
             self.folder_drag.pending.push_back(movement);
@@ -395,7 +396,7 @@ impl Workspace {
     /// Put `id` last in `folder` (a drop on 主页's folder card), saved like a sidebar drop.
     pub(crate) fn move_into_folder(&mut self, id: &str, folder: &str, cx: &mut Context<Self>) {
         let mut movement = PendingMove { id: id.to_string(), parent: Some(folder.to_string()), before: None, history: 0 };
-        let file_before = self.entries.clone();
+        let file_before = self.entries.to_vec();
         self.apply_tree_move(&movement);
         movement.history = self.remember_tree_move(file_before, crate::settings::tr("拖拽移动", "Drag move"));
         self.folder_drag.pending.push_back(movement);
@@ -415,7 +416,7 @@ impl Workspace {
             .filter(|e| e.id != movement.id).map(|e| e.id.clone()).collect();
         let pos = movement.before.as_ref().and_then(|id| siblings.iter().position(|key| key == id)).unwrap_or(siblings.len());
         siblings.insert(pos, movement.id.clone());
-        for e in &mut self.entries {
+        for e in self.entries.edit().iter_mut() {
             if e.id == movement.id { e.meta.parent = movement.parent.clone(); }
             if let Some(i) = siblings.iter().position(|id| *id == e.id) {
                 if movement.parent.is_none() { e.meta.top_order = Some(i as u64 + 1); }
@@ -451,7 +452,7 @@ impl Workspace {
                     w.forget_file_change(history);
                     // Restore only hierarchy, preserving edits made while the write was pending.
                     if let Some(restored) = restored {
-                        for entry in &mut w.entries {
+                        for entry in w.entries.edit().iter_mut() {
                             if let Some(saved) = restored.iter().find(|e| e.id == entry.id) {
                                 entry.meta.parent = saved.meta.parent.clone();
                                 entry.meta.order = saved.meta.order;

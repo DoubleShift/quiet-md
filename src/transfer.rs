@@ -870,7 +870,7 @@ impl Workspace {
         let Listed { key, writer, entries } = listed;
         let entries = self.store.adopt_listed(&key, writer, entries);
         self.sync_peers(cx, &entries, None);
-        self.entries = entries;
+        self.entries.set(entries);
         self.sort();
     }
 
@@ -991,7 +991,7 @@ impl Workspace {
         assert!(!html.contains("UFJJVkFURS1NVVNULU5PVC1FWFBPUlQ="));
         assert!(!html.contains(&*outside.to_string_lossy()));
         let id = self.store.create_from(&doc).unwrap();
-        self.entries = self.store.list();
+        self.entries.set(self.store.list());
         self.open(&id, window, cx);
         self.export_md = Some(ExportMd { id, all: true });
         self.export_markdown(window, cx);

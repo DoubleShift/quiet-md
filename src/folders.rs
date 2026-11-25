@@ -34,7 +34,7 @@ impl Workspace {
                 self.search_open = false;
                 self.doc_info = None;
                 self.home.sort_menu = false;
-                self.entries = self.store.list();
+                self.entries.set(self.store.list());
                 self.sort();
                 if let Some(p) = &parent { self.expanded.insert(p.clone()); }
                 self.search.update(cx, |s, cx| s.set_text("", cx));
@@ -59,7 +59,7 @@ impl Workspace {
                 self.search_open = false;
                 self.doc_info = None;
                 self.home.sort_menu = false;
-                self.entries = self.store.list();
+                self.entries.set(self.store.list());
                 self.sort();
                 if let Some(p) = &parent { self.expanded.insert(p.clone()); }
                 self.search.update(cx, |s, cx| s.set_text("", cx));
@@ -82,7 +82,7 @@ impl Workspace {
                 self.search_open = false;
                 self.doc_info = None;
                 self.home.sort_menu = false;
-                self.entries = self.store.list();
+                self.entries.set(self.store.list());
                 self.sort();
                 if let Some(p) = &parent { self.expanded.insert(p.clone()); }
                 self.search.update(cx, |s, cx| s.set_text("", cx));
@@ -133,7 +133,7 @@ impl Workspace {
         self.editor = None;
         self.current = None;
         if self.folder_current.as_deref() != Some(id) { self.reset_folder_scroll(); }
-        if let Some(meta) = self.store.touch(id) && let Some(entry) = self.entries.iter_mut().find(|e| e.id == id) { entry.meta = meta; }
+        if let Some(meta) = self.store.touch(id) && let Some(entry) = self.entries.edit().iter_mut().find(|e| e.id == id) { entry.meta = meta; }
         self.schedule_view_state(cx);
         if self.manual_home_sort() { self.prepare_manual_order(cx); }
         self.folder_current = Some(id.to_string());
@@ -154,7 +154,7 @@ impl Workspace {
         self.create_menu = None;
         match self.store.create_folder(tr("未命名文件夹", "Untitled folder"), parent.as_deref()) {
             Ok(id) => {
-                self.entries = self.store.list(); self.sort();
+                self.entries.set(self.store.list()); self.sort();
                 if let Some(p) = parent { self.expanded.insert(p); }
                 // Select and open the new folder (like 新建文档), then focus its name
                 // field. open_folder focuses the pane, so start_rename must follow it.

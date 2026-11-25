@@ -46,7 +46,7 @@ impl Workspace {
 
     pub fn set_page_width(&mut self, width: PageWidth, cx: &mut Context<Self>) {
         let Some(id) = self.current.clone() else { return };
-        if let Some(e) = self.entries.iter_mut().find(|e| e.id == id) {
+        if let Some(e) = self.entries.edit().iter_mut().find(|e| e.id == id) {
             e.meta.width = width;
         }
         let _ = self.store.set_width(&id, width);
@@ -74,7 +74,7 @@ impl Workspace {
         self.close_doc_menu(cx);
         self.row_menu = None;
         if let Some(new) = self.copy_doc(id, cx) {
-            self.entries = self.store.list();
+            self.entries.set(self.store.list());
             self.sort();
             self.open(&new, window, cx);
         }
