@@ -1083,4 +1083,6 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("这篇文档还没有从 iCloud 下载完成", "Este documento aún no ha terminado de descargarse de iCloud"),
     ("无法从 iCloud 下载这篇文档：{}", "No se pudo descargar este documento de iCloud: {}"),
     ("拷贝链接", "Copiar enlace"),
+    ("在“文件”中打开", "Abrir en Archivos"),
+    ("分享…", "Compartir…"),
 ];

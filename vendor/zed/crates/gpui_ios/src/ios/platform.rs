@@ -339,12 +339,22 @@ impl Platform for IosPlatform {
         false
     }
 
-    fn reveal_path(&self, _path: &Path) {
-        // iOS doesn't have a file manager like Finder
+    // quiet.md: the Files app is iOS's file manager. It opens at a folder
+    // through `shareddocuments:`, the scheme Files registers for it.
+    fn reveal_path(&self, path: &Path) {
+        let folder = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
+        super::system::open_in_files(folder);
     }
 
-    fn open_with_system(&self, _path: &Path) {
-        // Would use UIDocumentInteractionController or UIActivityViewController
+    // quiet.md: a folder opens in Files; a file goes to the share sheet
+    // (`UIActivityViewController`), from which it is opened in or sent to
+    // another app.
+    fn open_with_system(&self, path: &Path) {
+        if path.is_dir() {
+            super::system::open_in_files(path);
+        } else if let Some(view_controller) = self.presented_view_controller() {
+            super::system::share_file(path, &view_controller);
+        }
     }
 
     fn on_quit(&self, mut callback: Box<dyn FnMut() -> bool>) {

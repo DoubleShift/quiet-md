@@ -152,6 +152,16 @@ define_class!(
             CAMetalLayer::class()
         }
 
+        // quiet.md: a shake reaches the first responder and goes up from there;
+        // the text input view is this view's child (system.rs).
+        #[unsafe(method(motionEnded:withEvent:))]
+        fn motion_ended(&self, motion: isize, _event: Option<&UIEvent>) {
+            // UIEventSubtypeMotionShake
+            if motion == 1 {
+                super::system::shaken();
+            }
+        }
+
         // This callback also covers iOS 15/16, before UIKit's trait-registration API.
         #[unsafe(method(traitCollectionDidChange:))]
         fn trait_collection_did_change(&self, previous: Option<&UITraitCollection>) {

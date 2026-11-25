@@ -399,6 +399,11 @@ impl Workspace {
         }
         make.push(row("ds-export-md", "export", crate::settings::tr("导出 Markdown", "Export Markdown").into(), false)
             .on_click(cx.listener(move |w, _, _, cx| { w.close_doc_menu(cx); w.open_export_md(&md_id, cx); })).into_any_element());
+        // iOS: the document's file to the share sheet (AirDrop, Messages, another app).
+        if cfg!(target_os = "ios") && let Some(path) = self.store.file_path(id) {
+            make.push(row("ds-share", "export", crate::settings::tr("分享…", "Share…").into(), false)
+                .on_click(cx.listener(move |w, _, _, cx| { w.close_doc_menu(cx); cx.open_with_system(&path); })).into_any_element());
+        }
         let about = vec![
             row("ds-info", "info", t("文档信息").into(), false)
                 .on_click(cx.listener(|w, _, window, cx| w.open_doc_info(window, cx))).into_any_element(),

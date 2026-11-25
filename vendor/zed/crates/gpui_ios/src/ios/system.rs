@@ -11,8 +11,8 @@ use objc2::{
     runtime::{AnyClass, AnyObject},
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-use objc2_foundation::{NSObject, NSObjectProtocol};
-use std::cell::RefCell;
+use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
+use std::{cell::RefCell, path::Path};
 
 /// What the Taptic Engine plays (`UIFeedbackGenerator`'s vocabulary).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,5 +159,77 @@ pub(super) fn install_scroll_to_top(parent: &AnyObject) {
         let _: () = msg_send![&*scroll_view, setDelegate: &*delegate];
         SCROLL_TO_TOP_DELEGATE.with_borrow_mut(|slot| *slot = Some(delegate));
         let _: () = msg_send![parent, addSubview: &*scroll_view];
+    }
+}
+
+/// Opens the Files app at `folder`.
+pub(super) fn open_in_files(folder: &Path) {
+    let Some(mtm) = main_thread_marker() else { return };
+    let (Some(url_class), Some(application)) = (AnyClass::get(c"NSURL"), AnyClass::get(c"UIApplication")) else { return };
+    let _ = mtm;
+    // SAFETY: `+[NSURL fileURLWithPath:]`, `-absoluteString`, `+[NSURL URLWithString:]`
+    // and `-[UIApplication openURL:options:completionHandler:]` with their documented types.
+    unsafe {
+        let path = NSString::from_str(&folder.to_string_lossy());
+        let file_url: Retained<AnyObject> = msg_send![url_class, fileURLWithPath: &*path, isDirectory: true];
+        // The file URL with its scheme swapped: the path stays percent-encoded.
+        let absolute: Retained<NSString> = msg_send![&*file_url, absoluteString];
+        let Some(rest) = absolute.to_string().strip_prefix("file://").map(str::to_string) else { return };
+        let shared = NSString::from_str(&format!("shareddocuments://{rest}"));
+        let url: Option<Retained<AnyObject>> = msg_send![url_class, URLWithString: &*shared];
+        let Some(url) = url else { return };
+        let app: Retained<AnyObject> = msg_send![application, sharedApplication];
+        let options: Retained<AnyObject> = msg_send![AnyClass::get(c"NSDictionary").expect("Foundation"), new];
+        let none: Option<&block2::Block<dyn Fn(objc2::runtime::Bool)>> = None;
+        let _: () = msg_send![&*app, openURL: &*url, options: &*options, completionHandler: none];
+    }
+}
+
+/// Presents the share sheet for the file at `path` over `presenter`.
+pub(super) fn share_file(path: &Path, presenter: &AnyObject) {
+    let (Some(url_class), Some(array_class), Some(sheet_class)) =
+        (AnyClass::get(c"NSURL"), AnyClass::get(c"NSArray"), AnyClass::get(c"UIActivityViewController")) else { return };
+    // SAFETY: UIKit's documented selectors; `presenter` is a `UIViewController`.
+    unsafe {
+        let path = NSString::from_str(&path.to_string_lossy());
+        let url: Retained<AnyObject> = msg_send![url_class, fileURLWithPath: &*path];
+        let items: Retained<AnyObject> = msg_send![array_class, arrayWithObject: &*url];
+        let allocated: Allocated<AnyObject> = msg_send![sheet_class, alloc];
+        let none: Option<&AnyObject> = None;
+        let sheet: Retained<AnyObject> = msg_send![allocated, initWithActivityItems: &*items, applicationActivities: none];
+        // An iPad shows it as a popover, which needs somewhere to point: the middle of the presenter.
+        let popover: Option<Retained<AnyObject>> = msg_send![&*sheet, popoverPresentationController];
+        if let Some(popover) = popover {
+            let view: Option<Retained<AnyObject>> = msg_send![presenter, view];
+            if let Some(view) = view {
+                let bounds: CGRect = msg_send![&*view, bounds];
+                let middle = CGRect::new(CGPoint::new(bounds.size.width / 2., bounds.size.height / 2.), CGSize::new(1., 1.));
+                let _: () = msg_send![&*popover, setSourceView: &*view];
+                let _: () = msg_send![&*popover, setSourceRect: middle];
+            }
+        }
+        let completion: Option<&block2::Block<dyn Fn()>> = None;
+        let _: () = msg_send![presenter, presentViewController: &*sheet, animated: true, completion: completion];
+    }
+}
+
+thread_local! { static SHAKE: RefCell<Option<Box<dyn FnMut()>>> = const { RefCell::new(None) }; }
+
+/// Calls `callback` when the device is shaken (iOS's gesture for undo) while
+/// the window's view or its text input is first responder.
+pub fn on_shake(callback: impl FnMut() + 'static) {
+    SHAKE.with_borrow_mut(|slot| *slot = Some(Box::new(callback)));
+}
+
+/// `motionEnded:withEvent:` on the Metal view, for `UIEventSubtypeMotionShake`.
+pub(super) fn shaken() {
+    let callback = SHAKE.with_borrow_mut(Option::take);
+    if let Some(mut callback) = callback {
+        callback();
+        SHAKE.with_borrow_mut(|slot| {
+            if slot.is_none() {
+                *slot = Some(callback);
+            }
+        });
     }
 }

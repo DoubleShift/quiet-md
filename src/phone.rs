@@ -27,6 +27,8 @@ const SEARCH_H: f32 = 44.;
 /// The large title's slot: 34pt bold on a 41pt line, 8 under it.
 const TITLE_H: f32 = 49.;
 const ROW_H: f32 = 60.;
+/// A row at the reader's Dynamic Type size: its two lines grow, its padding does not.
+fn row_h() -> f32 { ROW_H - 40. + text(22.) + text(18.) }
 /// One swipe action's width.
 const ACTION_W: f32 = 74.;
 /// The same in the drawer, whose rows are shorter: glyphs alone.
@@ -309,7 +311,7 @@ impl Workspace {
         } else { crate::ui::format_visit(if e.meta.modified > 0 { e.meta.modified } else { e.meta.created }) };
         let (id, rec, key) = (e.id.clone(), self.phone.rows.clone(), e.id.clone());
         let open = self.phone.swipe.is_some();
-        let face = div().id(SharedString::from(format!("phone-row-{}", e.id))).relative().left(px(-x)).h(px(ROW_H)).pl(px(16.)).flex().items_center()
+        let face = div().id(SharedString::from(format!("phone-row-{}", e.id))).relative().left(px(-x)).h(px(row_h())).pl(px(16.)).flex().items_center()
             .bg(Theme::bg_body()).active(|s| s.bg(Theme::fill_hover()))
             .child(crate::home::entry_icon(e))
             .child(div().flex_1().min_w_0().h_full().pr(px(12.)).flex().items_center().when(!last, |d| d.border_b_1().border_color(list_line()))
@@ -321,7 +323,7 @@ impl Workspace {
                 .when(folder, |d| d.child(icon("chevron-right", 16., color::muted_foreground()).ml(px(6.)).flex_none())))
             // An open row's tap closes it; otherwise it opens the page.
             .on_click(cx.listener(move |w, _, window, cx| if open { w.close_swipe(cx) } else { w.open(&id, window, cx) }));
-        let mut row = div().relative().h(px(ROW_H)).flex_none().overflow_hidden()
+        let mut row = div().relative().h(px(row_h())).flex_none().overflow_hidden()
             .child(canvas(move |b, _, _| { rec.borrow_mut().insert(key.clone(), b); }, |_, _, _, _| {}).absolute().inset_0());
         if x > 0. { row = row.child(self.swipe_strip(e, x, cx)); }
         row.child(face).into_any_element()
@@ -393,7 +395,7 @@ impl Workspace {
         let mut rows = div().relative().flex_none().child(self.phone_gestures(cx));
         for (i, e) in entries.iter().enumerate() { rows = rows.child(self.phone_row(e, i + 1 == n, cx)); }
         // Tall enough to scroll the search field away however short the list; clear of 新建 and the home indicator.
-        let fill = (vh - top - BAR_H - TITLE_H - n as f32 * ROW_H).max(FAB + 32. + bottom);
+        let fill = (vh - top - BAR_H - TITLE_H - n as f32 * row_h()).max(FAB + 32. + bottom);
         column = column.child(rows).child(div().h(px(fill)).flex_none());
         let lead = if folder { self.back_button(cx).unwrap_or_else(|| div().into_any_element()) } else {
             crate::design::Button::ghost("open-sidebar").icon(crate::sidebar::toggle_glyph(false))
@@ -476,7 +478,7 @@ impl Workspace {
         let open = e.id.clone();
         let preview = if folder {
             let n = self.entries.iter().filter(|c| c.meta.parent.as_deref() == Some(e.id.as_str())).count();
-            div().id("phone-held-preview").w(px(vw - 32.)).h(px(ROW_H + 12.)).px(px(16.)).flex().items_center().rounded(px(14.)).bg(Theme::bg_body()).shadow(theme::shadow_panel())
+            div().id("phone-held-preview").w(px(vw - 32.)).h(px(row_h() + 12.)).px(px(16.)).flex().items_center().rounded(px(14.)).bg(Theme::bg_body()).shadow(theme::shadow_panel())
                 .child(crate::home::entry_icon(&e))
                 .child(div().flex_1().min_w_0()
                     .child(div().text_size(px(text(17.))).line_height(px(text(22.))).text_color(Theme::text()).truncate().child(ui_text(display_title(&e.title))))
@@ -636,6 +638,9 @@ pub fn text(size: f32) -> f32 {
     let k = system().text_scale;
     if k == 1. { size } else { (size * k).round() }
 }
+
+/// Set by a shake of the device (and by devtools' `shake`): the note undoes its last edit.
+pub static SHAKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Set by a tap on the status bar (and by devtools' `statustap`): the page shown scrolls to its top.
 pub static TO_TOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

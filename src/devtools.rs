@@ -729,6 +729,7 @@ fn run(cmd: &str, rest: &str, window: &mut Window, cx: &mut App) {
             }
         }
         // iOS: what a tap on the status bar does (the simulator cannot be tapped there from a script).
+        "shake" => { crate::phone::SHAKEN.store(true, std::sync::atomic::Ordering::Relaxed); window.refresh(); }
         "statustap" => { crate::phone::TO_TOP.store(true, std::sync::atomic::Ordering::Relaxed); window.refresh(); }
         "shot" => {
             let name = rest.trim().to_string();

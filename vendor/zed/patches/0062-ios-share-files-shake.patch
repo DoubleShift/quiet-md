@@ -1,0 +1,160 @@
+`IosPlatform::open_with_system` and `reveal_path` were empty. A folder now opens in the Files app (`shareddocuments:` with the folder's file URL), which is also where `reveal_path` shows a file's folder; a file is handed to the share sheet (`UIActivityViewController`, as a popover from the middle of the presenter on an iPad). `on_shake(callback)` reports a shake, iOS's gesture for undo: `GPUIMetalView` implements `motionEnded:withEvent:`, which UIKit sends up the responder chain from the text input view. All in `ios/system.rs`, classes looked up by name.
+
+diff --git a/crates/gpui_ios/src/ios.rs b/crates/gpui_ios/src/ios.rs
+index c0f7ac1904c34d51c93e8546241c70ebb689fa29..6cb11a420bcf063a010abb7a9a9b346785e1a9d7 100644
+--- a/crates/gpui_ios/src/ios.rs
++++ b/crates/gpui_ios/src/ios.rs
+@@ -51,7 +51,7 @@ impl<T> CallbackSlot<T> {
+ pub(crate) use display::*;
+ pub use platform::*;
+ // quiet.md: haptics, the status-bar tap, the accessibility settings (system.rs).
+-pub use system::{Haptic, bold_text_enabled, haptic, on_status_bar_tap, reduce_motion_enabled, text_scale};
++pub use system::{Haptic, bold_text_enabled, haptic, on_shake, on_status_bar_tap, reduce_motion_enabled, text_scale};
+ pub use window::set_status_bar_style;
+ pub(crate) use window::*;
+ 
+diff --git a/crates/gpui_ios/src/ios/platform.rs b/crates/gpui_ios/src/ios/platform.rs
+index f1c5be758de38256a2e1ca1c4d4815f428817ecd..cf0524a4a60b3c12c0ecc5417228b7f8dce8cef2 100644
+--- a/crates/gpui_ios/src/ios/platform.rs
++++ b/crates/gpui_ios/src/ios/platform.rs
+@@ -339,12 +339,22 @@ impl Platform for IosPlatform {
+         false
+     }
+ 
+-    fn reveal_path(&self, _path: &Path) {
+-        // iOS doesn't have a file manager like Finder
+-    }
+-
+-    fn open_with_system(&self, _path: &Path) {
+-        // Would use UIDocumentInteractionController or UIActivityViewController
++    // quiet.md: the Files app is iOS's file manager. It opens at a folder
++    // through `shareddocuments:`, the scheme Files registers for it.
++    fn reveal_path(&self, path: &Path) {
++        let folder = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
++        super::system::open_in_files(folder);
++    }
++
++    // quiet.md: a folder opens in Files; a file goes to the share sheet
++    // (`UIActivityViewController`), from which it is opened in or sent to
++    // another app.
++    fn open_with_system(&self, path: &Path) {
++        if path.is_dir() {
++            super::system::open_in_files(path);
++        } else if let Some(view_controller) = self.presented_view_controller() {
++            super::system::share_file(path, &view_controller);
++        }
+     }
+ 
+     fn on_quit(&self, mut callback: Box<dyn FnMut() -> bool>) {
+diff --git a/crates/gpui_ios/src/ios/system.rs b/crates/gpui_ios/src/ios/system.rs
+index 5e3a5276433a388e266cc4f69c331d8154d1f564..cff60b643d8d9bfa06b98277029c37dea6be6442 100644
+--- a/crates/gpui_ios/src/ios/system.rs
++++ b/crates/gpui_ios/src/ios/system.rs
+@@ -11,8 +11,8 @@ use objc2::{
+     runtime::{AnyClass, AnyObject},
+ };
+ use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+-use objc2_foundation::{NSObject, NSObjectProtocol};
+-use std::cell::RefCell;
++use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
++use std::{cell::RefCell, path::Path};
+ 
+ /// What the Taptic Engine plays (`UIFeedbackGenerator`'s vocabulary).
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+@@ -161,3 +161,75 @@ pub(super) fn install_scroll_to_top(parent: &AnyObject) {
+         let _: () = msg_send![parent, addSubview: &*scroll_view];
+     }
+ }
++
++/// Opens the Files app at `folder`.
++pub(super) fn open_in_files(folder: &Path) {
++    let Some(mtm) = main_thread_marker() else { return };
++    let (Some(url_class), Some(application)) = (AnyClass::get(c"NSURL"), AnyClass::get(c"UIApplication")) else { return };
++    let _ = mtm;
++    // SAFETY: `+[NSURL fileURLWithPath:]`, `-absoluteString`, `+[NSURL URLWithString:]`
++    // and `-[UIApplication openURL:options:completionHandler:]` with their documented types.
++    unsafe {
++        let path = NSString::from_str(&folder.to_string_lossy());
++        let file_url: Retained<AnyObject> = msg_send![url_class, fileURLWithPath: &*path, isDirectory: true];
++        // The file URL with its scheme swapped: the path stays percent-encoded.
++        let absolute: Retained<NSString> = msg_send![&*file_url, absoluteString];
++        let Some(rest) = absolute.to_string().strip_prefix("file://").map(str::to_string) else { return };
++        let shared = NSString::from_str(&format!("shareddocuments://{rest}"));
++        let url: Option<Retained<AnyObject>> = msg_send![url_class, URLWithString: &*shared];
++        let Some(url) = url else { return };
++        let app: Retained<AnyObject> = msg_send![application, sharedApplication];
++        let options: Retained<AnyObject> = msg_send![AnyClass::get(c"NSDictionary").expect("Foundation"), new];
++        let none: Option<&block2::Block<dyn Fn(objc2::runtime::Bool)>> = None;
++        let _: () = msg_send![&*app, openURL: &*url, options: &*options, completionHandler: none];
++    }
++}
++
++/// Presents the share sheet for the file at `path` over `presenter`.
++pub(super) fn share_file(path: &Path, presenter: &AnyObject) {
++    let (Some(url_class), Some(array_class), Some(sheet_class)) =
++        (AnyClass::get(c"NSURL"), AnyClass::get(c"NSArray"), AnyClass::get(c"UIActivityViewController")) else { return };
++    // SAFETY: UIKit's documented selectors; `presenter` is a `UIViewController`.
++    unsafe {
++        let path = NSString::from_str(&path.to_string_lossy());
++        let url: Retained<AnyObject> = msg_send![url_class, fileURLWithPath: &*path];
++        let items: Retained<AnyObject> = msg_send![array_class, arrayWithObject: &*url];
++        let allocated: Allocated<AnyObject> = msg_send![sheet_class, alloc];
++        let none: Option<&AnyObject> = None;
++        let sheet: Retained<AnyObject> = msg_send![allocated, initWithActivityItems: &*items, applicationActivities: none];
++        // An iPad shows it as a popover, which needs somewhere to point: the middle of the presenter.
++        let popover: Option<Retained<AnyObject>> = msg_send![&*sheet, popoverPresentationController];
++        if let Some(popover) = popover {
++            let view: Option<Retained<AnyObject>> = msg_send![presenter, view];
++            if let Some(view) = view {
++                let bounds: CGRect = msg_send![&*view, bounds];
++                let middle = CGRect::new(CGPoint::new(bounds.size.width / 2., bounds.size.height / 2.), CGSize::new(1., 1.));
++                let _: () = msg_send![&*popover, setSourceView: &*view];
++                let _: () = msg_send![&*popover, setSourceRect: middle];
++            }
++        }
++        let completion: Option<&block2::Block<dyn Fn()>> = None;
++        let _: () = msg_send![presenter, presentViewController: &*sheet, animated: true, completion: completion];
++    }
++}
++
++thread_local! { static SHAKE: RefCell<Option<Box<dyn FnMut()>>> = const { RefCell::new(None) }; }
++
++/// Calls `callback` when the device is shaken (iOS's gesture for undo) while
++/// the window's view or its text input is first responder.
++pub fn on_shake(callback: impl FnMut() + 'static) {
++    SHAKE.with_borrow_mut(|slot| *slot = Some(Box::new(callback)));
++}
++
++/// `motionEnded:withEvent:` on the Metal view, for `UIEventSubtypeMotionShake`.
++pub(super) fn shaken() {
++    let callback = SHAKE.with_borrow_mut(Option::take);
++    if let Some(mut callback) = callback {
++        callback();
++        SHAKE.with_borrow_mut(|slot| {
++            if slot.is_none() {
++                *slot = Some(callback);
++            }
++        });
++    }
++}
+diff --git a/crates/gpui_ios/src/ios/window.rs b/crates/gpui_ios/src/ios/window.rs
+index 95ee4c92b4ac9e9ee108b735e7897211ae275c6d..f5339179b1715deb2099e3ea514779a79a06a9c6 100644
+--- a/crates/gpui_ios/src/ios/window.rs
++++ b/crates/gpui_ios/src/ios/window.rs
+@@ -152,6 +152,16 @@ define_class!(
+             CAMetalLayer::class()
+         }
+ 
++        // quiet.md: a shake reaches the first responder and goes up from there;
++        // the text input view is this view's child (system.rs).
++        #[unsafe(method(motionEnded:withEvent:))]
++        fn motion_ended(&self, motion: isize, _event: Option<&UIEvent>) {
++            // UIEventSubtypeMotionShake
++            if motion == 1 {
++                super::system::shaken();
++            }
++        }
++
+         // This callback also covers iOS 15/16, before UIKit's trait-registration API.
+         #[unsafe(method(traitCollectionDidChange:))]
+         fn trait_collection_did_change(&self, previous: Option<&UITraitCollection>) {

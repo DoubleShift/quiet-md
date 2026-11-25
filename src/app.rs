@@ -615,7 +615,10 @@ impl Workspace {
         #[cfg(target_os = "ios")]
         {
             let (tx, mut rx) = futures::channel::mpsc::unbounded::<()>();
+            let shake = tx.clone();
             gpui_ios::ios::on_status_bar_tap(move || { crate::phone::TO_TOP.store(true, std::sync::atomic::Ordering::Relaxed); tx.unbounded_send(()).ok(); });
+            // And a shake undoes, as it does in every iOS text view.
+            gpui_ios::ios::on_shake(move || { crate::phone::SHAKEN.store(true, std::sync::atomic::Ordering::Relaxed); shake.unbounded_send(()).ok(); });
             cx.spawn(async move |this, cx| {
                 use futures::StreamExt;
                 while rx.next().await.is_some() { if this.update(cx, |_, cx| cx.notify()).is_err() { break } }
@@ -1994,6 +1997,10 @@ impl Render for Workspace {
         self.sync_note_rows();
         self.phone_tick(window);
         if crate::phone::TO_TOP.swap(false, std::sync::atomic::Ordering::Relaxed) { self.scroll_to_top(window, cx); }
+        if crate::phone::SHAKEN.swap(false, std::sync::atomic::Ordering::Relaxed) && self.view == View::Doc {
+            crate::phone::haptic(crate::phone::Haptic::Light);
+            window.dispatch_action(Box::new(crate::editor::keymap::Undo), cx);
+        }
         // iOS: the status bar's text is light over the dark look, dark over the light one.
         #[cfg(target_os = "ios")]
         {
