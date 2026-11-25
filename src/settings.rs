@@ -235,6 +235,10 @@ pub fn load() {
         p.doc_family = look.doc_family.unwrap_or(d.doc_family);
         p.doc_size = look.doc_size.unwrap_or(d.doc_size);
     }
+    // Tests read the interface in English, whatever the machine's language or
+    // the preferences a `QUIET_MD_HOME` holds; one that needs another language says so.
+    #[cfg(test)]
+    p.set_lang(Lang::En);
     apply(p);
 }
 
@@ -2724,7 +2728,7 @@ mod tests {
         let dl: Vec<_> = ["lxgw-wenkai", "zhuque-fangsong"].iter().filter_map(|id| crate::font_downloads::entry(id)).collect();
         let zh = arrange("", false, &all, &dl, &[], &[], Lang::Zh);
         assert_eq!(zh[0], Choice::Reset);
-        // English labels under test (the language store isn't set)
+        // English labels: tests read the interface in English (`load`)
         assert_eq!(headers(&zh), ["Chinese sans", "Chinese serif", "Kai & handwriting", "Monospace", "Sans serif", "Serif"]);
         assert_eq!(fonts(&zh), ["PingFang SC", "Songti SC", "\u{1}zhuque-fangsong", "Kaiti SC", "\u{1}lxgw-wenkai", "Menlo", "Helvetica", "Georgia"]);
         assert!(matches!(zh.last(), Some(Choice::Others(1, false))), "Webdings folded");
