@@ -2279,7 +2279,7 @@ impl Render for Workspace {
             .children(sidebar.map(|s| if inset_top + inset_bottom > 0. { div().flex_none().h_full().pt(px(inset_top)).pb(px(if keyboard > 0. { 0. } else { inset_bottom })).child(s).into_any_element() } else { s }))
             .child(note)
             .children(resize)
-            .children(crate::ui::window_controls(window, crate::on_top::title_button(self.on_top, cx)))
+            .children(crate::ui::window_controls(window))
             .children(row_menu)
             .children(doc_menu)
             .children(mode_menu)
