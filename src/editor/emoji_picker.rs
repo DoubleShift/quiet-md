@@ -423,12 +423,13 @@ impl Editor {
         let vp = window.viewport_size();
         let insets = window.insets();
         let (bottom, ime) = (f32::from(insets.safe_area.bottom), f32::from(insets.ime.bottom));
-        let (vw, vh) = (f32::from(vp.width), f32::from(vp.height) - ime);
+        // The whole window: the sheet reaches behind the keyboard, whose round corners show it.
+        let (vw, vh) = (f32::from(vp.width), f32::from(vp.height));
         deferred(anchored().position(point(px(0.), px(0.))).child(
             div().id("emoji-sheet").relative().w(px(vw)).h(px(vh))
                 .child(div().id("emoji-scrim").absolute().inset_0().bg(color::overlay()).occlude()
                     .on_mouse_down(MouseButton::Left, cx.listener(|ed, _, window, cx| { cx.stop_propagation(); ed.close_menu_focus(window, cx); })))
-                .child(div().absolute().left_0().right_0().bottom_0().pb(px(if ime > 0. { 0. } else { bottom })).bg(color::popover())
+                .child(div().absolute().left_0().right_0().bottom_0().pb(px(if ime > 0. { ime } else { bottom })).bg(color::popover())
                     .rounded_t(px(crate::design::R + 6.)).shadow(crate::theme::shadow_panel()).occlude()
                     .child(picker.w_full().rounded_none().rounded_t(px(crate::design::R + 6.)).shadow_none())),
         )).with_priority(3).into_any_element()

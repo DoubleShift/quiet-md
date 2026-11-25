@@ -2031,7 +2031,8 @@ impl Render for Workspace {
         // The drawer opening (it remembers nothing yet): the note's keyboard and edit menu step aside.
         if drawer && self.sidebar_open && self.drawer_from.is_none() && let Some(e) = self.editor.clone() { e.update(cx, |e, cx| e.step_aside(window, cx)); }
         if !crate::sidebar::drawer_stays(&mut self.drawer_from, drawer && self.sidebar_open, &(self.view, self.current.clone())) && drawer { self.sidebar_open = false; }
-        let sidebar = if self.sidebar_open { Some(if matches!(self.view, View::Settings | View::Trash) { self.render_settings_sidebar(window, cx) } else { self.render_sidebar(window, cx) }) } else { None };
+        // A phone's drawer is always the documents': 设置 lists its sections on its own page.
+        let sidebar = if self.sidebar_open { Some(if matches!(self.view, View::Settings | View::Trash) && !drawer { self.render_settings_sidebar(window, cx) } else { self.render_sidebar(window, cx) }) } else { None };
         let sidebar = sidebar.map(|s| if inset_top + inset_bottom > 0. { div().flex_none().h_full().pt(px(inset_top)).pb(px(if keyboard > 0. { 0. } else { inset_bottom })).child(s).into_any_element() } else { s });
         // A phone: over the note instead of beside it.
         let (sidebar, drawer_el) = if drawer { (None, sidebar.map(|s| self.render_drawer(s, window, cx))) } else { (sidebar, None) };
@@ -2103,6 +2104,15 @@ impl Render for Workspace {
         // A phone's keyboard has no key to put it away: as in iOS's own apps,
         // dragging the page down does (before anything under the finger
         // scrolls, so every page and list behaves alike).
+        // A keyboard left up with nothing to type into (the note's caret went
+        // with its page, as on 设置): put away.
+        #[cfg(target_os = "ios")]
+        if keyboard > 0. {
+            let stale = self.view != View::Doc && self.editor.as_ref().is_some_and(|e| e.read(cx).focus.is_focused(window));
+            if stale || window.focused(cx).is_none() {
+                cx.defer_in(window, move |_, window, cx| { if stale { window.blur(cx); } window.dismiss_virtual_keyboard(); });
+            }
+        }
         let note_editor = self.editor.clone();
         let swipe_down = (cfg!(target_os = "ios") && keyboard > 0.).then(|| canvas(|_, _, _| {}, move |_, _, window, _| {
             window.on_mouse_event(move |ev: &ScrollEvent, phase, window, cx| {

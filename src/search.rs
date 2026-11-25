@@ -705,7 +705,8 @@ impl Workspace {
                     .child(div().text_size(px(13.)).line_height(px(18.)).text_color(Theme::text_caption()).overflow_hidden().whitespace_nowrap().text_ellipsis()
                         .child(ui_text(line)))));
         }
-        let page = div().id("search-page").w(px(vw)).h(px(vh - keyboard)).pt(px(top)).flex().flex_col().bg(Theme::bg_body())
+        // To the window's bottom edge, behind the keyboard too (its round corners show the page).
+        let page = div().id("search-page").w(px(vw)).h(px(vh)).pt(px(top)).pb(px(keyboard)).flex().flex_col().bg(Theme::bg_body())
             .font_family(theme::ui_family())
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(div().flex_none().px(px(16.)).py(px(8.)).flex().items_center().child(field).child(cancel))
