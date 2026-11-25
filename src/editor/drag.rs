@@ -267,6 +267,8 @@ impl Editor {
         }
         let drop = self.find_drop(d.at, &d.ids);
         if let Some(d) = &mut self.block_drag {
+            // Touch: a tick as the line snaps to another place.
+            if drop.as_ref().map(|n| (n.target, n.place)) != d.drop.as_ref().map(|o| (o.target, o.place)) && drop.is_some() { crate::phone::haptic(crate::phone::Haptic::Selection); }
             d.drop = drop;
         }
     }

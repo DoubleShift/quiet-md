@@ -147,6 +147,14 @@ struct Lightbox {
     moved: bool,
     /// The decoded, rotated (and cropped) pixels for (rot, image).
     rotated: Option<(u8, BlockId, Option<Arc<RenderImage>>)>,
+    /// Touch: the scale that fits the screen (a pinch does not go below it).
+    fit: f32,
+    /// Touch: how far a finger has dragged a picture that fits the screen, sideways
+    /// (to the next one) or down (to put the viewer away), and which of the two.
+    pull: (f32, f32),
+    pull_side: bool,
+    /// The note had the keyboard's focus when the viewer opened, and takes it back.
+    refocus: bool,
 }
 
 pub struct ImageUi {
@@ -893,8 +901,9 @@ impl R<'_> {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |e, ev: &MouseDownEvent, window, cx| {
-                    // A click on the selected image opens the viewer.
-                    if ev.click_count == 1 && !ev.modifiers.shift && e.img.crop.is_none() && e.image_active(id, e.focus.is_focused(window)) {
+                    // A click on the selected image opens the viewer. Touch: the first tap does, as
+                    // in Photos (a long press selects the image, for its toolbar).
+                    if ev.click_count == 1 && !ev.modifiers.shift && e.img.crop.is_none() && (crate::design::touch() || e.image_active(id, e.focus.is_focused(window))) {
                         cx.stop_propagation();
                         window.prevent_default();
                         e.open_lightbox(id, window, cx);
@@ -1553,6 +1562,11 @@ impl Editor {
             press: None,
             moved: false,
             rotated: None,
+            fit: 0.,
+            pull: (0., 0.),
+            pull_side: false,
+            // Touch: a picture tapped while reading leaves the keyboard down afterwards.
+            refocus: !crate::design::touch() || self.focus.is_focused(window),
         });
         window.focus(&self.img.lb_focus, cx);
         cx.notify();
@@ -1562,7 +1576,7 @@ impl Editor {
         let Some(lb) = &mut self.img.lightbox else { return };
         if lb.closing.is_none() {
             lb.closing = Some(Instant::now());
-            window.focus(&self.focus, cx);
+            if lb.refocus { window.focus(&self.focus, cx); } else { window.blur(cx); }
             cx.notify();
         }
     }
@@ -1629,6 +1643,47 @@ impl Editor {
         lb.orig = false;
         self.lb_clamp();
         cx.notify();
+    }
+
+    /// Touch: a finger panning in the viewer. Zoomed in, it moves the picture; a picture
+    /// that fits follows the finger sideways to the next one, or down to close.
+    fn lb_touch_pan(&mut self, ev: &ScrollEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let d = ev.delta.pixel_delta(px(20.));
+        let (dx, dy) = (f32::from(d.x), f32::from(d.y));
+        let zoomed = self.lb_size().zip(self.img.lightbox.as_ref()).is_some_and(|((w, h), lb)| w * lb.scale > lb.vp.0 + 0.5 || h * lb.scale > lb.vp.1 + 0.5);
+        let Some(lb) = &mut self.img.lightbox else { return };
+        if lb.closing.is_some() { return }
+        if zoomed && lb.pull == (0., 0.) {
+            lb.tx += dx;
+            lb.ty += dy;
+            self.lb_clamp();
+            return cx.notify();
+        }
+        if ev.touch_phase == TouchPhase::Started { lb.pull = (0., 0.); lb.pull_side = dx.abs() > dy.abs(); }
+        if lb.pull_side { lb.pull.0 += dx } else { lb.pull.1 += dy }
+        if matches!(ev.touch_phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+            let (x, y) = lb.pull;
+            let side = lb.pull_side;
+            lb.pull = (0., 0.);
+            if !side && y > 90. {
+                // It fades out from where the finger left it.
+                lb.pull = (0., y);
+                crate::phone::haptic(crate::phone::Haptic::Light);
+                self.close_lightbox(window, cx);
+            } else if side && x.abs() > 70. {
+                self.lb_go(if x < 0. { 1 } else { -1 }, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Touch: a pinch zooms, down to the size that fits and no further once let go.
+    fn lb_pinch(&mut self, ev: &PinchEvent, cx: &mut Context<Self>) {
+        self.lb_zoom(1. + ev.delta, cx);
+        if matches!(ev.phase, TouchPhase::Ended | TouchPhase::Cancelled) && let Some(lb) = &mut self.img.lightbox && lb.fit > 0. && lb.scale < lb.fit {
+            (lb.scale, lb.tx, lb.ty) = (lb.fit, 0., 0.);
+            cx.notify();
+        }
     }
 
     fn lb_go(&mut self, d: isize, cx: &mut Context<Self>) {
@@ -1797,6 +1852,7 @@ impl Editor {
         }
         if self.img.lightbox.as_ref().is_some_and(|l| l.need_fit) {
             self.lb_fit();
+            if let Some(lb) = &mut self.img.lightbox { lb.fit = lb.scale; }
         }
         self.lb_ensure_rotated(window, cx);
         if animating {
@@ -1819,7 +1875,11 @@ impl Editor {
         // Idle with the controls faded out: no pointer until the mouse moves.
         if !lb.chrome && k >= 1. { cx.hide_cursor_until_mouse_moves(); }
         let (sw, sh) = (w * lb.scale, h * lb.scale);
-        let (left, top) = (vw / 2. + lb.tx - sw / 2., vh / 2. + lb.ty - sh / 2.);
+        // Touch: a black room, as Photos shows a picture; it clears as the picture is pulled down.
+        let touch = crate::design::touch();
+        let (left, top) = (vw / 2. + lb.tx - sw / 2. + lb.pull.0, vh / 2. + lb.ty - sh / 2. + lb.pull.1);
+        let backdrop = if touch { 1. - (lb.pull.1.abs() / 300.).min(0.7) } else { 0.8 };
+        let chrome = if touch { 1. } else { chrome };
         let can_drag = sw > vw + 0.5 || sh > vh + 0.5;
         let pic = if lb.rot == 0 {
             let (frw, frh) = (crop[2] - crop[0], crop[3] - crop[1]);
@@ -1863,9 +1923,9 @@ impl Editor {
         let close = div()
             .id("lb-close")
             .absolute()
-            .top(px(20.))
-            .right(px(20.))
-            .size(px(40.))
+            .top(px(if touch { f32::from(window.insets().safe_area.top) + 8. } else { 20. }))
+            .right(px(if touch { 16. } else { 20. }))
+            .size(px(if touch { 44. } else { 40. }))
             .rounded_full()
             .bg(theme::ca(craft::N950, 0.6))
             .hover(|s| s.bg(theme::ca(craft::N800, 0.75)))
@@ -1943,7 +2003,8 @@ impl Editor {
             .child(sep())
             .child(tool("lb-rotate", "rotate-ccw-square", crate::settings::text("旋转"), true, |e, _, cx| e.lb_rotate(cx)))
             .child(tool("lb-download", "download", crate::settings::text("下载"), true, |e, _, cx| e.lb_download(cx)));
-        let pill = div().absolute().bottom(px(20.)).left_0().w(px(vw)).flex().justify_center().opacity(chrome).child(pill);
+        // Touch: fingers zoom; the pill keeps to pointers.
+        let pill = div().absolute().bottom(px(20.)).left_0().w(px(vw)).flex().justify_center().opacity(if touch { 0. } else { chrome }).when(!touch, |d| d.child(pill));
 
         let layer = div()
             .id("lightbox")
@@ -1953,8 +2014,9 @@ impl Editor {
             .relative()
             .w(px(vw))
             .h(px(vh))
-            .bg(theme::rgbaf(0, 0, 0, 0.8))
+            .bg(theme::rgbaf(0, 0, 0, backdrop))
             .opacity(fade)
+            .on_pinch(cx.listener(|e, ev: &PinchEvent, _, cx| e.lb_pinch(ev, cx)))
             .on_action(cx.listener(|e, _: &LbClose, window, cx| e.close_lightbox(window, cx)))
             .on_action(cx.listener(|e, _: &LbPrev, _, cx| e.lb_go(-1, cx)))
             .on_action(cx.listener(|e, _: &LbNext, _, cx| e.lb_go(1, cx)))
@@ -1972,6 +2034,8 @@ impl Editor {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|e, ev: &MouseDownEvent, _, cx| {
+                    // Touch: a double tap zooms in and back; a single one leaves the picture be.
+                    if crate::design::touch() { if ev.click_count == 2 { e.lb_toggle(cx); } return }
                     if let Some(lb) = &mut e.img.lightbox {
                         lb.press = Some((ev.position, lb.tx, lb.ty));
                         lb.moved = false;
@@ -2010,7 +2074,8 @@ impl Editor {
                     cx.notify();
                 }),
             )
-            .on_scroll(cx.listener(|e, ev: &ScrollEvent, _, cx| {
+            .on_scroll(cx.listener(|e, ev: &ScrollEvent, window, cx| {
+                if ev.source == ScrollSource::Touch && crate::design::touch() { return e.lb_touch_pan(ev, window, cx) }
                 let (dx, dy, lines) = match ev.delta {
                     ScrollDelta::Pixels(p) => (f32::from(p.x), f32::from(p.y), false),
                     ScrollDelta::Lines(l) => (l.x, l.y, true),

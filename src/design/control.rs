@@ -53,7 +53,9 @@ impl RenderOnce for Switch {
         let thumb = if !dark { color::popover() } else if on { color::primary_foreground() } else { color::foreground() };
         let mut d = self.base;
         let caller = std::mem::take(d.style());
-        let mut d = d.flex_none().w(px(g.switch_w)).h(px(g.switch_h)).px(px(1.)).rounded_full().flex().items_center()
+        // Touch: the Taptic Engine ticks as it is thrown.
+        let off = self.disabled;
+        let mut d = d.on_mouse_down(MouseButton::Left, move |_, _, _| if !off { crate::phone::haptic(crate::phone::Haptic::Selection) }).flex_none().w(px(g.switch_w)).h(px(g.switch_h)).px(px(1.)).rounded_full().flex().items_center()
             .bg(if on { color::primary() } else { color::switch_off() }).shadow(shadow::xs()).when(on, |d| d.justify_end()).when(self.disabled, |d| d.opacity(0.5))
             .child(div().size(px(g.thumb)).rounded_full().bg(thumb));
         d.style().refine(&caller);

@@ -407,9 +407,9 @@ impl Workspace {
         ];
         let switches = (!board_file).then(|| vec![
             row("ds-read", "eye-open", t("阅读模式").into(), false).child(crate::design::Switch::new(reading))
-                .on_click(cx.listener(move |w, _, window, cx| { w.close_doc_menu(cx); w.set_mode(!reading, window, cx); })).into_any_element(),
+                .on_click(cx.listener(move |w, _, window, cx| { crate::phone::haptic(crate::phone::Haptic::Selection); w.close_doc_menu(cx); w.set_mode(!reading, window, cx); })).into_any_element(),
             row("ds-refs", "list", t("显示引用列表").into(), false).child(crate::design::Switch::new(refs_shown))
-                .on_click(cx.listener(move |w, _, _, cx| { w.close_doc_menu(cx); w.ask_refs(!refs_shown, cx); })).into_any_element(),
+                .on_click(cx.listener(move |w, _, _, cx| { crate::phone::haptic(crate::phone::Haptic::Selection); w.close_doc_menu(cx); w.ask_refs(!refs_shown, cx); })).into_any_element(),
         ]);
         let delete = vec![row("ds-delete", "bin", t("删除").into(), true)
             .on_click(cx.listener(move |w, _, _, cx| { w.close_doc_menu(cx); w.ask_delete(&del_id, cx); })).into_any_element()];

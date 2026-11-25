@@ -728,6 +728,8 @@ fn run(cmd: &str, rest: &str, window: &mut Window, cx: &mut App) {
                 Err(e) => eprintln!("devtools: capture failed: {e}"),
             }
         }
+        // iOS: what a tap on the status bar does (the simulator cannot be tapped there from a script).
+        "statustap" => { crate::phone::TO_TOP.store(true, std::sync::atomic::Ordering::Relaxed); window.refresh(); }
         "shot" => {
             let name = rest.trim().to_string();
             let dir = std::env::var("FDL_SHOTS").unwrap_or_else(|_| "/tmp".into());

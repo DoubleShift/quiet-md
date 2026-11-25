@@ -139,7 +139,8 @@ impl Workspace {
     /// swipe that went back goes back once the page is off the screen.
     pub(crate) fn swipe_progress(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<f32> {
         if let Some((t0, from, commit)) = self.phone_nav.settle {
-            let t = (t0.elapsed().as_secs_f32() / SETTLE.as_secs_f32()).min(1.);
+            // Reduce Motion: no slide.
+            let t = if crate::phone::system().reduce_motion { 1. } else { (t0.elapsed().as_secs_f32() / SETTLE.as_secs_f32()).min(1.) };
             let to = if commit { 1. } else { 0. };
             if t >= 1. {
                 self.phone_nav.settle = None;

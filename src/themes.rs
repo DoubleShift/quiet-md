@@ -357,7 +357,8 @@ pub fn set_doc_size(pref: &str) {
 pub fn doc_len(n: f32) -> f32 { doc_len_in(active(), n) }
 
 /// `doc_len` for a theme that need not be the active one (外观's sample).
-pub fn doc_len_in(st: &Style, n: f32) -> f32 { scale_len(n, st.num("page.size"), DOC_STEP.load(Ordering::Relaxed)) }
+// iOS: the reader's Dynamic Type size on top of it.
+pub fn doc_len_in(st: &Style, n: f32) -> f32 { crate::phone::text(scale_len(n, st.num("page.size"), DOC_STEP.load(Ordering::Relaxed))) }
 
 /// Whole pixels keep baselines crisp; step 0 returns `n` untouched.
 fn scale_len(n: f32, body: f32, step: i32) -> f32 {

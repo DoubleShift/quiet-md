@@ -33,8 +33,6 @@ const ACTION_W: f32 = 74.;
 const DRAWER_ACTION_W: f32 = 52.;
 /// A row pulled past this share of its width deletes when let go.
 const FULL: f32 = 0.6;
-/// The row's text starts here: 16 + the 24pt icon + 12.
-const TEXT_X: f32 = 52.;
 /// A settling swipe, the search field snapping, a menu fading in.
 const SETTLE: Duration = Duration::from_millis(220);
 const FAB: f32 = 56.;
@@ -84,6 +82,8 @@ fn ease(t: f32) -> f32 { 1. - (1. - t).powi(3) }
 
 /// `(value now, still moving)` of a `(since, from, to)` animation.
 fn settle((t0, from, to): (Instant, f32, f32)) -> (f32, bool) {
+    // Reduce Motion: there at once.
+    if system().reduce_motion { return (to, false) }
     let t = (t0.elapsed().as_secs_f32() / SETTLE.as_secs_f32()).min(1.);
     (from + (to - from) * ease(t), t < 1.)
 }
@@ -174,7 +174,7 @@ impl Workspace {
         match a {
             Action::Pin => self.toggle_pin(&doc, cx),
             Action::Star => self.toggle_star(&doc, cx),
-            Action::Delete => { haptic(Haptic::Warning); self.ask_delete(id, cx) }
+            Action::Delete => self.ask_delete(id, cx),
         }
     }
 
@@ -313,8 +313,8 @@ impl Workspace {
             .child(crate::home::entry_icon(e))
             .child(div().flex_1().min_w_0().h_full().pr(px(12.)).flex().items_center().when(!last, |d| d.border_b_1().border_color(list_line()))
                 .child(div().flex_1().min_w_0()
-                    .child(div().text_size(px(17.)).line_height(px(22.)).text_color(Theme::text()).truncate().child(ui_text(display_title(&e.title))))
-                    .child(div().text_size(px(13.)).line_height(px(18.)).text_color(Theme::text_caption()).truncate().child(sub)))
+                    .child(div().text_size(px(text(17.))).line_height(px(text(22.))).text_color(Theme::text()).truncate().child(ui_text(display_title(&e.title))))
+                    .child(div().text_size(px(text(13.))).line_height(px(text(18.))).text_color(Theme::text_caption()).truncate().child(sub)))
                 .when(e.meta.pinned, |d| d.child(icon("pin-filled", 14., Theme::pinned()).ml(px(8.)).flex_none()))
                 .when(e.meta.starred > 0 && !folder, |d| d.child(icon("star", 14., Theme::text_caption()).ml(px(8.)).flex_none()))
                 .when(folder, |d| d.child(icon("chevron-right", 16., color::muted_foreground()).ml(px(6.)).flex_none())))
@@ -369,7 +369,7 @@ impl Workspace {
         let snap_scroll = scroll.clone();
         let mut column = div().id(if folder { "phone-folder-rows" } else { "phone-home-rows" }).relative().flex_1().min_h_0().overflow_y_scroll().track_scroll(&scroll)
             // The bar's title and the field's snap follow the column.
-            .on_scroll_wheel(cx.listener(move |w, ev: &ScrollEvent, _, cx| {
+            .on_scroll(cx.listener(move |w, ev: &ScrollEvent, _, cx| {
                 if ev.source == ScrollSource::Touch && matches!(ev.touch_phase, TouchPhase::Ended | TouchPhase::Cancelled) {
                     // Left half-open, the search field settles open or shut.
                     let y = -f32::from(snap_scroll.offset().y);
@@ -439,7 +439,7 @@ impl Workspace {
             });
         }).absolute().size_0() });
         let Some(e) = self.entries.iter().find(|e| e.id == held.id).cloned() else { self.phone.held = None; return None };
-        let t = (held.since.elapsed().as_secs_f32() / SETTLE.as_secs_f32()).min(1.);
+        let t = if system().reduce_motion { 1. } else { (held.since.elapsed().as_secs_f32() / SETTLE.as_secs_f32()).min(1.) };
         if t < 1. { window.request_animation_frame(); }
         let a = ease(t);
         let vp = window.viewport_size();
@@ -478,8 +478,8 @@ impl Workspace {
             div().id("phone-held-preview").w(px(vw - 32.)).h(px(ROW_H + 12.)).px(px(16.)).flex().items_center().rounded(px(14.)).bg(Theme::bg_body()).shadow(theme::shadow_panel())
                 .child(crate::home::entry_icon(&e))
                 .child(div().flex_1().min_w_0()
-                    .child(div().text_size(px(17.)).line_height(px(22.)).text_color(Theme::text()).truncate().child(ui_text(display_title(&e.title))))
-                    .child(div().text_size(px(13.)).line_height(px(18.)).text_color(Theme::text_caption()).child(crate::localized_count!(n, "{} 项", "{} item", "{} items", n))))
+                    .child(div().text_size(px(text(17.))).line_height(px(text(22.))).text_color(Theme::text()).truncate().child(ui_text(display_title(&e.title))))
+                    .child(div().text_size(px(text(13.))).line_height(px(text(18.))).text_color(Theme::text_caption()).child(crate::localized_count!(n, "{} 项", "{} item", "{} items", n))))
         } else {
             let w = (vw - 96.).min(300.);
             let h = (w * 1.2).min(room).max(120.);
@@ -494,9 +494,6 @@ impl Workspace {
                 .children(follow).child(preview).child(menu))).with_priority(2).into_any_element())
     }
 
-    /// Whether a phone page has anything of its own on top (the lifted row).
-    pub(crate) fn phone_dismiss(&mut self) { self.phone.held = None; self.phone.swipe = None; }
-
     pub(crate) fn phone_lists(&self, window: &Window) -> bool {
         self.phone(window) && self.batch.is_none() && !self.home.phone_grid
     }
@@ -504,9 +501,72 @@ impl Workspace {
 
 /// The Taptic Engine's vocabulary (`UIFeedbackGenerator`).
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum Haptic { Light, Medium, Selection, Warning }
+pub enum Haptic {
+    /// Something landed or crossed a line: a snap, a threshold, a button.
+    Light,
+    /// Something was picked up: a long press.
+    Medium,
+    /// A value ticked over: a switch, a detent.
+    Selection,
+    /// About to destroy something.
+    Warning,
+}
 
 /// A tap of the Taptic Engine; nothing off iOS.
 pub fn haptic(kind: Haptic) {
+    #[cfg(target_os = "ios")]
+    gpui_ios::ios::haptic(match kind {
+        Haptic::Light => gpui_ios::ios::Haptic::Light,
+        Haptic::Medium => gpui_ios::ios::Haptic::Medium,
+        Haptic::Selection => gpui_ios::ios::Haptic::Selection,
+        Haptic::Warning => gpui_ios::ios::Haptic::Warning,
+    });
+    #[cfg(not(target_os = "ios"))]
     let _ = kind;
+}
+
+/// The system settings an iOS app follows: Dynamic Type, Bold Text, Reduce
+/// Motion. Read from UIKit at most once a second (they change while the app
+/// is in the background); everywhere else they are at their defaults.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct System { pub text_scale: f32, pub bold: bool, pub reduce_motion: bool }
+
+pub fn system() -> System {
+    #[cfg(target_os = "ios")]
+    {
+        thread_local! { static SEEN: std::cell::Cell<Option<(Instant, System)>> = const { std::cell::Cell::new(None) }; }
+        if let Some((at, s)) = SEEN.get() && at.elapsed() < Duration::from_secs(1) { return s }
+        // Dynamic Type's accessibility sizes go past 3x; a page of text stays usable up to 2x.
+        let s = System { text_scale: gpui_ios::ios::text_scale().clamp(0.8, 2.), bold: gpui_ios::ios::bold_text_enabled(), reduce_motion: gpui_ios::ios::reduce_motion_enabled() };
+        if SEEN.replace(Some((Instant::now(), s))).is_some_and(|(_, was)| was != s) { crate::themes::touch(); }
+        s
+    }
+    #[cfg(not(target_os = "ios"))]
+    System { text_scale: 1., bold: false, reduce_motion: false }
+}
+
+/// A text size at the reader's Dynamic Type size (whole points).
+pub fn text(size: f32) -> f32 {
+    let k = system().text_scale;
+    if k == 1. { size } else { (size * k).round() }
+}
+
+/// Set by a tap on the status bar (and by devtools' `statustap`): the page shown scrolls to its top.
+pub static TO_TOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+impl Workspace {
+    /// A tap on the status bar: the list or the document goes back to its top.
+    pub(crate) fn scroll_to_top(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.view {
+            crate::app::View::Doc => if let Some(e) = self.editor.clone() { e.update(cx, |e, cx| { e.list.scroll_to(ListOffset { item_ix: 0, offset_in_item: px(0.) }); cx.notify(); }) },
+            crate::app::View::Home | crate::app::View::Folder if self.phone_lists(window) => {
+                let scroll = self.phone_scroll_handle(self.view == crate::app::View::Folder);
+                let y = -f32::from(scroll.offset().y);
+                // To the large title; from there, on to the search field.
+                self.phone.snap = Some((Instant::now(), y, if y > SEARCH_H { SEARCH_H } else { 0. }));
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
 }

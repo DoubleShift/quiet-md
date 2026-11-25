@@ -851,7 +851,8 @@ pub fn build_runs(
                 font.style = FontStyle::Italic;
             }
             if m.code && !spec.mono {
-                font.weight = if m.bold { bold_weight() } else { FontWeight::NORMAL };
+                // iOS's Bold Text: the body a step heavier.
+                font.weight = if m.bold { bold_weight() } else if crate::phone::system().bold { FontWeight::MEDIUM } else { FontWeight::NORMAL };
             }
             let background_color = m.bg_color.as_ref().and_then(|c| theme::bg_color(&c.0)).map(|c| if spec.dim_marks { c.opacity(0.7) } else { c });
             let fonts = match &spec.font_runs { Some(f) => f(&text.text[a..b]), None => vec![(b - a, font)] };

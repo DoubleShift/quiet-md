@@ -472,7 +472,7 @@ impl Theme {
 /// Module level on purpose — callers reach it as `theme::ui_font()`.
 pub fn ui_font() -> f32 {
     // Touch: the HIG's 17pt body, whatever the desktop size is set to.
-    if crate::design::touch() { return 17. }
+    if crate::design::touch() { return crate::phone::text(17.) }
     match crate::settings::prefs().ui_font.as_str() { "small" => 12., "large" => 15., _ => 13. }
 }
 

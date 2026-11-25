@@ -85,6 +85,7 @@ wasm-bindgen-futures = "0.4"
 # The status bar's colour follows the look (`gpui_ios::ios::set_status_bar_style`).
 [target.'cfg(target_os = "ios")'.dependencies]
 gpui_ios = { path = "vendor/zed/crates/gpui_ios" }
+futures = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24"

@@ -417,6 +417,8 @@ impl IosWindow {
         text_input_view.setAlpha(0.01);
         text_input_view.setUserInteractionEnabled(true);
         view.addSubview(&text_input_view);
+        // quiet.md: a status-bar tap reaches the app through a scroll view (system.rs).
+        super::system::install_scroll_to_top(&view);
 
         let state = IosWindowState {
             platform: Rc::downgrade(platform),

@@ -2638,7 +2638,17 @@ impl Editor {
             TouchPhase::Started => {
                 let Some((pos, _)) = self.pos_at(ev.position) else { return };
                 let text = self.core.text_of(pos.block).map(|t| t.text.clone()).unwrap_or_default();
-                // An image, a divider ...: nothing to select or put a caret in.
+                // An image: selected, for its toolbar (a tap opens it in the viewer).
+                if crate::design::touch() && !self.read_only && matches!(self.core.kind_of(pos.block), Some(BlockKind::Image { .. })) {
+                    crate::phone::haptic(crate::phone::Haptic::Medium);
+                    window.focus(&self.focus, cx);
+                    self.core.clear_block_sel();
+                    self.set_caret(Pos::new(pos.block, 0), false);
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    return cx.notify();
+                }
+                // A divider ...: nothing to select or put a caret in.
                 if pos.block != TITLE && !self.core.block(pos.block).is_some_and(|b| b.kind.has_text()) { return; }
                 // On the caret, or on an empty line: the caret's menu (粘贴 / 选择 / 全选).
                 if text.is_empty() || self.core.sel == Selection::caret(pos) {
@@ -2660,6 +2670,7 @@ impl Editor {
                 self.core.sel.head = Pos::new(pos.block, r.end);
                 self.toolbar_hidden = false;
                 self.long_press = true;
+                crate::phone::haptic(crate::phone::Haptic::Medium);
                 window.prevent_default();
                 cx.stop_propagation();
                 self.restart_blink(window, cx);

@@ -271,6 +271,7 @@ impl Workspace {
         self.arm_folder_drag(id, at, cx);
         if self.folder_drag.active.is_none() { return false; }
         log::info!("touch: sidebar row {id} picked up at {at:?}");
+        crate::phone::haptic(crate::phone::Haptic::Medium);
         self.lift_folder_drag(window, cx);
         self.project_folder_drop();
         true
@@ -326,6 +327,7 @@ impl Workspace {
         if let Some((i, r)) = folder {
             if d.hover.as_ref().is_none_or(|(id, _)| *id != r.entry.id) {
                 d.hover = Some((r.entry.id.clone(), Instant::now()));
+                crate::phone::haptic(crate::phone::Haptic::Light);
                 d.initial_depth = r.depth + 1; d.start.x = d.at.x;
                 // The folder notices the row: a small bounce as its lid opens.
                 if let Some(f) = self.folder_drag.fx.get_mut(&r.entry.id) { f.pop.v += 3.2; }

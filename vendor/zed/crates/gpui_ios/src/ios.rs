@@ -4,6 +4,7 @@ mod application;
 mod display;
 mod events;
 mod platform;
+mod system;
 mod text_input;
 mod window;
 
@@ -49,6 +50,8 @@ impl<T> CallbackSlot<T> {
 
 pub(crate) use display::*;
 pub use platform::*;
+// quiet.md: haptics, the status-bar tap, the accessibility settings (system.rs).
+pub use system::{Haptic, bold_text_enabled, haptic, on_status_bar_tap, reduce_motion_enabled, text_scale};
 pub use window::set_status_bar_style;
 pub(crate) use window::*;
 

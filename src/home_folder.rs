@@ -444,6 +444,7 @@ impl Workspace {
         d.started = true;
         d.touch = true;
         log::info!("touch: home card {id} picked up at {at:?}");
+        crate::phone::haptic(crate::phone::Haptic::Medium);
         self.row_menu = None;
         cx.notify();
         true
@@ -497,6 +498,8 @@ impl Workspace {
         if over != d.over {
             // The folder notices: a small dip as its mouth opens.
             if let Some(f) = over.as_ref().and_then(|k| self.home.folders.fx.get_mut(k)) { f.dip.v -= 1.6; }
+            // Touch: a tick as the card snaps to a folder.
+            if over.is_some() { crate::phone::haptic(crate::phone::Haptic::Light); }
             d.over = over;
         }
         cx.notify();

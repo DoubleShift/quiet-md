@@ -611,6 +611,16 @@ impl Workspace {
             this.update(cx, |w, cx| { w.cancel_shortcut_recording(cx); w.flush_view_state(); w.save_before(cx, |_, window, _| window.remove_window()) }).unwrap_or(true)
         });
         if !quick { crate::settings::watch_themes(cx); }
+        // iOS: a tap on the status bar takes the page shown back to its top.
+        #[cfg(target_os = "ios")]
+        {
+            let (tx, mut rx) = futures::channel::mpsc::unbounded::<()>();
+            gpui_ios::ios::on_status_bar_tap(move || { crate::phone::TO_TOP.store(true, std::sync::atomic::Ordering::Relaxed); tx.unbounded_send(()).ok(); });
+            cx.spawn(async move |this, cx| {
+                use futures::StreamExt;
+                while rx.next().await.is_some() { if this.update(cx, |_, cx| cx.notify()).is_err() { break } }
+            }).detach();
+        }
         // A file written into the library from outside (a model writing a
         // note, say) joins it without going away and back: the library's
         // shape is compared every couple of seconds and the list re-read only
@@ -1009,6 +1019,7 @@ impl Workspace {
 
     /// Ask before 删除: a confirmation, then the 回收站.
     pub fn ask_delete(&mut self, id: &str, cx: &mut Context<Self>) {
+        crate::phone::haptic(crate::phone::Haptic::Warning);
         self.row_menu = None;
         self.doc_menu = false;
         self.doc_sub = None;
@@ -1982,6 +1993,7 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_note_rows();
         self.phone_tick(window);
+        if crate::phone::TO_TOP.swap(false, std::sync::atomic::Ordering::Relaxed) { self.scroll_to_top(window, cx); }
         // iOS: the status bar's text is light over the dark look, dark over the light one.
         #[cfg(target_os = "ios")]
         {
@@ -2151,6 +2163,8 @@ impl Render for Workspace {
             .children(history);
         div()
             .id("workspace")
+            // iOS's Bold Text: text that names no weight of its own is a step heavier.
+            .when(crate::phone::system().bold, |d| d.font_weight(FontWeight::MEDIUM))
             .key_context("Workspace")
             .capture_action(cx.listener(|w, _: &crate::editor::keymap::Undo, window, cx| w.capture_file_history(false, window, cx)))
             .capture_action(cx.listener(|w, _: &crate::editor::keymap::Redo, window, cx| w.capture_file_history(true, window, cx)))
