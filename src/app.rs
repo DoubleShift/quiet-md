@@ -352,6 +352,12 @@ pub struct Workspace {
     pub settings_page: crate::settings::Page,
     /// The page 设置 was opened from, where 返回 goes back to.
     pub settings_from: View,
+    /// A phone's 设置 shows its list of sections (iOS's Settings) until one is picked.
+    pub settings_index: bool,
+    /// 回收站 was opened from a phone's 设置 list, so its 返回 goes back there.
+    pub trash_from_settings: bool,
+    /// Whether 设置 was last drawn at a phone's width (its 返回 goes to the list first).
+    pub settings_phone: std::cell::Cell<bool>,
     /// 版本历史: snapshots kept per document (1–30), cached for the settings page.
     pub history_limit: u32,
     /// 外观's theme dropdown while open: the theme its preview shows.
@@ -666,6 +672,9 @@ impl Workspace {
             shortcut_error: None,
             settings_page: Default::default(),
             settings_from: View::Home,
+            settings_index: true,
+            trash_from_settings: false,
+            settings_phone: std::cell::Cell::new(false),
             history_limit,
             theme_menu: None,
             theme_anchor: Default::default(),
@@ -1167,7 +1176,7 @@ impl Workspace {
         // 阅读位置: leaving the document with ⌘H or 回收站 also counts.
         if view != View::Doc { self.remember_scroll(cx) }
         // 设置's 返回 goes back here. 回收站 sits in 设置's sidebar: going there and back keeps it.
-        if matches!(view, View::Settings | View::Trash) && !matches!(self.view, View::Settings | View::Trash) { self.settings_from = self.view; }
+        if matches!(view, View::Settings | View::Trash) && !matches!(self.view, View::Settings | View::Trash) { self.settings_from = self.view; self.settings_index = true; self.trash_from_settings = false; }
         if view == View::Trash {
             self.trash = self.store.list_trash();
         }
@@ -2042,10 +2051,10 @@ impl Render for Workspace {
         let confirm = self.render_confirm(window, cx);
         let trash_menu = self.render_trash_menu(cx);
         let home_menus = self.render_home_menus(window, cx);
-        let theme_menu = self.render_theme_menu(cx);
-        let lang_menu = self.render_lang_menu(cx);
-        let pref_menu = self.render_pref_menu(cx);
-        let font_menu = self.render_font_menu(cx);
+        let theme_menu = self.render_theme_menu(window, cx);
+        let lang_menu = self.render_lang_menu(window, cx);
+        let pref_menu = self.render_pref_menu(window, cx);
+        let font_menu = self.render_font_menu(window, cx);
         let toast = self.render_toast(window);
         let forced_update = crate::update::prompt(window, cx);
         let mode_menu = self.render_mode_menu(cx);
@@ -2077,7 +2086,7 @@ impl Render for Workspace {
             View::Home => self.render_home(window, cx),
             View::Folder => self.render_folder(window, cx),
             View::Trash => self.render_trash(cx),
-            View::Settings => self.render_settings(cx),
+            View::Settings => self.render_settings(window, cx),
         };
         let move_dlg = self.render_move_dialog(cx);
         let export_md = self.render_export_md(cx);

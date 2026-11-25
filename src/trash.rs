@@ -43,8 +43,8 @@ pub(crate) fn page_header_with(ws: &Workspace, title: impl IntoElement, left: f3
         .pl(if ws.sidebar_open { px(left) } else { px(theme::TRAFFIC_LIGHTS_W) })
         .pr(px(crate::ui::header_right_inset()))
         .title_bar()
-        .when(!ws.sidebar_open && cfg!(target_os = "windows"), |d| d.child(div().mr(px(12.)).child(ws.header_navigation(cx))))
-        .when(!ws.sidebar_open && !cfg!(target_os = "windows"), |d| {
+        .when(!ws.sidebar_open && cfg!(any(target_os = "windows", target_os = "ios")), |d| d.child(div().mr(px(12.)).child(ws.header_navigation(cx))))
+        .when(!ws.sidebar_open && !cfg!(any(target_os = "windows", target_os = "ios")), |d| {
             d.child(
                 Button::ghost("open-sidebar")
                     .no_drag()

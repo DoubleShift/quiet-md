@@ -743,9 +743,10 @@ fn font_row(family: &str, dl: Option<&'static str>, flat: bool, g: SharedString,
     let (del, star) = (dl.map(str::to_string), family.to_string());
     let hover_key = key.clone();
     div().w_full().flex().flex_col().child(MenuItem::new(g.clone()).selected(focused)
-        .on_hover(cx.listener(move |w, hovered: &bool, _, cx| if *hovered { w.preview_font(hover_key.clone(), row, cx) }))
+        // Touch: a tap's pointer would preview the font under it; a tap picks.
+        .on_hover(cx.listener(move |w, hovered: &bool, _, cx| if *hovered && !crate::design::touch() { w.preview_font(hover_key.clone(), row, cx) }))
         .on_click(cx.listener(move |w, _, window, cx| w.pick_font(key.clone(), target, window, cx)))
-        .child(div().flex_none().w(px(150.)).overflow_hidden().whitespace_nowrap().text_ellipsis().child(ui::ui_text(label)))
+        .child(div().flex_none().w(px(if crate::design::touch() { 120. } else { 150. })).overflow_hidden().whitespace_nowrap().text_ellipsis().child(ui::ui_text(label)))
         .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_size(px(theme::ui_font())).child(sample))
         .children(tags.into_iter().map(tag))
         .child(status)
@@ -932,6 +933,53 @@ fn popup_button(id: impl Into<ElementId>, label: impl Into<SharedString>, open: 
     Field::select(id).sized(FieldSize::Sm).max_w(px(220.)).open(open).child(div().min_w_0().truncate().child(ui::ui_text(label.into())))
 }
 
+/// A phone's picker, as iOS presents one: a sheet up from the bottom edge
+/// over a scrim, its title centred and 完成 at the right; tapping the scrim
+/// or 完成 closes it. `tall` sheets reach near the top (a long, searched
+/// list), the rest are as tall as their rows.
+fn phone_sheet(id: &'static str, title: SharedString, tall: bool, body: AnyElement, close: impl Fn(&mut Workspace, &mut Window, &mut Context<Workspace>) + Clone + 'static, window: &Window, cx: &mut Context<Workspace>) -> AnyElement {
+    let vp = window.viewport_size();
+    let insets = window.insets();
+    let (top, bottom, ime) = (f32::from(insets.safe_area.top), f32::from(insets.safe_area.bottom), f32::from(insets.ime.bottom));
+    let (vw, vh) = (f32::from(vp.width), f32::from(vp.height));
+    let r = crate::design::R + 6.;
+    let done = close.clone();
+    let panel = div().id(SharedString::from(format!("{id}-sheet"))).absolute().left_0().right_0().bottom(px(ime))
+        .when(tall, |d| d.top(px(top + 12.))).max_h(px(vh - ime - top - 12.))
+        .pb(px(if ime > 0. { 0. } else { bottom })).flex().flex_col()
+        .bg(crate::design::color::popover()).rounded_t(px(r)).shadow(theme::shadow_panel()).occlude()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(div().flex_none().h(px(56.)).relative().flex().items_center().justify_center()
+            .child(div().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).text_color(crate::design::color::foreground()).child(title))
+            .child(div().absolute().right(px(8.)).top_0().h_full().flex().items_center()
+                .child(Button::ghost(SharedString::from(format!("{id}-done"))).label(tr("完成", "Done"))
+                    .on_click(cx.listener(move |w, _, window, cx| done(w, window, cx))))))
+        .child(div().when(tall, |d| d.flex_1()).min_h_0().flex().flex_col().child(body));
+    deferred(anchored().position(point(px(0.), px(0.))).child(
+        div().id(id).relative().w(px(vw)).h(px(vh))
+            .child(div().id(SharedString::from(format!("{id}-scrim"))).absolute().inset_0().bg(crate::design::color::overlay()).occlude()
+                .on_mouse_down(MouseButton::Left, cx.listener(move |w, _, window, cx| { cx.stop_propagation(); close(w, window, cx) })))
+            .child(panel))).with_priority(2).into_any_element()
+}
+
+/// A short list of rows in a phone's sheet, scrolling when it runs long.
+fn sheet_rows(id: &'static str, rows: Vec<AnyElement>) -> AnyElement {
+    div().id(id).min_h_0().overflow_y_scroll().px(px(8.)).pb(px(8.)).flex().flex_col().children(rows).into_any_element()
+}
+
+/// The row a dropdown on 通用 / 文档库 belongs to, as its phone sheet's title.
+fn pref_title(id: &str) -> &'static str {
+    match id {
+        "browser" => tr("打开链接", "Open links"),
+        "quick-new" => tr("快捷新建默认类型", "Quick new"),
+        "search-engine" => tr("网页搜索", "Web search"),
+        "quick-note-folder" => tr("快速笔记保存到", "Quick notes go to"),
+        _ => "",
+    }
+}
+
+fn phone(window: &Window) -> bool { theme::compact(f32::from(window.viewport_size().width)) }
+
 fn apply_theme(w: &mut Workspace, id: String, cx: &mut Context<Workspace>) {
     let feishu = themes::themes().iter().find(|t| t.id == id).is_some_and(|t| t.style.feishu);
     w.theme_menu = None;
@@ -940,10 +988,9 @@ fn apply_theme(w: &mut Workspace, id: String, cx: &mut Context<Workspace>) {
 
 impl Workspace {
     /// A compact theme list; applying a choice updates the page preview below.
-    pub(crate) fn render_theme_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(crate) fn render_theme_menu(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let focused = self.theme_menu.as_ref()?;
         if self.view != View::Settings || self.settings_page != Page::Appearance { return None }
-        let b = self.theme_anchor.get()?;
         let current = prefs().theme_id();
         let list = themes::themes();
         let rows: Vec<AnyElement> = list.iter().map(|t| {
@@ -957,6 +1004,8 @@ impl Workspace {
                 .into_any_element()
         }).collect();
         drop(list);
+        if phone(window) { return Some(phone_sheet("theme-menu", tr("文档主题", "Document theme").into(), false, sheet_rows("theme-menu-list", rows), |w, _, cx| { w.theme_menu = None; cx.notify(); }, window, cx)) }
+        let b = self.theme_anchor.get()?;
         let anchor = self.theme_anchor.clone();
         let menu = Popover::new("theme-menu")
             .on_mouse_down_out(cx.listener(move |w, ev: &MouseDownEvent, _, cx| {
@@ -985,16 +1034,20 @@ impl Workspace {
             }))
     }
 
-    pub(crate) fn render_pref_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(crate) fn render_pref_menu(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let m = self.pref_menu.as_ref()?;
         if self.view != View::Settings || !matches!(self.settings_page, Page::General | Page::Library) { return None }
-        let b = *self.pref_anchors.borrow().get(m.id)?;
         let rows = m.labels.iter().enumerate().map(|(i, label)| {
             let g = SharedString::from(format!("{}-opt-{i}", m.id));
             MenuItem::new(g).label(self::label(label)).selected(i == m.focused).checked(i == m.selected)
                 .on_hover(cx.listener(move |w, hovered: &bool, _, cx| if *hovered && let Some(m) = &mut w.pref_menu && m.focused != i { m.focused = i; cx.notify(); }))
                 .on_click(cx.listener(move |w, _, _, cx| w.pick_pref(i, cx)))
         }).collect::<Vec<_>>();
+        if phone(window) {
+            let rows = rows.into_iter().map(|r| r.into_any_element()).collect();
+            return Some(phone_sheet("pref-menu", pref_title(m.id).into(), false, sheet_rows("pref-menu-list", rows), |w, _, cx| { w.pref_menu = None; cx.notify(); }, window, cx))
+        }
+        let b = *self.pref_anchors.borrow().get(m.id)?;
         let anchors = self.pref_anchors.clone();
         let id = m.id;
         let menu = Popover::new("pref-menu").menu().min_w(px(160.))
@@ -1051,7 +1104,8 @@ impl Workspace {
         let current = target.current();
         if let Some(i) = font_choices("", target, false, cx).iter().position(|c| matches!(c, Choice::Font { family, flat: false, .. } if family.eq_ignore_ascii_case(&current))) { scroll.scroll_to_item(i, ScrollStrategy::Center); }
         self.font_menu = Some(FontMenu { field, target, focused: None, others: false, previewing: None, preview_task: None, scroll, _sub: sub });
-        window.focus(&focus, cx);
+        // A phone's sheet keeps the keyboard down until the search box is tapped.
+        if phone(window) { window.blur(cx) } else { window.focus(&focus, cx) }
         cx.notify();
     }
 
@@ -1096,11 +1150,17 @@ impl Workspace {
 
     /// The font list under its button: a search field, then the rows
     /// (`font_choices`), each font drawing a sample in its own face.
-    pub(crate) fn render_font_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(crate) fn render_font_menu(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let menu = self.font_menu.as_ref()?;
         if self.view != View::Settings || self.settings_page != Page::Appearance { return None }
-        let b = *self.font_anchors.borrow().get(menu.target.key())?;
         let target = menu.target;
+        // A phone's sheet: the list fills what the title and search leave.
+        let phone = phone(window);
+        let list_h = if phone {
+            let insets = window.insets();
+            let (top, bottom, ime) = (f32::from(insets.safe_area.top), f32::from(insets.safe_area.bottom), f32::from(insets.ime.bottom));
+            f32::from(window.viewport_size().height) - top - 12. - ime - 56. - (crate::design::geo().field_sm_h + 2. * menu::PAD) - menu::PAD - if ime > 0. { 0. } else { bottom }
+        } else { 420. };
         let current = target.current();
         let choices = std::rc::Rc::new(font_choices(&menu.field.read(cx).text, target, menu.others, cx));
         let n = choices.len();
@@ -1125,7 +1185,7 @@ impl Workspace {
                             let picked = current.is_empty();
                             // A virtual list's rows don't stretch on their own.
                             div().w_full().flex().flex_col().child(MenuItem::new(g.clone()).selected(focused == Some(i)).label(target.reset_label()).checked(picked)
-                                .on_hover(cx.listener(move |w, hovered: &bool, _, cx| if *hovered { w.preview_font(String::new(), i, cx) }))
+                                .on_hover(cx.listener(move |w, hovered: &bool, _, cx| if *hovered && !crate::design::touch() { w.preview_font(String::new(), i, cx) }))
                                 .on_click(cx.listener(move |w, _, window, cx| w.pick_font(String::new(), target, window, cx)))).into_any_element()
                         }
                         c @ Choice::Font { family, dl, flat } => font_row(family, *dl, *flat, g, focused == Some(i), &current, (c.key().unwrap_or_default(), i, target), cx).into_any_element(),
@@ -1133,9 +1193,19 @@ impl Workspace {
                 }).collect()
             }))
             .track_scroll(&menu.scroll)
-            .h(px((n as f32 * menu::ROW_H).min(420.)))
+            .h(px(if phone { list_h.max(menu::ROW_H) } else { (n as f32 * menu::ROW_H).min(420.) }))
             .into_any_element()
         };
+        let search = div().p(px(menu::PAD))
+            .child(Field::new("font-search").sized(FieldSize::Sm)
+                .child(crate::design::icon("search", 14., crate::design::color::muted_foreground()))
+                .child(div().flex_1().min_w_0().child(menu.field.clone())));
+        if phone {
+            let title = match target { FontTarget::Doc => tr("文档字体", "Document font"), FontTarget::Ui => tr("界面字体", "Interface font") };
+            let body = div().flex().flex_col().child(search).child(div().px(px(menu::PAD)).pb(px(menu::PAD)).child(list)).into_any_element();
+            return Some(phone_sheet("font-menu", title.into(), true, body, |w, window, cx| { w.close_font_menu(cx); window.focus(&w.focus, cx); }, window, cx))
+        }
+        let b = *self.font_anchors.borrow().get(target.key())?;
         let anchors = self.font_anchors.clone();
         let key = target.key();
         let popup = Popover::new("font-menu").flex()
@@ -1146,10 +1216,7 @@ impl Workspace {
                 window.focus(&w.focus, cx);
             }))
             .child(div().w(px(460.)).flex().flex_col()
-                .child(div().p(px(menu::PAD))
-                    .child(Field::new("font-search").sized(FieldSize::Sm)
-                        .child(crate::design::icon("search", 14., crate::design::color::muted_foreground()))
-                        .child(div().flex_1().min_w_0().child(menu.field.clone()))))
+                .child(search)
                 .child(div().pb(px(menu::PAD)).child(list)));
         Some(deferred(anchored().anchor(Anchor::TopRight).position(point(b.right(), b.bottom() + px(4.))).snap_to_window_with_margin(px(8.)).child(popup)).with_priority(2).into_any_element())
     }
@@ -1265,10 +1332,9 @@ impl Workspace {
     }
 
     /// 界面语言's dropdown, each language in its own name.
-    pub(crate) fn render_lang_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(crate) fn render_lang_menu(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let focused = self.lang_menu?;
         if self.view != View::Settings || self.settings_page != Page::General { return None }
-        let b = self.lang_anchor.get()?;
         let current = prefs().lang();
         let rows = Lang::ALL.map(|l| {
             let g = SharedString::from(format!("lang-opt-{}", l.code()));
@@ -1276,6 +1342,11 @@ impl Workspace {
                 .on_hover(cx.listener(move |w, hovered: &bool, _, cx| if *hovered && w.lang_menu != Some(l) { w.lang_menu = Some(l); cx.notify(); }))
                 .on_click(cx.listener(move |w, _, _, cx| { w.lang_menu = None; w.set_pref(|p| p.set_lang(l), cx) }))
         });
+        if phone(window) {
+            let rows = rows.into_iter().map(|r| r.into_any_element()).collect();
+            return Some(phone_sheet("lang-menu", tr("界面语言", "Interface language").into(), false, sheet_rows("lang-menu-list", rows), |w, _, cx| { w.lang_menu = None; cx.notify(); }, window, cx))
+        }
+        let b = self.lang_anchor.get()?;
         let anchor = self.lang_anchor.clone();
         let menu = Popover::new("lang-menu").menu().w(px(160.))
             .on_mouse_down_out(cx.listener(move |w, ev: &MouseDownEvent, _, cx| {
@@ -1378,6 +1449,7 @@ impl Workspace {
     pub(crate) fn open_settings(&mut self, page: Page, cx: &mut Context<Self>) {
         self.cancel_shortcut_recording(cx);
         self.settings_page = page;
+        self.settings_index = false;
         self.theme_menu = None;
         self.lang_menu = None;
         self.pref_menu = None;
@@ -1437,6 +1509,17 @@ impl Workspace {
     /// Back to where 设置 was opened from: the document, a folder's page or
     /// 主页 (主页 when what it was is gone).
     pub(crate) fn close_settings(&mut self, cx: &mut Context<Self>) {
+        // 回收站 opened from a phone's 设置 list: back to that list.
+        if self.view == View::Trash && self.trash_from_settings { self.trash_from_settings = false; self.settings_index = true; return self.show_view(View::Settings, cx) }
+        // A phone's page: back to 设置's list first.
+        if self.view == View::Settings && !self.settings_index && self.settings_phone.get() {
+            self.cancel_shortcut_recording(cx);
+            self.theme_menu = None; self.lang_menu = None; self.pref_menu = None; self.close_font_menu(cx);
+            self.settings_index = true;
+            self.settings_scroll.set_offset(point(px(0.), px(0.)));
+            cx.notify();
+            return
+        }
         let back = match self.settings_from {
             View::Doc if self.editor.is_some() && self.current.is_some() => View::Doc,
             View::Folder if self.folder_current.is_some() => View::Folder,
@@ -1445,7 +1528,45 @@ impl Workspace {
         self.show_view(back, cx);
     }
 
-    pub(crate) fn render_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// A phone's 设置, as iOS's Settings opens: the sections as a grouped
+    /// list, each pushing its page (the page's 返回 comes back here). 快捷键
+    /// needs a keyboard a phone hasn't, so it isn't listed.
+    fn render_settings_index(&self, cx: &mut Context<Self>) -> AnyElement {
+        let item = |page: Option<Page>, cx: &mut Context<Self>| {
+            let (title, glyph) = page.map_or((tr("回收站", "Trash"), "bin"), |p| (p.title(), p.icon()));
+            div().id(SharedString::from(format!("settings-index-{page:?}"))).h(px(48.)).px(px(16.)).flex().items_center().gap(px(12.)).cursor_pointer()
+                .active(|s| s.bg(crate::design::color::accent()))
+                .child(crate::design::icon(glyph, 22., crate::design::color::foreground()))
+                .child(div().flex_1().min_w_0().text_size(px(17.)).child(title))
+                .child(crate::design::icon("chevron-right", 18., crate::design::color::muted_foreground()))
+                .on_click(cx.listener(move |w, _, _, cx| match page { Some(p) => w.open_settings(p, cx), None => { w.show_view(View::Trash, cx); w.trash_from_settings = true; } }))
+                .into_any_element()
+        };
+        let card = |rows: Vec<AnyElement>| {
+            let n = rows.len();
+            div().w_full().flex().flex_col().rounded(px(crate::design::R)).overflow_hidden().bg(crate::design::color::muted())
+                .children(rows.into_iter().enumerate().flat_map(move |(i, r)| {
+                    let sep = (i + 1 < n).then(|| div().ml(px(50.)).h(px(0.5)).bg(crate::design::color::border()).into_any_element());
+                    std::iter::once(r).chain(sep)
+                }))
+        };
+        let main = vec![item(Some(Page::General), cx), item(Some(Page::Appearance), cx), item(Some(Page::Library), cx)];
+        let more = vec![item(None, cx), item(Some(Page::About), cx)];
+        div().flex_1().min_w_0().h_full().flex().flex_col().bg(Theme::bg_body()).text_color(Theme::text()).font_family(theme::ui_family())
+            .child(div().h(px(crate::app::HEADER_H)).flex_none().flex().items_center().title_bar()
+                .when(!self.sidebar_open, |d| d.pl(px(theme::TRAFFIC_LIGHTS_W)).child(self.header_navigation(cx))))
+            .child(div().id("settings-index").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.settings_scroll)
+                .child(div().w_full().px(px(16.)).pb(px(64.)).flex().flex_col().gap(px(24.))
+                    .child(div().px(px(4.)).text_size(px(28.)).line_height(px(34.)).font_weight(FontWeight::BOLD).child(tr("设置", "Settings")))
+                    .child(card(main))
+                    .child(card(more))))
+            .into_any_element()
+    }
+
+    pub(crate) fn render_settings(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let phone = phone(window);
+        self.settings_phone.set(phone);
+        if phone && self.settings_index { return self.render_settings_index(cx) }
         let page = self.settings_page;
         let body = match page {
             Page::General => self.general_page(cx),
@@ -1459,7 +1580,7 @@ impl Workspace {
             .child(div().h(px(crate::app::HEADER_H)).flex_none().flex().items_center().title_bar()
                 .when(!self.sidebar_open, |d| d.pl(px(theme::TRAFFIC_LIGHTS_W)).child(self.header_navigation(cx))))
             .child(div().id("settings-content").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.settings_scroll)
-                .child(div().w_full().flex().flex_col().items_center().px(px(32.)).pb(px(64.))
+                .child(div().w_full().flex().flex_col().items_center().px(px(if phone { 16. } else { 32. })).pb(px(64.))
                     .child(div().w_full().max_w(px(if page == Page::Shortcuts { 760. } else { COLUMN_W })).flex().flex_col().gap(px(28.))
                         .child(div().flex().items_center().gap(px(16.))
                             .child(div().flex_1().min_w_0().px(px(4.)).text_size(px(22.)).line_height(px(28.)).font_weight(FontWeight::SEMIBOLD).child(page.title()))
