@@ -4351,6 +4351,38 @@ mod tests {
         crate::vfs::remove_dir_all(away).unwrap();
     }
 
+    /// A Markdown attachment (`.assets/files/<uuid>/<name>`) opened in its own
+    /// window is a 本机文件, though it is inside the library: edited where it is,
+    /// one id however often it is opened, and never a page of the tree.
+    #[test]
+    fn an_attachment_opens_in_place() {
+        let lib = Lib::new("attachment-in-place");
+        let mut s = lib.open();
+        let page = s.create().unwrap().0;
+        let dir = Store::assets_in(&lib.0).join("files").join("0f0e");
+        crate::vfs::create_dir_all(&dir).unwrap();
+        let file = dir.join("meeting-notes.md");
+        crate::vfs::write(&file, "# Notes\n\nfirst\n").unwrap();
+        let id = s.open_local(&file).unwrap();
+        assert_eq!(s.open_local(&file).unwrap(), id);
+        assert_eq!(s.file_path(&id).unwrap().fs_canonicalize().unwrap(), file.fs_canonicalize().unwrap());
+        let e = s.list().into_iter().find(|e| e.id == id).unwrap();
+        assert!(e.meta.local() && e.meta.markdown && e.meta.parent.is_none());
+        assert_eq!(e.title, "meeting-notes");
+        let mut d = s.load_for_edit(&id, false).unwrap();
+        d.blocks.push(crate::model::Block::text("added"));
+        s.save(&id, &d).unwrap();
+        assert_eq!(crate::vfs::read_to_string(&file).unwrap(), "# Notes\n\nfirst\n\nadded\n");
+        // Reopened: still that one file, beside the page it is attached to.
+        drop(s);
+        let mut s = lib.open();
+        assert_eq!(s.open_local(&file).unwrap(), id);
+        let ids: Vec<String> = s.list().into_iter().map(|e| e.id).collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&page) && ids.contains(&id));
+        crate::vfs::remove_dir_all(&lib.0).unwrap();
+    }
+
     #[test]
     fn local_files_are_edited_in_place_and_never_trashed() {
         let lib = Lib::new("local");
