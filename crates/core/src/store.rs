@@ -396,7 +396,7 @@ pub struct Store {
 /// written meanwhile. Reading 15,000 entries again costs about 40 ms.
 struct Synced {
     read: u64,
-    local: Option<(u64, Option<web_time::SystemTime>, u64)>,
+    local: Option<meta::Seen>,
     index: HashMap<String, Meta>,
     foreign: DiskIndex,
     trash: HashMap<String, Trashed>,
@@ -1480,7 +1480,7 @@ impl Store {
     /// An entry left out whose file has arrived is read in again, so the file
     /// keeps what its device set.
     fn holds(&self, s: &Synced) -> bool {
-        s.read == self.merged.borrow().read && s.local == self.local_stamp() && s.index == self.index && s.foreign == self.foreign && s.trash == self.trash
+        s.read == self.merged.borrow().read && meta::still(&self.local_file(), &s.local) && s.index == self.index && s.foreign == self.foreign && s.trash == self.trash
             && !s.absent.iter().any(|k| self.abs(k.trim_end_matches('/')).fs_exists())
     }
 
@@ -1519,12 +1519,8 @@ impl Store {
         *self.synced.borrow_mut() = Some(Synced { read, local: self.local_stamp(), index: self.index.clone(), foreign: self.foreign.clone(), trash: self.trash.clone(), whole, absent });
     }
 
-    /// This computer's file about the library as `meta::files` tells a device file.
-    fn local_stamp(&self) -> Option<(u64, Option<web_time::SystemTime>, u64)> {
-        let p = self.local_file();
-        let m = crate::vfs::metadata(&p).ok()?;
-        Some((m.len(), m.modified().ok(), meta::written(&p, Some(&m), false)))
-    }
+    /// This computer's file about the library as `meta::files` sees a device file.
+    fn local_stamp(&self) -> Option<meta::Seen> { meta::seen_now(&self.local_file()) }
 
     /// FORMAT 5's `save_index`: what changed since the index was read,
     /// stamped as this device's.
@@ -4338,12 +4334,15 @@ mod tests {
     #[test]
     fn a_rewrite_with_the_same_size_and_time_is_noticed() {
         // A sync (iCloud, a git checkout, rsync -t) may put a file back with the
-        // time it had where it was written, and a change may keep its size.
+        // time it had where it was written, and a change may keep its size; a
+        // write in the same tick of a coarse clock (Linux's) keeps the change
+        // time too: the file was seen within that tick, so its contents decide.
         let lib = Lib::new("meta-same-time");
         let mut a = Store::open_as(lib.0.clone(), &library_key(&lib.0), dev("aaaa")).unwrap();
         let x = a.create_from(&doc("甲")).unwrap();
         other_pins(&lib, "bbbb", &x, true);
         assert!(pinned(&mut a, &x));
+        meta::seen_as_changed(&lib.0, a.merged.get_mut());
         let path = meta::dir(&lib.0).join("bbbb.json");
         let was = crate::vfs::metadata(&path).unwrap();
         let text = crate::vfs::read_to_string(&path).unwrap();
@@ -4352,7 +4351,42 @@ mod tests {
         crate::vfs::File::options().write(true).open(&path).unwrap().set_modified(was.modified().unwrap()).unwrap();
         let now = crate::vfs::metadata(&path).unwrap();
         assert_eq!((now.len(), now.modified().unwrap()), (was.len(), was.modified().unwrap()));
+        meta::change_times_held(&lib.0, a.merged.get_mut());
         assert!(!pinned(&mut a, &x));
+        // Read again, and the same holds for the next write.
+        meta::seen_as_changed(&lib.0, a.merged.get_mut());
+        crate::vfs::write(&path, crate::vfs::read_to_string(&path).unwrap().replace("null", "true")).unwrap();
+        meta::change_times_held(&lib.0, a.merged.get_mut());
+        assert!(pinned(&mut a, &x));
+    }
+
+    #[test]
+    fn a_file_is_trusted_on_its_stat_only_a_tick_after_it_changed() {
+        let t = web_time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000);
+        let s = |len, changed| meta::Stat { len, modified: Some(t), written: 7, changed: Some(changed), dataless: false };
+        let sec = std::time::Duration::from_secs(1);
+        // Changed within the tick before it was seen, or ahead of this clock.
+        assert!(meta::racy(&s(1, t), t) && meta::racy(&s(1, t), t + sec) && meta::racy(&s(1, t + sec), t));
+        assert!(!meta::racy(&s(1, t), t + 2 * sec) && !meta::racy(&meta::Stat { changed: None, ..s(1, t) }, t));
+        assert!(!meta::racy(&meta::Stat { dataless: true, ..s(1, t) }, t));
+        // Seen a tick after: the same stat is enough, the contents aren't read.
+        let settled = meta::Seen { stat: s(1, t), contents: None };
+        assert!(meta::unchanged(&settled, &s(1, t), || unreachable!()));
+        assert!(!meta::unchanged(&settled, &s(2, t), || unreachable!()));
+        // Seen within it: the same stat, and then the same contents.
+        let racy = meta::Seen { stat: s(1, t), contents: Some(42) };
+        assert!(meta::unchanged(&racy, &s(1, t), || 42));
+        assert!(!meta::unchanged(&racy, &s(1, t), || 43));
+        assert!(!meta::unchanged(&racy, &s(1, t + sec), || unreachable!()));
+        // Seen for real: the contents are hashed only within the tick.
+        let lib = Lib::new("meta-racy");
+        crate::vfs::create_dir_all(&lib.0).unwrap();
+        let p = lib.0.join("f.json");
+        crate::vfs::write(&p, "{}").unwrap();
+        let st = meta::stat(&p, Some(&crate::vfs::metadata(&p).unwrap()));
+        let Some(changed) = st.changed else { return };
+        assert!(meta::seen(&p, st.clone(), changed).contents.is_some());
+        assert!(meta::seen(&p, st, changed + 2 * sec).contents.is_none());
     }
 
     #[test]
