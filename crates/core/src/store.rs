@@ -437,7 +437,8 @@ pub struct ListProgress { pub done: std::sync::atomic::AtomicUsize, pub total: s
 /// The parts of an `Entry` that come from the document file.
 #[derive(Clone, Default)]
 struct Parsed { title: String, icon: Option<String>, body: std::sync::Arc<str>, reminders: Vec<crate::model::InlineReminder>, links: Vec<crate::model::DocLink>,
-    /// Plain links to files, as written (`layout::file_link`): what a move may have to rewrite.
+    /// Plain links to files, as written (`layout::file_link`), and the pictures and attachments
+    /// a move can break, as paths from the file (`Store::file_refs`): what a move may have to rewrite.
     files: Vec<String> }
 
 /// `Store::parsed` kept between launches (#170): reading every document again
@@ -446,7 +447,7 @@ struct Parsed { title: String, icon: Option<String>, body: std::sync::Arc<str>, 
 /// are this machine's mtimes, so it lives in the cache folder, not in the
 /// (possibly synced) library. Bump `PARSED_CACHE` when what `list` takes from
 /// a file changes; a release discards it anyway.
-const PARSED_CACHE: u32 = 4;
+const PARSED_CACHE: u32 = 5;
 
 #[derive(Serialize, Deserialize)]
 struct ParsedCache { version: String, docs: HashMap<PathBuf, CachedDoc> }
@@ -471,6 +472,9 @@ fn file_links(doc: &Document) -> Vec<String> {
     out.dedup();
     out
 }
+
+/// A path from a file's folder as a link is written (`layout::link_path` reads it back).
+fn as_href(path: &str) -> String { path.replace('%', "%25").replace('#', "%23").replace('?', "%3F") }
 
 fn parsed_cache_version() -> String { format!("{}-{PARSED_CACHE}", env!("CARGO_PKG_VERSION")) }
 
@@ -1906,6 +1910,25 @@ impl Store {
         });
     }
 
+    /// What `relocate` looks at to tell whether `id`'s file needs rewriting: its links to
+    /// files, and its pictures and attachments in the library as links from its folder. A
+    /// Markdown file names those from itself. A DocxXML page names them from the library's
+    /// top, so its own move changes none and `.assets` (which never moves) is left out; the
+    /// others are written here as from its folder up to the top and down again
+    /// (`../P/图.png` in `P`), which no longer reads the same once a folder in that path moves.
+    fn file_refs(&self, id: &str, doc: &Document) -> Vec<String> {
+        let mut out = file_links(doc);
+        let (dir, markdown) = (self.doc_dir(id), self.is_markdown(id));
+        for src in doc.asset_sources() {
+            let Some(rel) = crate::paths::portable_in(Path::new(&src), &self.top_dir) else { continue };
+            if markdown { out.push(as_href(&layout::relative(&dir, &rel))); }
+            else if !rel.starts_with(".assets/") { out.push(as_href(&format!("{}{rel}", "../".repeat(dir.split('/').filter(|s| !s.is_empty()).count())))); }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
     /// `text` (a file's contents) as a document.
     fn parse_doc(&self, id: &str, text: &str) -> Result<Document> {
         if self.kind(id) == DocKind::Board { return crate::whiteboard::parse_file(text, &self.markdown_title(id)); }
@@ -2225,7 +2248,7 @@ impl Store {
                     let Ok(text) = (if table { Ok(String::new()) } else { crate::vfs::read_to_string(&p) }) else { continue };
                     let doc = if table { Document::default() } else { self.parse_doc(&id, &text).unwrap_or_default() };
                     let body = if table { crate::table::block_text(&self.top_dir, &crate::table::TableRef::new(p.strip_prefix(&self.top_dir).map(|r| r.to_string_lossy().into_owned()).unwrap_or_default())) } else { doc.plain_text() };
-                    let parsed = Parsed { title: doc.title.text.clone(), icon: doc.icon.clone(), body: body.into(), reminders: doc.reminders(), links: doc.doc_links(), files: file_links(&doc) };
+                    let parsed = Parsed { title: doc.title.text.clone(), icon: doc.icon.clone(), body: body.into(), reminders: doc.reminders(), links: doc.doc_links(), files: self.file_refs(&id, &doc) };
                     if let Some((t, len)) = stamp { self.parsed.insert(id.clone(), (t, len, parsed.clone())); }
                     parsed
                 }
@@ -2277,13 +2300,20 @@ impl Store {
         // paths as well: where what moved went, a document or anything in a moved folder.
         let old_rel: HashMap<String, String> = new_rel.iter().map(|(k, to)| (self.index[k].rel.clone(), to.clone())).collect();
         let moved = |p: &str| old_rel.get(p).cloned().or_else(|| dirs.iter().find_map(|(d, to)| p.strip_prefix(d.as_str()).map(|r| format!("{to}/{r}"))));
+        // Where what moves was, by id (the index says where it is, from the rename on).
+        let was_at: HashMap<String, String> = new_rel.keys().map(|k| (k.clone(), self.index[k].rel.clone())).collect();
+        // Only files with something to rewrite are read: a mention, link or picture is written
+        // relative to its file (a DocxXML page's pictures to the library), so inside a folder
+        // that moves whole, what points inside it reads the same afterwards.
         let mut docs = vec![];
         for (k, m) in &self.index {
             if m.folder.is_some() || m.local() || !m.kind.is_doc() { continue; }
             let (here, dir, parsed) = (affected.contains(k.as_str()), parent_rel(&m.rel), self.parsed.get(k).map(|p| &p.2));
-            let mentions = !m.markdown && (here || parsed.is_none_or(|p| p.links.iter().any(|l| affected.contains(l.target.as_str()))));
-            // A moved Markdown file's pictures are relative to it (docs/FORMAT.md).
-            let files = (here && m.markdown) || parsed.is_none_or(|p| p.files.iter().any(|h| here || layout::link_path(dir, h).is_some_and(|t| moved(&t).is_some())));
+            let to = new_rel.get(k).map_or(dir, |r| parent_rel(r));
+            let after = |id: &str| new_rel.get(id).or_else(|| self.index.get(id).map(|m| &m.rel));
+            let mentions = !m.markdown && parsed.is_none_or(|p| p.links.iter().any(|l| self.index.get(&l.target).zip(after(&l.target)).is_some_and(|(t, now)| layout::relative(dir, &t.rel) != layout::relative(to, now))));
+            // Links to files and the pictures not in `.assets` (`file_refs`), as paths from the file.
+            let files = parsed.is_none_or(|p| p.files.iter().any(|h| if here { layout::rebase_link(dir, to, h, &moved).is_some() } else { layout::link_path(dir, h).is_some_and(|t| moved(&t).is_some()) }));
             if !mentions && !files { continue; }
             let Ok(text) = crate::vfs::read_to_string(self.path(k)) else { continue };
             if !files && !text.contains("type=\"doc\"") { continue; }
@@ -2313,15 +2343,30 @@ impl Store {
         self.foreign = std::mem::take(&mut self.foreign).into_iter()
             .map(|(k, a)| (dirs.iter().find_map(|(p, to)| k.strip_prefix(p.as_str()).map(|rest| format!("{to}/{rest}"))).unwrap_or(k), a)).collect();
         derive_tree(&mut self.index);
+        // Each folder written into reaches the disk once, before the index.
+        let mut synced: Vec<PathBuf> = vec![];
         for (k, text, mut doc, was) in docs {
             let dir = parent_rel(&self.index[&k].rel).to_string();
             let relinked = doc.map_links(&mut |h| layout::rebase_link(&was, &dir, h, &moved));
             let markdown = self.is_markdown(&k);
-            if markdown && !relinked && !affected.contains(k.as_str()) { continue; }
+            // Pictures and attachments were read as paths on disk: what moved is elsewhere
+            // now. A Markdown file writes them relative to itself, a DocxXML page to the library.
+            let (from, to, mut resourced) = (self.abs(&was), self.abs(&dir), false);
+            doc.map_sources(|src| {
+                let at = Path::new(src);
+                if !at.fs_is_absolute() { return None }
+                let new = crate::paths::portable_in(at, &self.top_dir).and_then(|rel| moved(&rel)).map(|rel| self.abs(&rel));
+                resourced |= if markdown { crate::paths::portable(at, &from) != crate::paths::portable(new.as_deref().unwrap_or(at), &to) } else { new.is_some() };
+                new.map(|p| p.to_string_lossy().into_owned())
+            });
+            let mentioned = !markdown && doc.doc_links().iter().any(|l| self.index.get(&l.target).is_some_and(|t| layout::relative(&was, was_at.get(&l.target).unwrap_or(&t.rel)) != layout::relative(&dir, &t.rel)));
+            if !relinked && !resourced && !mentioned { continue; }
             let out = self.serialize_doc(&k, &doc, markdown.then_some(text.as_str()));
             if out == text { continue; }
-            match write_atomic(&self.path(&k), out.as_bytes()) {
+            let path = self.path(&k);
+            match write_atomic_then(&path, out.as_bytes(), false) {
                 Ok(()) => {
+                    if let Some(dir) = path.parent() && !synced.iter().any(|d| d == dir) { synced.push(dir.to_path_buf()); }
                     // An open editor still holds the links as they were; its
                     // next save follows them (`follow_moved_links`).
                     let mut loaded = self.loaded.borrow_mut();
@@ -2332,6 +2377,10 @@ impl Store {
                 Err(e) => self.warnings.push(format!("未能更新文档中的链接（{}）：{e}", self.index[&k].rel)),
             }
         }
+        #[cfg(unix)]
+        for dir in &synced { crate::vfs::File::open(dir).and_then(|f| f.sync_all())?; }
+        #[cfg(not(unix))]
+        drop(synced);
         self.save_index()
     }
 
@@ -2508,7 +2557,7 @@ impl Store {
                     let Ok(text) = (if table { Ok(String::new()) } else { crate::vfs::read_to_string(&p) }) else { continue };
                     let doc = if table { Document::default() } else { self.parse_doc(&id, &text).unwrap_or_default() };
                     let body = if table { crate::table::block_text(&self.top_dir, &crate::table::TableRef::new(p.strip_prefix(&self.top_dir).map(|r| r.to_string_lossy().into_owned()).unwrap_or_default())) } else { doc.plain_text() };
-                    let parsed = Parsed { title: doc.title.text.clone(), icon: doc.icon.clone(), body: body.into(), reminders: doc.reminders(), links: doc.doc_links(), files: file_links(&doc) };
+                    let parsed = Parsed { title: doc.title.text.clone(), icon: doc.icon.clone(), body: body.into(), reminders: doc.reminders(), links: doc.doc_links(), files: self.file_refs(&id, &doc) };
                     if let Some((t, len)) = stamp { self.parsed.insert(id.clone(), (t, len, parsed.clone())); reparsed = true; }
                     parsed
                 }
@@ -6230,6 +6279,94 @@ mod tests {
         d.title = crate::model::RichText::plain("末题");
         s.save_editor(&a, &d).unwrap();
         assert!(lib.0.join("末题.xml").is_file());
+    }
+
+    /// What every page of the library points at, by the name of the page: the documents it
+    /// mentions and links to, and its pictures. Every one has to be there: a mention names a
+    /// page of the library, a link's and a picture's file is on disk.
+    fn points_at(s: &Store) -> BTreeMap<String, Vec<String>> {
+        let name = |rel: &str| base_name(rel).to_string();
+        let mut out = BTreeMap::new();
+        for (id, m) in s.index.iter().filter(|(_, m)| m.folder.is_none()) {
+            let doc = s.load(id).unwrap();
+            let dir = parent_rel(&m.rel);
+            let mut at: Vec<String> = vec![];
+            for l in doc.doc_links() { at.push(format!("@{}", name(&s.index.get(&l.target).unwrap_or_else(|| panic!("{}: a mention of nothing", m.rel)).rel))); }
+            for l in doc.links().iter().filter(|l| layout::file_link(l)) {
+                let to = layout::link_path(dir, l).unwrap();
+                assert!(s.abs(&to).fs_is_file(), "{}: link {l} finds no file at {to}", m.rel);
+                at.push(format!(">{}", name(&to)));
+            }
+            for src in doc.asset_sources() {
+                assert!(Path::new(&src).fs_is_file(), "{}: picture {src} is not there", m.rel);
+                at.push(format!("!{}", name(&src.replace('\\', "/"))));
+            }
+            at.sort();
+            out.insert(name(&m.rel), at);
+        }
+        out
+    }
+
+    /// Renaming or moving a folder, or a page out of one, keeps every mention, link and
+    /// picture pointing at what it pointed at (docs/FORMAT.md: a mention and a link are
+    /// relative to the file, a Markdown file's pictures too, a DocxXML page's to the library),
+    /// for files the app has never saved as well. What is inside a folder that moves whole
+    /// keeps its depth: only files with a link across its edge are written.
+    #[test]
+    fn renames_and_moves_keep_every_link_and_picture() {
+        let lib = Lib::new("links-round-trip");
+        let w = |rel: &str, text: &str| { let p = lib.0.join(rel); crate::vfs::create_dir_all(p.parent().unwrap()).unwrap(); crate::vfs::write(p, text).unwrap(); };
+        let cite = |href: &str| format!("<cite type=\"doc\" href=\"{href}\" file-type=\"docx\">x</cite>");
+        w(".assets/a.png", "png");
+        w("P/img/p.png", "png");
+        w("P/A.xml", &format!("<title>A</title>\n<p>{} {} <a href=\"B.xml\">b</a> <a href=\"sub/C.md\">c</a> <a href=\"../Out.md\">o</a></p>\n<img src=\".assets/a.png\"/>\n<img src=\"P/img/p.png\"/>\n", cite("B.xml"), cite("../Out.xml")));
+        w("P/B.xml", "<title>B</title>\n<p>b</p>\n");
+        w("P/N.md", "![p](img/p.png)\n\n![a](../.assets/a.png)\n\n[B](B.xml) [C](sub/C.md) [Out](../Out.xml)\n");
+        w("P/sub/C.md", "![p](../img/p.png)\n\n![a](../../.assets/a.png)\n\n[A](../A.xml) [Out](../../Out.md)\n");
+        w("Out.xml", &format!("<title>Out</title>\n<p>{} <a href=\"P/N.md\">n</a></p>\n<img src=\".assets/a.png\"/>\n", cite("P/A.xml")));
+        w("Out.md", "![p](P/img/p.png)\n\n[N](P/N.md) [C](P/sub/C.md)\n");
+        w("Q/Keep.md", "keep\n");
+        let mut s = lib.open();
+        s.list();
+        let id = |rel: &str, s: &Store| s.index.iter().find(|(_, m)| m.rel == rel).map(|(k, _)| k.clone()).unwrap_or_else(|| panic!("no {rel}"));
+        let before = points_at(&s);
+        assert_eq!(before["A.xml"], ["!a.png", "!p.png", ">B.xml", ">C.md", ">Out.md", "@B.xml", "@Out.xml"]);
+        assert_eq!(before["N.md"], ["!a.png", "!p.png", ">B.xml", ">C.md", ">Out.xml"]);
+        assert_eq!(before["C.md"], ["!a.png", "!p.png", ">A.xml", ">Out.md"]);
+        assert_eq!(before["Out.xml"], ["!a.png", ">N.md", "@A.xml"]);
+        assert_eq!(before["Out.md"], ["!p.png", ">C.md", ">N.md"]);
+        let text = |rel: &str| crate::vfs::read_to_string(lib.0.join(rel)).unwrap();
+        let inside: Vec<(&str, String)> = ["B.xml", "N.md", "sub/C.md"].into_iter().map(|f| (f, text(&format!("P/{f}")))).collect();
+        // 重命名: the folder keeps its place, so nothing in it is written but the page whose picture is named from the library's top;
+        // outside it, the pages pointing into it.
+        s.rename(&id("P", &s), "R").unwrap();
+        for (f, was) in &inside { assert_eq!(&text(&format!("R/{f}")), was, "{f} was rewritten by a rename of its folder"); }
+        assert!(text("R/A.xml").contains("src=\"R/img/p.png\"") && text("Out.md").contains("(R/img/p.png)") && text("Out.xml").contains("href=\"R/A.xml\""));
+        assert_eq!(points_at(&s), before);
+        s.list();
+        assert_eq!(points_at(&s), before);
+        // 移动到 another folder, one level down: links across its edge get one `../` more, those inside stay.
+        s.set_parent(&id("R", &s), Some(&id("Q", &s))).unwrap();
+        assert_eq!(points_at(&s), before);
+        assert_eq!(text("Q/R/B.xml"), inside[0].1);
+        assert!(text("Q/R/N.md").contains("(img/p.png)") && text("Q/R/N.md").contains("(../../.assets/a.png)") && text("Q/R/N.md").contains("(../../Out.xml)"));
+        assert!(text("Q/R/sub/C.md").contains("(../img/p.png)") && text("Q/R/sub/C.md").contains("(../A.xml)"));
+        // A page moved out of its folder alone: its pictures and the pages beside it stay behind.
+        s.list();
+        s.set_parent(&id("Q/R/N.md", &s), None).unwrap();
+        assert_eq!(points_at(&s), before);
+        assert!(text("N.md").contains("(Q/R/img/p.png)") && text("N.md").contains("(.assets/a.png)") && text("N.md").contains("(Q/R/B.xml)"));
+        s.set_parent(&id("Q/R/A.xml", &s), None).unwrap();
+        assert_eq!(points_at(&s), before);
+        // … and back in, then the folder back to the top under its first name: as it began.
+        let r = id("Q/R", &s);
+        s.set_parent(&id("N.md", &s), Some(&r)).unwrap();
+        s.set_parent(&id("A.xml", &s), Some(&r)).unwrap();
+        s.set_parent(&r, None).unwrap();
+        s.rename(&r, "P").unwrap();
+        assert_eq!(points_at(&s), before);
+        for (f, was) in &inside { assert_eq!(&text(&format!("P/{f}")), was, "{f} did not come back as it was"); }
+        assert_eq!(text("Out.md"), "![p](P/img/p.png)\n\n[N](P/N.md) [C](P/sub/C.md)\n");
     }
 
     /// Plain links to files (#67), in DocxXML and in Markdown, follow a move
