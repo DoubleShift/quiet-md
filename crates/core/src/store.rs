@@ -4023,6 +4023,32 @@ mod tests {
         assert!(s.refresh_external(&id).unwrap().is_none());
     }
 
+    /// Blank lines and spaces typed in a page come back as typed after a
+    /// save, the check made when the window comes forward (nothing to take in:
+    /// the file is what this editor wrote) and reading the file again.
+    #[test]
+    fn blank_lines_and_spaces_survive_a_save_and_a_read() {
+        let lib = Lib::new("blank-lines");
+        let mut s = lib.open();
+        let texts = ["first", "", "", "   ", "   leading", "middle   and end   ", "\u{a0}", "two<br>lines\n\nand a gap", "last"];
+        let typed = |d: &Document| d.blocks.iter().map(|b| b.text.text.clone()).collect::<Vec<_>>();
+        let md = s.create_markdown(&crate::markdown::parse_file("first\n", "Note", None), "").unwrap();
+        let xml = s.create_from(&Document { title: crate::model::RichText::plain("Page"), blocks: vec![crate::model::Block::text("first")], ..Default::default() }).unwrap();
+        for id in [md, xml] {
+            let mut doc = s.load_for_edit(&id, false).unwrap();
+            doc.blocks = texts.iter().map(|t| crate::model::Block::text(t)).collect();
+            s.save_editor(&id, &doc).unwrap();
+            assert!(s.refresh_external(&id).unwrap().is_none(), "its own save is not another program's");
+            let back = s.load_for_edit(&id, false).unwrap();
+            assert_eq!(typed(&back), texts, "{}", s.read_doc_text(&id).unwrap());
+            // Saving what was read writes nothing new.
+            let disk = s.read_doc_text(&id).unwrap();
+            s.save_editor(&id, &back).unwrap();
+            assert_eq!(s.read_doc_text(&id).unwrap(), disk);
+            assert!(s.refresh_external(&id).unwrap().is_none());
+        }
+    }
+
     #[test]
     fn a_clean_editor_takes_in_another_programs_save() {
         let lib = Lib::new("xml-external-save");

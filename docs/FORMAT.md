@@ -152,6 +152,17 @@ Older versions refuse to open FORMAT 4, builds that know only 4 refuse 5, and bu
 - **Files added externally.** Markdown and XML files copied into the library appear in the document list, including DocxXML exported from Feishu.
 - **Save errors.** Report failures to the user.
 
+## Markdown files
+
+A Markdown page is written as standard Markdown (`markdown::write_file`): one block after another, a blank line between them. A file is not rewritten while what it says is unchanged, and blocks that did not change keep their lines as they are on disk. Some things a reader drops are written so that they read back as typed:
+
+- **An empty paragraph** is a line holding only `&nbsp;` (`markdown::BLANK`): a blank line only separates blocks, and Obsidian, Typora and GitHub show this line as an empty one. A file's own `&nbsp;` lines read as empty paragraphs too. Empty paragraphs at the very end are not written: they show nothing, and the editor adds one when you click below the text.
+- **Spaces at the end of a line** (and a paragraph of only spaces, a no-break space, a tab) keep the last one as a character reference: `  &#32;` for three spaces, `&#160;`. Spaces at the start of a line are written as they are and read as they are.
+- **A line break inside a block** (Shift + Enter) is `<br>`; `<br/>` and `<br />` read the same.
+- **Text that would read as one of these** is escaped: a paragraph saying `&nbsp;` is `\&nbsp;`, `&#32;` in text is `\&#32;`, `<br>` is `\<br>`.
+
+Reading, `&#…;` and `&#x…;` anywhere in a line are the characters they name. Older builds read these lines as the text they spell (`&nbsp;`, `&#32;`, `<br>`); the library layout is unchanged, so `store::FORMAT` is too.
+
 ## DocxXML
 
 DocxXML is Feishu/Lark's XML document format. The canonical representation of every block appears in `crates/core/tests/fixtures/all-blocks.xml`. The `fixture_round_trips` test requires byte-for-byte equality after reading and writing it.
