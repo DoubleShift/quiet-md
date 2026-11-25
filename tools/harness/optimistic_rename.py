@@ -1,4 +1,4 @@
-"""重命名 shows at once and is written in the background (src/tree_writes.rs).
+"""重命名 and 移动到 show at once and are written in the background (src/tree_writes.rs).
 
 Build with --release --features devtools, then run this file. Every case
 renames in the sidebar with the write held back (`FDL_TREE_WRITE_DELAY`), acts
@@ -13,6 +13,9 @@ while it is on its way, and then checks the rows and the files on disk:
                 links to it follow) off the window's thread
   fails         the folder cannot be renamed (its parent is read-only): the old name is back,
                 the row is in its field with what was typed, a toast says why
+  move_dialog   移动到 puts a folder into another: there at once, a page in it opens once it has
+                landed, links into it follow, ⌘Z brings it back
+  move_fails    移动到 a folder that cannot be written to: the row is back where it was
   top_taken     a top-level folder renamed to a taken name: back in its field with what was
                 typed; typed on to a free name, it is renamed
 
@@ -40,7 +43,7 @@ def library(root):
     (root / ".quiet" / "preferences.json").write_text(PREFS)
     (root / "Project" / "img").mkdir(parents=True)
     (root / "Project" / "img" / "p.png").write_bytes(bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de0000000c4944415408d763f8cfc000000301010018dd8db00000000049454e44ae426082"))
-    (root / "Project" / "Alpha.xml").write_text('<title>Alpha</title>\n<p>first</p>\n<p>See <cite type="doc" href="Project/Beta.xml" file-type="docx">Beta</cite></p>\n')
+    (root / "Project" / "Alpha.xml").write_text('<title>Alpha</title>\n<p>first</p>\n<p>See <cite type="doc" href="Beta.xml" file-type="docx">Beta</cite></p>\n')
     (root / "Project" / "Beta.xml").write_text('<title>Beta</title>\n<p>beta</p>\n')
     (root / "Project" / "Notes.md").write_text("![p](img/p.png)\n\nSee [Outside](../Outside.xml)\n")
     (root / "Outside.xml").write_text('<title>Outside</title>\n<p>To <cite type="doc" href="Project/Alpha.xml" file-type="docx">Alpha</cite> and <a href="Project/Beta.xml">the file</a></p>\n')
@@ -73,6 +76,9 @@ def normal():
     assert (lib / "Renamed" / "Alpha.xml").is_file() and not (lib / "Project").exists(), "the folder was not renamed on disk"
     outside = (lib / "Outside.xml").read_text()
     assert 'href="Renamed/Alpha.xml"' in outside and 'href="Renamed/Beta.xml"' in outside, f"links did not follow: {outside}"
+    # What is inside keeps its depth: its links to its own pages and pictures read as they did.
+    assert 'href="Beta.xml"' in (lib / "Renamed" / "Alpha.xml").read_text()
+    assert (lib / "Renamed" / "Notes.md").read_text() == "![p](img/p.png)\n\nSee [Outside](../Outside.xml)\n"
 
 
 def open_inside():
@@ -116,27 +122,67 @@ def title_typed():
     assert 'href="Project/Beta Two.xml"' in (lib / "Outside.xml").read_text().replace("%20", " "), (lib / "Outside.xml").read_text()
 
 
-def fails():
-    src = library(work / "src-fails")
-    code, lib, log = 1, None, ""
+def run_locked(name, script, src, locked):
+    """`run`, with folder `locked` of the copied library read-only while the app runs."""
+    out = work / name
+    os.makedirs(out, exist_ok=True)
+    lib = out / "lib"
+    shutil.rmtree(lib, ignore_errors=True)
+    shutil.copytree(src, lib)
+    (out / "s.txt").write_text("move 700 500\nwait 1200\n" + script + "\nquit\n")
+    binary = os.environ.get("FDL_BIN") or str(here.parent.parent / "target" / "release" / "quiet_md")
+    env = {"HOME": os.path.expanduser("~"), "QUIET_MD_HOME": str(lib), "FDL_SCRIPT": str(out / "s.txt"), "FDL_SHOTS": str(out), "PATH": "/usr/bin:/bin", "FDL_NOBLINK": "1", "FDL_TREE_WRITE_DELAY": DELAY}
+    os.chmod(lib / locked, 0o555)
     try:
-        # run.py copies the library; the copy's folder is locked once it is there.
-        out = work / "fails"
-        (work / "fails.txt").write_text("move 700 500\nwait 1200\nrow Locked\nwait 400\n" + RENAME.format("Inner", "Typed") + "row Typed\nshot ahead\nwait 3000\nshot back\nkey right\ntype X\nwait 200\nshot typed_on\nkey escape\nwait 300\nrow Inner\n")
-        os.makedirs(out, exist_ok=True)
-        lib = out / "lib"
-        shutil.rmtree(lib, ignore_errors=True)
-        shutil.copytree(src, lib)
-        os.chmod(lib / "Locked", 0o555)
-        binary = os.environ.get("FDL_BIN") or str(here.parent.parent / "target" / "release" / "quiet_md")
-        env = {"HOME": os.path.expanduser("~"), "QUIET_MD_HOME": str(lib), "FDL_SCRIPT": str(out / "s.txt"), "FDL_SHOTS": str(out), "PATH": "/usr/bin:/bin", "FDL_NOBLINK": "1", "FDL_TREE_WRITE_DELAY": DELAY}
-        (out / "s.txt").write_text((work / "fails.txt").read_text() + "\nquit\n")
         code = subprocess.run(binary, env=env, cwd=out, stdout=open(out / "log", "w"), stderr=subprocess.STDOUT, timeout=180).returncode
-        log = (out / "log").read_text(errors="replace")
     finally:
-        if lib and (lib / "Locked").exists(): os.chmod(lib / "Locked", 0o755)
+        os.chmod(lib / locked, 0o755)
+    return code, lib, (out / "log").read_text(errors="replace")
+
+
+def fails():
+    script = "row Locked\nwait 400\n" + RENAME.format("Inner", "Typed") + "row Typed\nshot ahead\nwait 3000\nshot back\nkey right\ntype X\nwait 200\nshot typed_on\nkey escape\nwait 300\nrow Inner\n"
+    code, lib, log = run_locked("fails", script, library(work / "src-fails"), "Locked")
     assert code == 0, log[-600:]
     assert (lib / "Locked" / "Inner" / "Leaf.xml").is_file() and not (lib / "Locked" / "Typed").exists()
+
+
+def moving(root):
+    """A folder to move, one to move it into, and a page outside mentioning a page of the first."""
+    (root / ".quiet").mkdir(parents=True)
+    (root / ".quiet" / "preferences.json").write_text(PREFS)
+    for d in ("Project", "Target"): (root / d).mkdir()
+    (root / "Project" / "Alpha.xml").write_text('<title>Alpha</title>\n<p>a</p>\n<p>See <cite type="doc" href="../Outside.xml" file-type="docx">Outside</cite></p>\n')
+    (root / "Target" / "Keep.xml").write_text("<title>Keep</title>\n<p>k</p>\n")
+    (root / "Outside.xml").write_text('<title>Outside</title>\n<p>To <cite type="doc" href="Project/Alpha.xml" file-type="docx">Alpha</cite></p>\n')
+    return root
+
+
+# 移动到 on Project's row, then Target in the dialog's tree (Project itself is not offered) and OK.
+MOVE = "rrow Project\nwait 300\nrow Move to\nwait 500\nclick 588 193\nwait 300\nclick 1009 687\n"
+
+
+def move_dialog():
+    # A page inside clicked right after OK opens once the folder is there; typed into, it is saved there.
+    code, lib, log = run("move_dialog", MOVE + "shot ahead\nrow Alpha\nwait 3000\nshowing Alpha\nclick 700 400\nkey cmd-down\ntype  typed\nwait 2500\nshot landed\n", moving(work / "src-move"))
+    assert code == 0, log[-600:]
+    assert "Could not open" not in log
+    alpha = (lib / "Target" / "Project" / "Alpha.xml").read_text()
+    assert "typed" in alpha and 'href="../../Outside.xml"' in alpha, alpha
+    assert not (lib / "Project").exists(), "something was left at, or written to, the old path"
+    assert 'href="Target/Project/Alpha.xml"' in (lib / "Outside.xml").read_text()
+    # ⌘Z puts the folder back at the top, links too.
+    code, lib, log = run("move_undone", MOVE + "wait 3000\nkey cmd-z\nwait 3500\nshot undone\n", moving(work / "src-move-undo"))
+    assert code == 0, log[-600:]
+    assert (lib / "Project" / "Alpha.xml").is_file() and not (lib / "Target" / "Project").exists(), "⌘Z did not bring the folder back"
+    assert 'href="Project/Alpha.xml"' in (lib / "Outside.xml").read_text()
+
+
+def move_fails():
+    code, lib, log = run_locked("move_fails", MOVE + "shot ahead\nwait 3000\nshot back\n", moving(work / "src-move-fails"), "Target")
+    assert code == 0, log[-600:]
+    assert (lib / "Project" / "Alpha.xml").is_file() and not (lib / "Target" / "Project").exists()
+    assert 'href="Project/Alpha.xml"' in (lib / "Outside.xml").read_text()
 
 
 def top_taken():
@@ -154,7 +200,7 @@ def top_taken():
     assert (lib / "Two2" / "In One.xml").is_file() and (lib / "Two" / "In Two.xml").is_file() and not (lib / "One").exists(), sorted(p.name for p in lib.iterdir())
 
 
-CASES = {"normal": normal, "open_inside": open_inside, "rename_twice": rename_twice, "edit_during": edit_during, "field_open": field_open, "title_typed": title_typed, "fails": fails, "top_taken": top_taken}
+CASES = {"normal": normal, "open_inside": open_inside, "rename_twice": rename_twice, "edit_during": edit_during, "field_open": field_open, "title_typed": title_typed, "fails": fails, "move_dialog": move_dialog, "move_fails": move_fails, "top_taken": top_taken}
 failed = []
 for name in sys.argv[1:] or CASES:
     try:

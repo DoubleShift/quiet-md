@@ -20,7 +20,9 @@ use gpui::*;
 use std::{collections::VecDeque, time::Duration};
 
 #[derive(Clone)]
-pub(crate) struct PendingMove { pub id: String, pub parent: Option<String>, pub before: Option<String>, pub history: u64 }
+pub(crate) struct PendingMove { pub id: String, pub parent: Option<String>, pub before: Option<String>, pub history: u64,
+    /// One of several pages moved together (移动到), under one record of the file history.
+    pub joined: bool }
 
 #[derive(Clone)]
 pub(crate) struct PendingRename {
@@ -60,6 +62,7 @@ pub(crate) struct TreeWrites {
 /// What a writer brings back from the background.
 struct Written { result: anyhow::Result<()>, entries: Option<Vec<Entry>>, changes: Vec<FileDelta>, writer: Store, warnings: Vec<String> }
 
+fn move_failed(e: &anyhow::Error) -> String { crate::localized_format!("移动失败：{}", "Could not move document: {}", crate::settings::diagnostic(&e.to_string())) }
 fn rename_failed(e: &anyhow::Error) -> String { crate::localized_format!("重命名失败：{}", "Could not rename: {}", crate::settings::diagnostic(&e.to_string())) }
 fn name_not_followed(e: &anyhow::Error) -> String { crate::localized_format!("未能按标题重命名文件：{}", "Could not rename the file after its title: {}", crate::settings::diagnostic(&e.to_string())) }
 
@@ -113,6 +116,8 @@ impl Workspace {
         }
         self.tree_writes.pending.push_back(write);
         self.save_next_tree_write(cx);
+        // A 数据表 writes its file as it is edited, by path: the open one's move lands before the next cell does.
+        if self.editor.as_ref().is_some_and(|e| e.read(cx).table_file) && self.current.clone().is_some_and(|c| self.awaits_tree_write(&c)) { self.settle_tree_writes(cx); }
     }
 
     /// 重命名 from the sidebar: the row, the pages showing it and the open
@@ -127,8 +132,6 @@ impl Workspace {
         rename.gesture = Some(RenameGesture { row: row.to_string(), was: old.title.trim().to_string(), history });
         if self.current.as_deref() == Some(id) && let Some(ed) = &self.editor { ed.update(cx, |e, cx| e.receive_file_title(title, cx)); }
         self.queue_tree_write(TreeWrite::Rename(rename), cx);
-        // A 数据表 writes its file as it is edited, by path: the open one's move lands before the next cell does.
-        if self.editor.as_ref().is_some_and(|e| e.read(cx).table_file) && self.current.clone().is_some_and(|c| self.awaits_tree_write(&c)) { self.settle_tree_writes(cx); }
         self.sort();
     }
 
@@ -191,10 +194,13 @@ impl Workspace {
             #[cfg(feature = "devtools")]
             if let Some(ms) = std::env::var("FDL_TREE_WRITE_DELAY").ok().and_then(|v| v.parse().ok()) { std::thread::sleep(Duration::from_millis(ms)); }
             let journal = writer.track_file_changes();
+            let at = |w: &Store| w.file_path(job.id()).or_else(|| w.folder_dir(Some(job.id())));
+            let was = at(&writer);
             let result = place.and_then(|(parent, before)| Self::write_tree(&mut writer, &job, parent.as_deref(), before.as_deref()));
-            // A rename's rows come from what it left (paths, a name numbered because it was
-            // taken, links rewritten); a failed write's, to put the rows back.
-            let entries = (result.is_err() || matches!(job, TreeWrite::Rename(_))).then(|| writer.list());
+            // Rows from what the write left where files moved (paths, a name numbered because
+            // it was taken, links rewritten), for the library to take over; a failed write's,
+            // to put the rows back. A new place among the same siblings moves nothing.
+            let entries = (result.is_err() || matches!(job, TreeWrite::Rename(_)) || at(&writer) != was).then(|| writer.list());
             let warnings = writer.take_warnings();
             Written { result, entries, changes: journal.take(), writer, warnings }
         });
@@ -218,7 +224,11 @@ impl Workspace {
         let Written { result, entries, changes, writer, warnings } = done;
         for warning in warnings { crate::logging::write(&warning); }
         match (&write, result) {
-            (TreeWrite::Move(m), Ok(())) => self.confirm_tree_history(m.history, changes),
+            (TreeWrite::Move(m), Ok(())) => {
+                self.tree_move_written(m, changes);
+                // Into another folder: the library takes over the writer, so paths are right from here on.
+                if let Some(entries) = entries { self.entries.set(self.store.adopt_written(key, n, writer, entries)); self.sort(); self.sync_sub_pages(cx); }
+            }
             (TreeWrite::Move(m), Err(e)) => {
                 self.forget_file_change(m.history);
                 // Restore only hierarchy, preserving edits made while the write was pending.
@@ -233,7 +243,7 @@ impl Workspace {
                 }
                 self.reapply_pending_tree_writes();
                 self.sync_sub_pages(cx);
-                self.show_toast_kind(ToastKind::Error, &e.to_string(), cx);
+                self.show_toast_kind(ToastKind::Error, &move_failed(&e), cx);
             }
             (TreeWrite::Rename(r), result) => {
                 // The library takes over what the writer read and wrote, so paths are right from here on.
@@ -265,6 +275,11 @@ impl Workspace {
         }
     }
 
+    /// What a move wrote takes the place of what the rows recorded for it.
+    fn tree_move_written(&mut self, m: &PendingMove, changes: Vec<FileDelta>) {
+        if m.joined { self.join_tree_history(m.history, changes) } else { self.confirm_tree_history(m.history, changes) }
+    }
+
     /// A 重命名 that failed: the open document shows its old title again (the rows are the library's already).
     fn rename_undone(&mut self, r: &PendingRename, g: &RenameGesture, cx: &mut Context<Self>) {
         if self.current.as_deref() == Some(r.id.as_str()) && let Some(ed) = &self.editor { ed.update(cx, |e, cx| e.receive_file_title(&g.was, cx)); }
@@ -284,13 +299,14 @@ impl Workspace {
             let changes = journal.take();
             match (result, &write) {
                 // Nothing recorded: the writer on its way had made it; what the rows recorded stands.
-                (Ok(()), _) => if !changes.is_empty() { self.confirm_tree_history(write.history(), changes); },
+                (Ok(()), TreeWrite::Move(m)) => if !changes.is_empty() { self.tree_move_written(m, changes); },
+                (Ok(()), TreeWrite::Rename(_)) => if !changes.is_empty() { self.confirm_tree_history(write.history(), changes); },
                 (Err(e), TreeWrite::Rename(r)) => {
                     self.forget_file_change(write.history());
                     if let Some(g) = &r.gesture { self.rename_undone(r, g, cx); }
                     self.show_toast_kind(ToastKind::Error, &if r.gesture.is_some() { rename_failed(&e) } else { name_not_followed(&e) }, cx);
                 }
-                (Err(e), TreeWrite::Move(_)) => { self.forget_file_change(write.history()); self.show_toast_kind(ToastKind::Error, &e.to_string(), cx); }
+                (Err(e), TreeWrite::Move(_)) => { self.forget_file_change(write.history()); self.show_toast_kind(ToastKind::Error, &move_failed(&e), cx); }
             }
         }
         self.entries.set(self.store.list());

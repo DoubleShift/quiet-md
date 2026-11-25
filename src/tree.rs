@@ -255,32 +255,27 @@ impl Workspace {
 
     /// 移动到: hang each page under `target` (`None`: top level), skipping
     /// moves into its own subtree.
+    /// Shown at once and written off the window's thread, as a drop in the
+    /// sidebar is (`tree_writes.rs`): moving a folder rewrites the links across
+    /// its edge. One that fails goes back where it was, with a toast saying why.
     pub(crate) fn move_docs(&mut self, ids: &[String], target: Option<String>, cx: &mut Context<Self>) {
-        let file_before = self.store.track_file_changes();
-        let mut failed = false;
+        use crate::tree_writes::{PendingMove, TreeWrite};
         let ids: Vec<String> = ids.iter().map(|id| self.row_of(id)).collect();
-        for id in &ids {
-            let inside = target.as_ref().is_some_and(|t| Tree::new(&self.entries).subtree(id).contains(t));
-            if inside {
-                continue;
-            }
-            match self.store.set_parent(id, target.as_deref()) {
-                Ok(meta) => {
-                    if let Some(e) = self.entries.edit().iter_mut().find(|e| &e.id == id) {
-                        e.meta = meta;
-                    }
-                }
-                Err(e) => { failed = true; self.status = crate::app::SaveStatus::Failed(crate::localized_format!("移动失败：{}", "Could not move document: {}", crate::settings::diagnostic(&e.to_string()))); },
-            }
-        }
+        let ids: Vec<String> = ids.into_iter().filter(|id| !target.as_ref().is_some_and(|t| Tree::new(&self.entries).subtree(id).contains(t))).collect();
+        if ids.is_empty() { return; }
+        let file_before = self.entries.to_vec();
+        let mut moves: Vec<PendingMove> = ids.iter().map(|id| PendingMove { id: id.clone(), parent: target.clone(), before: None, history: 0, joined: ids.len() > 1 }).collect();
+        for m in &moves { self.apply_tree_move(m); }
+        // One step of the file history for all of them.
+        let history = self.remember_tree_move(file_before, crate::settings::tr("移动", "Move"));
+        for mut m in moves.drain(..) { m.history = history; self.queue_tree_write(TreeWrite::Move(m), cx); }
         if let Some(t) = &target {
             self.expanded.insert(t.clone());
             self.reveal_in_tree(&t.clone());
         }
         self.sync_sub_pages(cx);
-        self.entries.set(self.store.list()); self.sort();
-        if !failed { self.show_toast(crate::settings::text("移动成功"), cx); }
-        self.remember_files(file_before, crate::settings::tr("移动", "Move"));
+        self.sort();
+        self.show_toast(crate::settings::text("移动成功"), cx);
         cx.notify();
     }
 

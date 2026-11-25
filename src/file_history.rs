@@ -42,6 +42,17 @@ impl Workspace {
         }
     }
 
+    /// `confirm_tree_history` for one of several moves under one record (移动到): what
+    /// this one wrote replaces what the rows recorded for the same pages; the rest stands.
+    pub(crate) fn join_tree_history(&mut self, token: u64, changes: Vec<FileDelta>) {
+        let Some(mut merged) = self.file_history.undo.iter().chain(self.file_history.redo.iter()).find(|r| r.token == token).map(|r| r.changes.clone()) else { return };
+        for delta in changes {
+            match merged.iter_mut().find(|c| c.id == delta.id) { Some(c) => c.after = delta.after, None => merged.push(delta) }
+        }
+        let entries = self.file_record_entries(&merged);
+        if let Some(record) = self.file_history.undo.iter_mut().chain(self.file_history.redo.iter_mut()).find(|r| r.token == token) { record.changes = merged; record.entries = entries; }
+    }
+
     pub(crate) fn remember_tree_move(&mut self, before: Vec<Entry>, label: &'static str) -> u64 {
         let old: HashMap<_, _> = before.into_iter().map(|e| (e.id.clone(), e)).collect();
         let new: HashMap<_, _> = self.entries.iter().map(|e| (e.id.clone(), e.clone())).collect();

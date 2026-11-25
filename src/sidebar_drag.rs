@@ -353,7 +353,7 @@ impl Workspace {
         let reorder = !cancel && sorted && held.as_ref() == Some(&d.parent);
         let cancel = cancel || reorder;
         let before = rows.get(d.index).filter(|r| r.entry.meta.parent == d.parent).map(|r| r.entry.id.clone());
-        let mut movement = PendingMove { id: d.id.clone(), parent: d.parent.clone(), before, history: 0 };
+        let mut movement = PendingMove { id: d.id.clone(), parent: d.parent.clone(), before, history: 0, joined: false };
         let depth = if cancel { d.original_depth } else { d.depth };
         let index = if cancel { d.original_index } else { d.index };
         // Drop the overlay immediately: normal row color and hit testing resume this frame.
@@ -390,7 +390,7 @@ impl Workspace {
 
     /// Put `id` last in `folder` (a drop on 主页's folder card), saved like a sidebar drop.
     pub(crate) fn move_into_folder(&mut self, id: &str, folder: &str, cx: &mut Context<Self>) {
-        let mut movement = PendingMove { id: id.to_string(), parent: Some(folder.to_string()), before: None, history: 0 };
+        let mut movement = PendingMove { id: id.to_string(), parent: Some(folder.to_string()), before: None, history: 0, joined: false };
         let file_before = self.entries.to_vec();
         self.apply_tree_move(&movement);
         movement.history = self.remember_tree_move(file_before, crate::settings::tr("拖拽移动", "Drag move"));
