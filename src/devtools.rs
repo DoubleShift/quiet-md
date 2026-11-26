@@ -9,7 +9,7 @@
 //!   activate (make the window key; takes focus) | quit |
 //!   pick <path>[|<path>...] (answers the next file dialog instead of showing it)
 //!   row <title> | rrow <title> | hoverrow <title> (click, right-click or hover the sidebar row
-//!   with that title: 主页, 我的文档, a document or folder, 设置, a page in 设置's list…, or
+//!   with that title: 我的文档, a document or folder, 设置, a page in 设置's list…, or
 //!   the menu item (`design::MenuItem`: the + menu's 画板, a board's right-click menu); the
 //!   topmost if several; no row shown by that title ends the run with exit code 3) |
 //!   anchor <name> (click the middle of a tracked control, e.g. `create-sidebar`: 我的文档's "+",

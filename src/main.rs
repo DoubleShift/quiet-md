@@ -248,7 +248,7 @@ fn main() {
     let root = store::Store::legacy_dir();
     let fixed = std::env::var_os("QUIET_MD_HOME").is_some();
     logging::write(&format!("library {}", root.display()));
-    // 主页: a folders.json (even an empty one: every folder removed) or the
+    // The top-level folders: a folders.json (even an empty one: every folder removed) or the
     // library builds before it used means this computer has been here
     // before, and can show 更新日志.
     let existed = (!fixed && fdl_core::vfs::PathExt::fs_exists(fdl_core::home::Home::list_file().as_path())) || guides::seeded(&root).unwrap_or(false);
