@@ -168,6 +168,15 @@ pub struct Preferences {
     pub quick_note_folder: String,
     /// 打字机模式 (typewriter.rs): the caret's line stays in the middle of the page.
     pub typewriter: bool,
+    /// Notion 同步 (crates/core/src/notion): the integration token, empty when off.
+    #[serde(default)]
+    pub notion_token: String,
+    /// Notion 同步的父页面：page id or full page URL; empty when off.
+    #[serde(default)]
+    pub notion_parent: String,
+    /// Notion 同步代理 (e.g. "socks5://127.0.0.1:10810"); empty for a direct connection.
+    #[serde(default)]
+    pub notion_proxy: String,
 }
 
 /// A week between asks to move the library to real folders.
@@ -206,7 +215,7 @@ fn system_lang() -> Lang {
 impl Default for Preferences {
     fn default() -> Self {
         let lang = system_lang();
-        Preferences { theme: String::new(), feishu: true, english: lang != Lang::Zh, language: lang.code().into(), remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new(), motion: String::new(), new_default: String::new(), last_new: String::new(), search_engine: String::new(), start_folder: false, browser: String::new(), opaque_window: false, hide_outline: false, ui_font: String::new(), ui_family: String::new(), doc_family: String::new(), doc_size: String::new(), migrate_later: 0, find_regex: false, backspace_to_title: true, cjk_spacing: false, font_favorites: vec![], recent_doc_fonts: vec![], recent_ui_fonts: vec![], quick_note_folder: String::new(), typewriter: false }
+        Preferences { theme: String::new(), feishu: true, english: lang != Lang::Zh, language: lang.code().into(), remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new(), motion: String::new(), new_default: String::new(), last_new: String::new(), search_engine: String::new(), start_folder: false, browser: String::new(), opaque_window: false, hide_outline: false, ui_font: String::new(), ui_family: String::new(), doc_family: String::new(), doc_size: String::new(), migrate_later: 0, find_regex: false, backspace_to_title: true, cjk_spacing: false, font_favorites: vec![], recent_doc_fonts: vec![], recent_ui_fonts: vec![], quick_note_folder: String::new(), typewriter: false, notion_token: String::new(), notion_parent: String::new(), notion_proxy: String::new() }
     }
 }
 

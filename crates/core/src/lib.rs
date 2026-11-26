@@ -12,6 +12,7 @@ pub mod emoji;
 pub mod lang;
 pub mod markdown;
 pub mod merge;
+pub mod notion;
 pub mod merge_file;
 pub mod model;
 pub mod palette;
