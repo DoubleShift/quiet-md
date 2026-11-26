@@ -105,50 +105,82 @@ impl Workspace {
         self.store.load(id).ok()
     }
 
-    /// 创建副本: "<标题> 副本", opened right away.
+    /// 创建副本: "<标题> 副本", opened once it is written.
     pub fn duplicate_doc(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let file_before = self.store.track_file_changes();
         self.close_doc_menu(cx);
         self.row_menu = None;
-        if let Some(new) = self.copy_doc(id, cx) {
-            self.entries.set(self.store.list());
-            self.sort();
-            self.open(&new, window, cx);
-        }
-        self.remember_files(file_before, crate::settings::tr("创建副本", "Duplicate"));
-        cx.notify();
+        self.copy_docs(&[id.to_string()], true, crate::settings::tr("创建副本", "Duplicate"), window, cx);
     }
 
-    /// Write "<标题> 副本" of `id` to the library; the caller refreshes the list.
-    pub(crate) fn copy_doc(&mut self, id: &str, cx: &mut Context<Self>) -> Option<String> {
-        if self.entries.iter().any(|e| e.id == id && e.meta.folder.is_some()) { return self.copy_folder(id, cx); }
-        let mut doc = self.doc_of(id, cx)?;
-        let title = crate::localized_format!("{} 副本", "{} copy", display_title(&doc.title.text));
-        doc.title = crate::model::RichText::plain(title);
-        let width = self.entries.iter().find(|e| e.id == id).map(|e| e.meta.width).unwrap_or_default();
-        // A Markdown file copies as Markdown, into the library even from a 本机文件.
-        // A 画板 copies as a 画板.
-        let board = self.entries.iter().find(|e| e.id == id).filter(|e| e.meta.kind == crate::store::DocKind::Board)
-            .map(|_| doc.blocks.iter().find_map(|b| match &b.kind { crate::model::BlockKind::Board(bd) => Some(bd.clone()), _ => None }).unwrap_or_default());
-        let table = self.entries.iter().any(|e| e.id == id && e.meta.kind == crate::store::DocKind::Table);
-        if table { crate::table::flush_all(cx); }
-        let made = if table { self.store.copy_table(id, &doc.title.text) }
-            else if let Some(board) = board { self.store.create_board_in(&doc.title.text, &board, None) }
-            else if self.store.is_markdown(id) { let front = self.store.front_matter_of(id); self.store.create_markdown(&doc, &front) } else { self.store.create_from(&doc) };
-        match made {
-            Ok(new) => {
-                let _ = self.store.set_width(&new, width);
-                // A document with children is copied alone, beside its folder.
-                let row = self.row_of(id);
-                let parent = self.entries.iter().find(|e| e.id == row).filter(|e| !e.meta.local()).and_then(|e| e.meta.parent.clone());
-                if let Some(parent) = parent { let _ = self.store.set_parent(&new, Some(&parent)); }
-                Some(new)
-            }
-            Err(e) => {
-                self.status = crate::app::SaveStatus::Failed(crate::localized_format!("创建副本失败：{}", "Could not duplicate document: {}", crate::settings::diagnostic(&e.to_string())));
-                None
+    /// 创建副本 of each of `ids` ("<标题> 副本", beside it; a folder with
+    /// everything in it, `Store::duplicate`), written off the window's thread
+    /// as 删除 is: the copies show when they are on disk, from the list read
+    /// back, one step of 撤销 (`label`) for them all. 上层优先: what a picked
+    /// folder holds is copied once, with it. `open`: the copy is opened then.
+    pub(crate) fn copy_docs(&mut self, ids: &[String], open: bool, label: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.store.file_task_busy() || self.file_history.busy { return; }
+        let later = ids.to_vec();
+        if self.after_tree_writes(move |w, window, cx| w.copy_docs(&later, open, label, window, cx)) { return; }
+        // What is copied is what is on disk: the open document and the 数据表 are written first.
+        crate::table::flush_all(cx);
+        let retry = ids.to_vec();
+        if !self.save_before(cx, move |w, window, cx| w.copy_docs(&retry, open, label, window, cx)) { return; }
+        let ids = crate::tree::Tree::new(&self.entries).outermost(ids);
+        let current = self.current.clone().zip(self.editor.as_ref().map(|e| e.read(cx).core.doc.title.text.clone()));
+        let mut writers: Vec<(String, crate::store::Store, Vec<(String, String)>)> = vec![];
+        for id in ids.iter().filter(|id| crate::shared_store::top_of_row(id).is_none()) {
+            // the editor's title for the open document: the list may not have caught up with it
+            let title = match &current { Some((c, t)) if c == id => t.clone(), _ => self.entries.iter().find(|e| &e.id == id).map(|e| e.title.clone()).unwrap_or_default() };
+            let job = (id.clone(), crate::localized_format!("{} 副本", "{} copy", display_title(&title)));
+            let Some(key) = self.store.top_of(id) else { continue };
+            match writers.iter_mut().find(|(k, _, _)| *k == key) {
+                Some((_, _, v)) => v.push(job),
+                None => if let Some(w) = self.store.top_writer(&key) { writers.push((key, w, vec![job])); },
             }
         }
+        if writers.is_empty() { return; }
+        let Some(task_guard) = self.store.begin_file_task() else { return };
+        let task = cx.background_executor().spawn(async move {
+            let (mut made, mut errors, mut changes, mut listed) = (vec![], vec![], vec![], vec![]);
+            for (key, mut writer, jobs) in writers {
+                let journal = writer.track_file_changes();
+                for (id, title) in jobs {
+                    match writer.duplicate(&id, &title) {
+                        Ok(new) => made.push(new),
+                        Err(e) => errors.push(crate::localized_format!("创建副本失败：{}", "Could not duplicate document: {}", crate::settings::diagnostic(&e.to_string()))),
+                    }
+                }
+                errors.extend(writer.take_warnings().iter().map(|s| crate::settings::diagnostic(s)));
+                listed.push((key, writer.list()));
+                changes.extend(journal.take());
+            }
+            (made, errors, changes, listed)
+        });
+        self.batch = None;
+        self.row_menu = None;
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let _task_guard = task_guard;
+            let (made, errors, changes, listed) = task.await;
+            let _ = this.update_in(cx, |w, window, cx| {
+                let mut entries = None;
+                for (key, list) in listed { entries = Some(w.store.merge_entries(&key, list)); }
+                if let Some(entries) = entries {
+                    w.sync_peers(cx, &entries, None);
+                    w.entries.set(entries);
+                    w.sort();
+                }
+                w.remember_file_changes(changes, label);
+                w.sync_sub_pages(cx);
+                if !errors.is_empty() {
+                    let msg = errors.join("；");
+                    w.show_toast_kind(crate::ui::ToastKind::Error, &msg, cx);
+                    w.status = crate::app::SaveStatus::Failed(msg);
+                }
+                if open && let [new] = &made[..] { w.open(new, window, cx); }
+                cx.notify();
+            });
+        }).detach();
     }
 
     /// 查找和替换 (also ⌘F / ⌘⇧H).

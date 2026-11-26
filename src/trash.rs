@@ -447,7 +447,13 @@ impl Workspace {
         let (title, body, action, danger) = match c {
             Confirm::Delete { ids, batch } => (
                 if *batch || ids.len() > 1 { crate::localized_count!(ids.len(), "是否删除所选的 {} 项？", "Delete the {} selected item?", "Delete the {} selected items?", ids.len()) } else { crate::localized_format!("是否删除： {}？", "Delete {}?", title_of(&ids[0])) },
-                crate::settings::text("删除的内容将进入回收站，30 天后自动彻底删除").to_string(),
+                {
+                    // A folder goes with what is in it: say how much (备忘录's 「其中的 N 条笔记也会删除」).
+                    let folder = ids.iter().any(|id| self.entries.iter().any(|e| &e.id == id && e.meta.folder.is_some() && e.note.is_none()));
+                    let m = crate::tree::Tree::new(&self.entries).docs_inside(ids);
+                    if folder || m > 0 { crate::localized_count!(m, "包括其中的 {} 篇文档。删除的内容将进入回收站，30 天后自动彻底删除", "This includes the {} document inside. Deleted items will be moved to Trash and permanently deleted after 30 days.", "This includes the {} documents inside. Deleted items will be moved to Trash and permanently deleted after 30 days.", m) }
+                    else { crate::settings::text("删除的内容将进入回收站，30 天后自动彻底删除").to_string() }
+                },
                 crate::settings::text("删除"),
                 true,
             ),

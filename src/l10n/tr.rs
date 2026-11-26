@@ -1486,4 +1486,6 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("添加…", "Ekle…"),
     ("无法添加文件夹：{}", "Klasör eklenemedi: {}"),
     ("电脑上的文件夹原位使用，显示在侧栏里；要新的文件夹，在选择窗口里新建。", "Bilgisayarınızdaki klasör yerinde kullanılır ve kenar çubuğunda görünür; yenisi için seçim penceresinde oluşturun."),
+    ("不能移到所选文件夹里面", "Seçili bir klasörün içine taşınamaz"),
+    ("包括其中的 {} 篇文档。删除的内容将进入回收站，30 天后自动彻底删除", "İçindeki {} belge de dahildir. Silinen öğeler Çöp Kutusuna taşınır ve 30 gün sonra kalıcı olarak silinir."),
 ];

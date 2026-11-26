@@ -530,8 +530,9 @@ fn entry_icon(e: &Entry) -> AnyElement {
 
 impl Workspace {
     /// In 批量管理 a click checks or unchecks; otherwise it opens.
-    fn home_click(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn home_click(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.batch.is_none() { return self.open(id, window, cx) }
+        if !self.in_batch_scope(id) { return }
         if !self.toggle_check(id) {
             self.show_toast_kind(crate::ui::ToastKind::Error, &crate::localized_format!("一次最多选择 {} 项", "Select up to {} items at a time", crate::sidebar::BATCH_LIMIT), cx);
         }
@@ -539,9 +540,9 @@ impl Workspace {
     }
 
     /// The row's / card's checkbox while 批量管理 is on.
-    fn home_check(&self, e: &Entry) -> Option<crate::design::Checkbox> {
+    pub(crate) fn home_check(&self, e: &Entry) -> Option<crate::design::Checkbox> {
         use crate::sidebar::{BATCH_LIMIT, Check, checkbox};
-        let sel = self.batch.as_ref()?;
+        let sel = self.batch.as_ref().filter(|_| self.in_batch_scope(&e.id))?;
         let on = sel.contains(&e.id);
         Some(checkbox(if on { Check::On } else { Check::Off }, !on && sel.len() >= BATCH_LIMIT))
     }
@@ -805,6 +806,7 @@ impl Workspace {
             let key = SharedString::from(format!("home-row-{}", e.id));
             let mut row = div()
                 .id(key.clone())
+                .relative().children(crate::devtools::anchor_probe(format!("list:{}", display_title(&e.title))))
                 .h(px(56.))
                 .flex()
                 .items_center()
@@ -947,7 +949,7 @@ impl Workspace {
                 div()
                     .id(SharedString::from(format!("home-card-{}", e.id)))
                     .when(check.is_none(), |d| d.on_mouse_down(MouseButton::Left, cx.listener(move |w, ev: &MouseDownEvent, _, cx| w.arm_home_drag(&arm, ev.position, cx))))
-                    .child(self.record_home_card(&e.id))
+                    .child(self.record_home_card(&e.id)).children(crate::devtools::anchor_probe(format!("card:{}", display_title(&e.title))))
                     .w_full().min_w_0().h(px(card_h)).relative().group("home-card")
                     .flex_none()
                     // A loose sheet on the home page: squircle corners, a 0.5pt

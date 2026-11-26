@@ -74,10 +74,10 @@ impl Workspace {
                 .on_click(cx.listener(move |w, _, _, cx| { w.batch = Some(if all { vec![] } else { ids.clone() }); cx.notify(); })))
             .child(div().ml(px(8.)).text_size(px(15.)).line_height(px(24.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text()).whitespace_nowrap()
                 .child(crate::localized_format!("已选 {n} 项", "Selected: {n}")));
-        let act = |id: &'static str, ic: &'static str, label: &'static str| Button::ghost(id).icon(ic).no_drag().disabled(n == 0)
+        let act = |id: &'static str, ic: &'static str, label: &'static str| Button::ghost(id).icon(ic).no_drag().disabled(n == 0).relative().children(crate::devtools::anchor_probe(id))
             .when(!compact, |d| d.label(crate::settings::label(label))).when(compact, |d| d.size(px(crate::app::HEADER_ACTIONS_H)).tip(label, None));
         let right = div().flex_none().flex().items_center().gap(px(2.))
-            .child(act("home-batch-copy", "copy", crate::settings::text("创建副本")).when(n > 0, |d| d.on_click(cx.listener(|w, _, _, cx| w.batch_copy(cx)))))
+            .child(act("home-batch-copy", "copy", crate::settings::text("创建副本")).when(n > 0, |d| d.on_click(cx.listener(|w, _, window, cx| w.batch_copy(window, cx)))))
             .child(act("home-batch-move", "folder-input", crate::settings::text("移动到")).when(n > 0, |d| d.on_click(cx.listener(|w, _, window, cx| w.batch_move(window, cx)))))
             .child(act("home-batch-delete", "bin", crate::settings::text("删除")).when(n > 0, |d| d.on_click(cx.listener(|w, _, _, cx| w.ask_batch_delete(cx)))))
             .child(Button::secondary("home-batch-exit").sized(ButtonSize::Sm).no_drag().ml(px(6.)).label(tr("完成", "Done")).relative().child(self.home.track("home-batch-exit"))

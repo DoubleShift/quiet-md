@@ -196,7 +196,7 @@ impl Workspace {
             .when(self.batch.is_some(), |d| {
                 d.child(
                     div().h(px(46.)).mx(px(SB_X + 6. + 10. - 18.)).flex().items_center().gap(px(4.))
-                        .child(footer_btn("bt-copy", "copy", crate::settings::text("创建副本"), some, false).on_click(cx.listener(|w, _, _, cx| w.batch_copy(cx))))
+                        .child(footer_btn("bt-copy", "copy", crate::settings::text("创建副本"), some, false).on_click(cx.listener(|w, _, window, cx| w.batch_copy(window, cx))))
                         .child(footer_btn("bt-move", "folder-input", crate::settings::text("移动到"), some, false).on_click(cx.listener(|w, _, window, cx| w.batch_move(window, cx))))
                         .child(footer_btn("bt-delete", "bin", crate::settings::text("删除"), some, false).on_click(cx.listener(|w, _, _, cx| w.ask_batch_delete(cx)))),
                 )
@@ -304,7 +304,8 @@ impl Workspace {
         let row = div().h(px(if idx == 1 { LIBRARY_H } else { SECTION_H })).pl(px(4.)).pt(px(SECTION_TOP)).flex().items_center().group(group.clone());
         if let (1, Some(sel)) = (idx, self.batch.as_ref()) {
             let n = sel.len();
-            let scope: Vec<String> = self.entries.iter().filter(|e| self.in_batch_scope(&e.id)).take(BATCH_LIMIT).map(|e| e.id.clone()).collect();
+            // the tree's rows, in its order: a folder's 正文 is its row, a 本机文件 is not in it
+            let scope: Vec<String> = crate::tree::Tree::new(&self.entries).rows(|_| true).into_iter().filter(|(e, _)| self.in_batch_scope(&e.id)).take(BATCH_LIMIT).map(|(e, _)| e.id.clone()).collect();
             let all = n > 0 && n >= scope.len();
             return row
                 .child(
@@ -384,28 +385,16 @@ impl Workspace {
         true
     }
 
-    /// The checked docs, in list order.
+    /// The checked rows, in list order.
     fn checked(&self) -> Vec<String> {
         let Some(sel) = &self.batch else { return vec![] };
         self.entries.iter().filter(|e| sel.contains(&e.id)).map(|e| e.id.clone()).collect()
     }
 
-    /// 批量创建副本: a "… 副本" of each checked doc; leaves 批量操作.
-    pub(crate) fn batch_copy(&mut self, cx: &mut Context<Self>) {
-        let file_before = self.store.track_file_changes();
+    /// 批量创建副本: a "… 副本" of each checked row, folders with everything in them; leaves 批量操作.
+    pub(crate) fn batch_copy(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let ids = self.checked();
-        if ids.is_empty() {
-            return;
-        }
-        for id in &ids {
-            self.copy_doc(id, cx);
-        }
-        self.entries.set(self.store.list());
-        self.sort();
-        self.batch = None;
-        self.row_menu = None;
-        self.remember_files(file_before, crate::settings::tr("批量创建副本", "Duplicate selection"));
-        cx.notify();
+        if !ids.is_empty() { self.copy_docs(&ids, false, crate::settings::tr("批量创建副本", "Duplicate selection"), window, cx); }
     }
 
     pub(crate) fn batch_move(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -718,7 +707,7 @@ impl Workspace {
                     cx.notify();
                 }))
                 .child(MenuLabel::new(crate::localized_format!("已选 {n} 项", "Selected: {n}")))
-                .child(item("bm-copy", "copy", crate::settings::text("创建副本")).on_click(cx.listener(|w, _, _, cx| w.batch_copy(cx))))
+                .child(item("bm-copy", "copy", crate::settings::text("创建副本")).on_click(cx.listener(|w, _, window, cx| w.batch_copy(window, cx))))
                 .child(item("bm-move", "folder-input", crate::settings::text("移动到")).on_click(cx.listener(|w, _, window, cx| w.batch_move(window, cx))))
                 .child(item("bm-delete", "bin", crate::settings::text("删除")).on_click(cx.listener(|w, _, _, cx| w.ask_batch_delete(cx))));
             return vec![

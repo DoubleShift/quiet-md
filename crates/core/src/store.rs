@@ -3061,19 +3061,23 @@ impl Store {
         Ok(id)
     }
 
-    /// 创建副本 of a 数据表: its file copied under `title`, beside nothing in particular (the caller places it).
+    /// 创建副本 of a 数据表 (`duplicate`): its file copied under `title` into folder `parent`.
     #[cfg(not(target_family = "wasm"))]
-    pub fn copy_table(&mut self, src: &str, title: &str) -> Result<String> {
+    pub(super) fn copy_table_in(&mut self, src: &str, title: &str, parent: Option<&str>) -> Result<String> {
         anyhow::ensure!(!self.flat && self.kind(src) == DocKind::Table, "不是数据表");
         let id = uuid::Uuid::new_v4().to_string();
         let lock = self.begin_write()?;
+        self.validate_folder(None, parent)?;
         let t = now();
-        let rel = self.free_name("", &file_name_for(title), Some(DocKind::Table.ext(false)), None);
+        let dir = self.folder_rel(parent);
+        let rel = join_rel(&dir, &self.free_name(&dir, &file_name_for(title), Some(DocKind::Table.ext(false)), None));
         let from = self.path(src);
         self.index.insert(id.clone(), Meta { created: t, modified: t, opened: t, rel, ..Default::default() });
         derive_tree(&mut self.index);
         if let Err(e) = crate::vfs::copy(&from, self.path(&id)).map_err(anyhow::Error::from).and_then(|_| self.save_index()) { self.index.remove(&id); return Err(e); }
+        self.record_file_change(&id, None);
         drop(lock);
+        self.place_new(&id, parent)?;
         Ok(id)
     }
 
@@ -7811,4 +7815,102 @@ mod tests {
         assert!(scanned >= 10 && mds >= 12, "{scanned} {mds}");
         let _ = crate::vfs::remove_dir_all(&outside);
     }
+
+    /// 创建副本 of a folder (批量管理): the folder with everything in it, each
+    /// page as its kind, links still pointing where they did; one undo takes
+    /// the whole copy away and leaves the original as it was.
+    #[test]
+    fn duplicating_a_folder_copies_everything_in_it() {
+        let lib = Lib::new("dup-folder");
+        let mut s = lib.open();
+        let other = s.create_from(&doc("其他")).unwrap();
+        let f = s.create_folder("资料", None).unwrap();
+        let a = s.create_from_in(&linking("甲", &[(&other, "其他")]), Some(&f)).unwrap();
+        s.set_width(&a, PageWidth::Wide).unwrap();
+        s.create_markdown_in(&doc("笔记"), "---\ntags: [x]\n---\n", Some(&f)).unwrap();
+        s.create_board_in("草图", &crate::whiteboard::Board::default(), Some(&f)).unwrap();
+        s.create_table_in("书单", &crate::table::Base::blank(0), Some(&f)).unwrap();
+        let sub = s.create_folder("子夹", Some(&f)).unwrap();
+        s.create_from_in(&doc("乙"), Some(&sub)).unwrap();
+        let journal = s.track_file_changes();
+        let copy = s.duplicate(&f, "资料 副本").unwrap();
+        let changes = journal.take();
+        for rel in ["资料 副本/甲.xml", "资料 副本/笔记.md", "资料 副本/草图.excalidraw", "资料 副本/书单.sqlite", "资料 副本/子夹/乙.xml"] { assert!(s.abs(rel).fs_is_file(), "{rel}"); }
+        assert!(crate::vfs::read_to_string(s.abs("资料 副本/甲.xml")).unwrap().contains("href=\"../其他.xml\""));
+        assert!(crate::vfs::read_to_string(s.abs("资料 副本/笔记.md")).unwrap().starts_with("---\ntags: [x]"));
+        let list = s.list();
+        let inside = |p: &str| list.iter().filter(|e| e.meta.parent.as_deref() == Some(p)).count();
+        assert_eq!((inside(&copy), inside(&f)), (5, 5));
+        assert!(list.iter().any(|e| e.meta.parent.as_deref() == Some(&copy) && e.title == "甲" && e.meta.width == PageWidth::Wide));
+        assert_eq!(s.index[&copy].parent, None, "beside the original");
+        // 撤销: one step, the copy goes; the original stays.
+        s.apply_file_history(&changes, false).unwrap();
+        assert!(!s.abs("资料 副本").fs_exists() && !s.index.contains_key(&copy));
+        assert!(s.abs("资料/子夹/乙.xml").fs_is_file() && s.abs("资料/书单.sqlite").fs_is_file());
+        s.apply_file_history(&changes, true).unwrap();
+        assert!(s.abs("资料 副本/子夹/乙.xml").fs_is_file() && s.abs("资料 副本/书单.sqlite").fs_is_file());
+    }
+
+    /// A folder's 正文 follows the copy's name, so the copy is a document with
+    /// child pages too; the 正文 copied alone goes beside its folder.
+    #[test]
+    fn duplicating_a_page_with_children_keeps_its_shape() {
+        let lib = Lib::new("dup-note");
+        let mut s = lib.open();
+        let outer = s.create_folder("外", None).unwrap();
+        let plan = s.create_from_in(&doc("方案"), Some(&outer)).unwrap();
+        s.create_child(&plan, &doc("子页")).unwrap();
+        let folder = s.folder_of_note(&plan).unwrap();
+        let copy = s.duplicate(&folder, "方案 副本").unwrap();
+        assert!(s.abs("外/方案 副本/方案 副本.xml").fs_is_file() && s.abs("外/方案 副本/子页.xml").fs_is_file());
+        assert!(s.note_of(&copy).is_some());
+        let alone = s.duplicate(&plan, "方案 副本 2").unwrap();
+        assert_eq!(s.index[&alone].parent.as_deref(), Some(outer.as_str()), "beside its folder, not a child page of it");
+        assert!(s.abs("外/方案 副本 2.xml").fs_is_file());
+    }
+
+    /// 创建副本 runs on a background writer (`tree_writer`), as 删除 does: the
+    /// window's library reads the copies back, and its 撤销 takes them away.
+    #[test]
+    fn duplicating_runs_on_a_background_writer() {
+        let lib = Lib::new("dup-background");
+        let mut s = lib.open();
+        let f = s.create_folder("夹", None).unwrap();
+        for t in ["一", "二", "三"] { s.create_from_in(&doc(t), Some(&f)).unwrap(); }
+        let lone = s.create_from(&doc("单篇")).unwrap();
+        let mut writer = s.tree_writer();
+        let (made, changes) = std::thread::spawn(move || {
+            let journal = writer.track_file_changes();
+            let made: Vec<String> = [(&f, "夹 副本"), (&lone, "单篇 副本")].iter().map(|(id, t)| writer.duplicate(id, t).unwrap()).collect();
+            (made, journal.take())
+        }).join().unwrap();
+        let list = s.list();
+        assert!(made.iter().all(|id| list.iter().any(|e| &e.id == id)));
+        assert_eq!(list.iter().filter(|e| e.meta.parent.as_deref() == Some(made[0].as_str())).count(), 3);
+        assert_eq!(changes.len(), 5, "the folder, its three pages and the document");
+        s.apply_file_history(&changes, false).unwrap();
+        assert!(!s.abs("夹 副本").fs_exists() && !s.abs("单篇 副本.xml").fs_exists() && s.abs("夹/三.xml").fs_is_file());
+    }
+
+    /// 批量管理's 移动到 with folders: a folder never goes into itself or below
+    /// it; one moved carries its pages and their links along, and 撤销 puts it
+    /// all back.
+    #[test]
+    fn moving_folders_together_and_back() {
+        let lib = Lib::new("move-folders");
+        let mut s = lib.open();
+        let other = s.create_from(&doc("其他")).unwrap();
+        let (a, b) = (s.create_folder("甲", None).unwrap(), s.create_folder("乙", None).unwrap());
+        let inner = s.create_folder("内", Some(&a)).unwrap();
+        s.create_from_in(&linking("页", &[(&other, "其他")]), Some(&inner)).unwrap();
+        assert!(s.move_in_tree(&a, Some(&inner), None).is_err() && s.move_in_tree(&a, Some(&a), None).is_err());
+        let journal = s.track_file_changes();
+        s.move_in_tree(&a, Some(&b), None).unwrap();
+        let changes = journal.take();
+        assert!(crate::vfs::read_to_string(s.abs("乙/甲/内/页.xml")).unwrap().contains("href=\"../../../其他.xml\""));
+        s.apply_file_history(&changes, false).unwrap();
+        assert!(crate::vfs::read_to_string(s.abs("甲/内/页.xml")).unwrap().contains("href=\"../../其他.xml\""));
+        assert!(!s.abs("乙/甲").fs_exists());
+    }
+
 }

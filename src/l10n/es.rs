@@ -1475,4 +1475,6 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("添加…", "Añadir…"),
     ("无法添加文件夹：{}", "No se pudo añadir la carpeta: {}"),
     ("电脑上的文件夹原位使用，显示在侧栏里；要新的文件夹，在选择窗口里新建。", "Una carpeta de tu equipo se usa donde está y aparece en la barra lateral; para una nueva, créala en la ventana de selección."),
+    ("不能移到所选文件夹里面", "No se puede mover dentro de una carpeta seleccionada"),
+    ("包括其中的 {} 篇文档。删除的内容将进入回收站，30 天后自动彻底删除", "{|one:Incluye el documento que contiene.|other:Incluye los # documentos que contienen.} Los elementos eliminados irán a la papelera y se borrarán definitivamente al cabo de 30 días"),
 ];

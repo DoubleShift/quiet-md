@@ -1152,11 +1152,7 @@ impl Workspace {
         // trashed as one item that carries its subtree.
         let tree = crate::tree::Tree::new(&self.entries);
         let mut all: Vec<(String, Option<String>)> = vec![];
-        for id in ids {
-            let covered = self.ancestors(id).iter().any(|a| ids.contains(&a.id));
-            if covered {
-                continue;
-            }
+        for id in &tree.outermost(ids) {
             for d in tree.subtree(id) {
                 if !all.iter().any(|(x, _)| *x == d) {
                     let root = (d != *id).then(|| id.clone());

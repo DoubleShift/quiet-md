@@ -90,30 +90,6 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(crate) fn copy_folder(&mut self, id: &str, cx: &mut Context<Self>) -> Option<String> {
-        let ids = crate::tree::Tree::new(&self.entries).subtree(id);
-        let mut copied = std::collections::HashMap::<String, String>::new();
-        for key in ids {
-            let Some(entry) = self.entries.iter().find(|e| e.id == key).cloned() else { continue };
-            let parent = entry.meta.parent.as_ref().map(|p| copied.get(p).cloned().unwrap_or_else(|| p.clone()));
-            let result = if entry.meta.folder.is_some() {
-                let title = if key == id { crate::localized_format!("{} 副本", "{} copy", entry.title) } else { entry.title };
-                self.store.create_folder(&title, parent.as_deref())
-            } else {
-                self.store.load(&key).and_then(|doc| self.store.create_from(&doc)).and_then(|new| {
-                    self.store.set_parent(&new, parent.as_deref())?;
-                    self.store.set_width(&new, entry.meta.width)?;
-                    Ok(new)
-                })
-            };
-            match result {
-                Ok(new) => { copied.insert(key, new); }
-                Err(e) => { self.show_toast_kind(crate::ui::ToastKind::Error, &e.to_string(), cx); return None; }
-            }
-        }
-        copied.remove(id)
-    }
-
     pub(crate) fn creation_parent(&self) -> Option<String> {
         if self.view == View::Folder { self.folder_current.clone() }
         // Beside the open page; beside its folder when it is the folder's 正文 (#357).
