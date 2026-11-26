@@ -1873,6 +1873,11 @@ impl Workspace {
         let doc_open = self.doc_menu;
         div()
             .id("top-bar").relative()
+            // A phone: a tap on the bar puts the keyboard away, as a drag down the page does.
+            .when(compact, |d| d.on_mouse_down(MouseButton::Left, cx.listener(|w, _, window, cx| {
+                if let Some(e) = w.editor.clone() { e.update(cx, |e, cx| e.step_aside(window, cx)); }
+                window.dismiss_virtual_keyboard();
+            })))
             .h(px(HEADER_H))
             .flex_none()
             .flex()
