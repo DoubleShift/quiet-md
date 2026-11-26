@@ -14,8 +14,8 @@ fn main() {
     let action = args.first().map(String::as_str).unwrap_or("sync");
     let token = std::env::var("QUIET_NOTION_TOKEN").unwrap_or_default();
     let parent = std::env::var("QUIET_NOTION_PARENT").unwrap_or_default();
-    if token.is_empty() || parent.is_empty() {
-        eprintln!("需要 QUIET_NOTION_TOKEN 与 QUIET_NOTION_PARENT 环境变量");
+    if token.is_empty() {
+        eprintln!("需要 QUIET_NOTION_TOKEN 环境变量");
         std::process::exit(2);
     }
     let root = match args.get(1) {
@@ -25,9 +25,9 @@ fn main() {
     let proxy = std::env::var("QUIET_NOTION_PROXY").ok().map(|p| (p, String::new()));
     let client = notion::Client::new(&token, proxy.clone());
     let result = match action {
-        "push" => notion::push(&root, &client, &parent).map(|(c, u, f)| format!("推送 新建{c} 更新{u} 失败{}", f.len())),
-        "pull" => notion::pull(&root, &client, &parent).map(|(i, r, f)| format!("拉取 导入{i} 刷新{r} 失败{}", f.len())),
-        "sync" => notion::sync_dir_with(&root, &token, &parent, proxy),
+        "push" => notion::push(&root, &client, Some(&parent)).map(|(c, u, f)| format!("推送 新建{c} 更新{u} 失败{}", f.len())),
+        "pull" => notion::pull(&root, &client).map(|(i, r, f)| format!("拉取 导入{i} 刷新{r} 失败{}", f.len())),
+        "sync" => notion::sync_dir_with(&root, &token, Some(&parent), proxy),
         other => { eprintln!("未知操作 {other}：push | pull | sync"); std::process::exit(2); }
     };
     match result {

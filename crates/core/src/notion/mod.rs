@@ -21,6 +21,8 @@ const API: &str = "https://api.notion.com/v1";
 const VERSION: &str = "2022-06-28";
 /// How many blocks one append may carry (Notion's limit).
 const CHUNK: usize = 100;
+/// Notion Lite's wording for a new note with nowhere to go (its `syncNote`).
+const NEEDS_PARENT: &str = "新建笔记需要父页面：先同步 Notion 或在设置里填写";
 
 // ---- state
 
@@ -366,17 +368,14 @@ fn file_name_for(title: &str) -> String {
     if clean.is_empty() { "无标题.md".into() } else { format!("{clean}.md") }
 }
 
-/// Whether a page is under `parent` (Notion Lite's `parent.page_id` check).
-fn under_parent(page: &Value, parent: &str) -> bool {
-    page["parent"]["page_id"].as_str() == Some(parent)
-}
-
 /// Push: every `.md` under `root` up to Notion under `parent` (a page id, or a
 /// full page URL — the bare id is taken from it). A note not seen before gets
-/// a page; a note pushed before is rewritten when its file changed.
+/// a page; a note pushed before is rewritten when its file changed. `parent`
+/// is optional: like Notion Lite, a new note without one fails with a hint to
+/// sync first (which imports the pages to pick from).
 /// Returns (created, updated, failed).
-pub fn push<H: Http>(root: &Path, client: &Client<H>, parent: &str) -> Result<(usize, usize, Vec<String>)> {
-    let parent = page_id(parent);
+pub fn push<H: Http>(root: &Path, client: &Client<H>, parent: Option<&str>) -> Result<(usize, usize, Vec<String>)> {
+    let parent = parent.map(page_id).filter(|p| !p.is_empty());
     let mut state = State::load(root);
     let (mut created, mut updated) = (0, 0);
     let mut failed = vec![];
@@ -393,7 +392,11 @@ pub fn push<H: Http>(root: &Path, client: &Client<H>, parent: &str) -> Result<(u
                 client.rename_page(&m.page_id, &title)?;
                 client.update_page_content(&m.page_id, blocks).map(|_| m.page_id.clone())
             }
-            _ => client.create_page(&parent, &title, blocks),
+            _ if parent.is_none() => {
+                failed.push(format!("{rel}: {NEEDS_PARENT}"));
+                continue;
+            }
+            _ => client.create_page(parent.as_deref().unwrap(), &title, blocks),
         };
         match result {
             Ok(id) => {
@@ -407,18 +410,17 @@ pub fn push<H: Http>(root: &Path, client: &Client<H>, parent: &str) -> Result<(u
     Ok((created, updated, failed))
 }
 
-/// Pull: pages under `parent` the library has no file for become `.md` files
+/// Pull: every page the integration can reach (Notion Lite's `syncFromNotion`
+/// walks the whole search result) the library has no file for becomes `.md`
 /// (one per page, named by title). Pages already mapped are refetched only
 /// when Notion's `last_edited_time` moved since the last pull.
 /// Returns (imported, refreshed, failed).
-pub fn pull<H: Http>(root: &Path, client: &Client<H>, parent: &str) -> Result<(usize, usize, Vec<String>)> {
-    let parent = page_id(parent);
+pub fn pull<H: Http>(root: &Path, client: &Client<H>) -> Result<(usize, usize, Vec<String>)> {
     let mut state = State::load(root);
     let (mut imported, mut refreshed) = (0, 0);
     let mut failed = vec![];
     for page in client.search_pages()? {
         if page["archived"].as_bool() == Some(true) || page["in_trash"].as_bool() == Some(true) { continue }
-        if !under_parent(&page, &parent) { continue }
         let id = match page["id"].as_str() { Some(i) => i.to_string(), None => continue };
         let title = client.page_title(&page);
         let edited = page["last_edited_time"].as_str().unwrap_or("").to_string();
@@ -449,13 +451,14 @@ pub fn page_id(s: &str) -> String {
     id.map(str::to_string).unwrap_or_else(|| s.to_string())
 }
 
-/// Push then pull, once: `sync_dir_with(root, token, parent, proxy)`. The
-/// proxy is `(url, hosts-to-bypass)`, e.g. `("socks5://127.0.0.1:10810", "")`.
-pub fn sync_dir_with(root: &Path, token: &str, parent: &str, proxy: Option<(String, String)>) -> Result<String> {
+/// Push then pull, once: `sync_dir_with(root, token, parent, proxy)`. `parent`
+/// is optional (None or empty: pull everything, push only rewrites known
+/// notes); the proxy is `(url, hosts-to-bypass)`, e.g. `("socks5://127.0.0.1:10810", "")`.
+pub fn sync_dir_with(root: &Path, token: &str, parent: Option<&str>, proxy: Option<(String, String)>) -> Result<String> {
     let client = Client::<CurlHttp>::new(token, proxy);
     let who = client.me()?;
     let (c, u, cf) = push(root, &client, parent)?;
-    let (i, r, pf) = pull(root, &client, parent)?;
+    let (i, r, pf) = pull(root, &client)?;
     Ok(format!(
         "已连接 {who}；推送 新建{c} 更新{u} 失败{}；拉取 导入{i} 刷新{r} 失败{}",
         cf.len(), pf.len()
