@@ -250,6 +250,7 @@ pub fn bind_keys(cx: &mut App) {
         let _ = h.update(cx, |ws, _, cx| ws.set_pref(|p| p.appearance = to.into(), cx));
     }));
     crate::modes::bind_keys(cx);
+    crate::focus::bind_keys(cx);
 }
 
 /// 退出: the open document is saved first; when that fails its dialog asks
@@ -401,7 +402,7 @@ pub struct Workspace {
     keyboard_inset: f32,
     /// Narrowing the window hid the sidebar (not the user): widening it until
     /// the sidebar fits shows it again.
-    sidebar_auto_hidden: bool,
+    pub(crate) sidebar_auto_hidden: bool,
     pub folder_current: Option<String>,
     pub create_menu: Option<(Option<String>, Point<Pixels>)>,
     /// 主页's header "…" menu, where it hangs.
@@ -429,6 +430,8 @@ pub struct Workspace {
     pub doc_sub: Option<DocSub>,
     /// 窗口保持在最前 (the "…" menu): this window floats above other apps'; not remembered.
     pub on_top: bool,
+    /// 专注模式 (the 「…」 menu, ⌘.): the document alone in the window; not remembered.
+    pub focus_mode: crate::focus::Focus,
     /// Last-frame bounds of the open submenu (clicks there keep the menu open).
     pub doc_sub_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Rendered width of the open 「…」 menu, for placing its submenus (#225).
@@ -733,6 +736,7 @@ impl Workspace {
             more_bounds: Default::default(),
             doc_menu: false,
             on_top: false,
+            focus_mode: Default::default(),
             doc_sub: None,
             doc_sub_bounds: Rc::new(Cell::new(None)),
             doc_menu_w: Rc::new(Cell::new(None)),
@@ -1039,6 +1043,8 @@ impl Workspace {
             EditorEvent::OpenDoc(id) => this.open(id, window, cx),
             EditorEvent::OpenDocAt(id, ordinal) => this.open_at(id, *ordinal, window, cx),
             EditorEvent::HideRefs => this.ask_refs(false, cx),
+            // from inside the editor's own update: leave once that finishes
+            EditorEvent::FocusEscape => cx.defer_in(window, |w, window, cx| w.leave_focus(window, cx)),
             EditorEvent::HistoryEscape => {
                 // Arrives from inside the editor's own update: leave the
                 // preview (then the drawer) once that finishes.
@@ -2098,6 +2104,7 @@ impl Render for Workspace {
             }
         }
         self.sidebar_was_open = self.sidebar_open;
+        self.sync_focus(window, cx);
         let sidebar = if self.sidebar_open { Some(if matches!(self.view, View::Settings | View::Trash) { self.render_settings_sidebar(window, cx) } else { self.render_sidebar(window, cx) }) } else { None };
         let row_menu = self.render_row_menu(window, cx);
         let resize = self.sidebar_open.then(|| self.render_resize_handle(window, cx));
@@ -2131,7 +2138,7 @@ impl Render for Workspace {
                 .h_full()
                 .flex()
                 .flex_col()
-                .child(self.top_bar(f32::from(window.viewport_size().width) - if self.sidebar_open { self.sidebar_w(window) } else { 0. }, cx))
+                .child(if self.focus_mode.on() { self.focus_bar(cx) } else { self.top_bar(f32::from(window.viewport_size().width) - if self.sidebar_open { self.sidebar_w(window) } else { 0. }, cx).into_any_element() })
                 .children(self.render_history_banner(cx))
                 .child(
                     div()
@@ -2225,7 +2232,10 @@ impl Render for Workspace {
             .on_action(cx.listener(|w, _: &OpenFolder, window, cx| w.open_folder_dialog(window, cx)))
             .on_action(cx.listener(|w, _: &ImportFolder, window, cx| w.open_import_folder(window, cx)))
             .on_action(cx.listener(|w, _: &ImportFromApps, window, cx| w.open_import_apps(None, window, cx)))
-            .on_action(cx.listener(|w, _: &ToggleSidebar, _, cx| {
+            .on_action(cx.listener(|w, _: &crate::focus::ToggleFocus, window, cx| w.toggle_focus(window, cx)))
+            .on_action(cx.listener(|w, _: &ToggleSidebar, window, cx| {
+                // 专注模式 has no sidebar: asking for it leaves, with the sidebar shown
+                if w.focus_mode.on() { w.leave_focus(window, cx); w.sidebar_open = true; cx.notify(); return; }
                 w.sidebar_open = !w.sidebar_open;
                 cx.notify();
             }))
@@ -2277,7 +2287,7 @@ impl Render for Workspace {
                     cx.notify();
                 }
             }))
-            .capture_key_down(cx.listener(|w, ev: &KeyDownEvent, _, cx| {
+            .capture_key_down(cx.listener(|w, ev: &KeyDownEvent, window, cx| {
                 // A required update waits for 立即重启更新 (↩): no key reaches the window beneath.
                 if crate::update::blocking(cx) {
                     if ev.keystroke.key == "enter" { crate::update::install(cx); }
@@ -2311,6 +2321,10 @@ impl Render for Workspace {
                     cx.notify();
                     return;
                 }
+                // 专注模式: Esc leaves (the editor, when it has the caret, after its own uses of Esc)
+                if ev.keystroke.key == "escape" && w.focus_mode.on() && !w.search_open && !w.editor.as_ref().is_some_and(|e| e.read(cx).focus.is_focused(window)) {
+                    w.leave_focus(window, cx); cx.stop_propagation(); return;
+                }
                 if ev.keystroke.key != "escape" || w.batch.is_none() || w.search_open || w.rename.is_some() {
                     return;
                 }
@@ -2329,7 +2343,8 @@ impl Render for Workspace {
             .children(sidebar.map(|s| if inset_top + inset_bottom > 0. { div().flex_none().h_full().pt(px(inset_top)).pb(px(if keyboard > 0. { 0. } else { inset_bottom })).child(s).into_any_element() } else { s }))
             .child(note)
             .children(resize)
-            .children(crate::ui::window_controls(window))
+            // 专注模式: the caption buttons come and go with the top strip
+            .children(crate::ui::window_controls(window).and_then(|c| if !self.focus_mode.on() { Some(c) } else { let o = self.focus_mode.opacity(); (o > 0.).then(|| c.opacity(o)) }))
             .children(row_menu)
             .children(doc_menu)
             .children(mode_menu)

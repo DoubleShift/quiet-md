@@ -52,6 +52,7 @@ mod native_header;
 mod native_header;
 mod mermaid;
 mod on_top;
+mod focus;
 mod printing;
 mod search;
 mod siyuan;

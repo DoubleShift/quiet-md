@@ -1,5 +1,5 @@
 //! The header "…" menu: how the document is seen (page width, then the 阅读模式, 显示引用列表
-//! and 窗口保持在最前 switches), find & replace, move, pin, star, 新建子文档, duplicate,
+//! and 窗口保持在最前 switches, 专注模式), find & replace, move, pin, star, 新建子文档, duplicate,
 //! 下载为 PDF / Markdown, 复制为 Markdown, 打印, document info, 版本历史, delete, 快捷键.
 
 use crate::app::Workspace;
@@ -27,9 +27,10 @@ thread_local! {
 
 /// What a page's 「…」 holds, by what the page is: each kind its own list, nothing in it that the
 /// page can't do. How the page is seen comes first (页宽, then the 阅读模式, 显示引用列表 and
-/// 窗口保持在最前 switches: the user's order, 2026-11-25), then what is done to it.
+/// 窗口保持在最前 switches: the user's order, 2026-11-25; then 专注模式, a document's only), then
+/// what is done to it.
 #[derive(Clone, Copy, PartialEq)]
-enum Item { Width, Read, Refs, OnTop, Find, Move, Pin, Star, Child, Copy, Download, CopyMd, Print, Info, History, Delete, Shortcuts, Rule }
+enum Item { Width, Read, Refs, OnTop, Focus, Find, Move, Pin, Star, Child, Copy, Download, CopyMd, Print, Info, History, Delete, Shortcuts, Rule }
 
 /// The page open: a document, one with a 画板 opened in its place, a 画板 file, a 数据表 file.
 #[derive(Clone, Copy, PartialEq)]
@@ -42,7 +43,7 @@ fn items(page: Page, child: bool) -> Vec<Item> {
     let top: &[Item] = if crate::on_top::SUPPORTED { &[OnTop] } else { &[] };
     let top_rule: &[Item] = if crate::on_top::SUPPORTED { &[OnTop, Rule] } else { &[] };
     let list: Vec<&[Item]> = match page {
-        Page::Doc => vec![&[Width, Read, Refs], top, &[Rule, Find, Rule, Move, Pin, Star, Rule], child, &[Copy, Download, CopyMd, Rule], print, &[Info, History, Rule, Delete, Rule, Shortcuts]],
+        Page::Doc => vec![&[Width, Read, Refs], top, &[Focus, Rule, Find, Rule, Move, Pin, Star, Rule], child, &[Copy, Download, CopyMd, Rule], print, &[Info, History, Rule, Delete, Rule, Shortcuts]],
         // a board isn't the page: no page width, no find in its text, its own shortcut help (`?`)
         Page::Board => vec![&[Read, Refs], top, &[Rule, Move, Pin, Star, Rule], child, &[Copy, Download, CopyMd, Rule], print, &[Info, History, Rule, Delete]],
         // a board file: no Markdown, no reading mode or references either
@@ -227,6 +228,10 @@ impl Workspace {
                     .tip_right(crate::settings::tr("窗口会一直显示在其他应用的窗口之上", "Stays above other apps' windows"), None)
                     .on_hover(hover_sub(None))
                     .on_click(cx.listener(move |w, _, window, cx| w.set_on_top(!on_top, window, cx))).into_any_element(),
+                Item::Focus => menu_item("dm-focus", crate::focus::ICON, crate::settings::tr("专注模式", "Focus Mode"), false, false)
+                    .tip_right(crate::settings::tr("只留正文，鼠标移到顶部可退出", "Just the page; point at the top to exit"), Some(crate::focus::hint()))
+                    .on_hover(hover_sub(None))
+                    .on_click(cx.listener(|w, _, window, cx| w.enter_focus(window, cx))).into_any_element(),
                 Item::Find => menu_item("dm-find", "text-search", crate::settings::text("查找和替换"), false, false)
                     .on_hover(hover_sub(None))
                     .on_click(cx.listener(|w, _, window, cx| w.find_in_doc(false, window, cx))).into_any_element(),

@@ -47,6 +47,8 @@ pub enum EditorEvent {
     Leave,
     /// Esc while 版本历史 is open: back to the live document, then close.
     HistoryEscape,
+    /// Esc in 专注模式 with nothing else to cancel: leave it.
+    FocusEscape,
     /// A 数据表 made, trashed or restored a note for a 笔记 cell: the library's lists are read again.
     LibraryChanged,
     /// A note edited in a 数据表's record panel was saved: its row follows.
@@ -213,6 +215,8 @@ pub struct Editor {
     pub menu_hovered: bool,
     /// Toolbar suppressed after typing / Esc until the selection changes.
     pub toolbar_hidden: bool,
+    /// The window is in 专注模式: Esc with nothing else to cancel leaves it (`EditorEvent::FocusEscape`).
+    pub focus_mode: bool,
     /// Typing hides the mouse pointer until it moves, as browsers do, so the
     /// I-beam left where the user clicked doesn't sit on top of the new text.
     pub pointer_hidden: bool,
@@ -474,6 +478,7 @@ impl Editor {
             menu: None,
             menu_hovered: false,
             toolbar_hidden: false,
+            focus_mode: false,
             pointer_hidden: false,
             autoscroll: false,
             last_color: (None, Some(ColorName("light-yellow".into()))),
@@ -1950,6 +1955,9 @@ impl Editor {
             self.menu = None;
         } else if self.find.is_some() {
             return self.close_find(window, cx);
+        } else if self.focus_mode && self.core.cell_sel.is_none() && !self.core.in_block_mode() && (self.read_only || self.core.sel.is_collapsed()) {
+            // 专注模式: the first Esc leaves it instead of selecting the block
+            return cx.emit(EditorEvent::FocusEscape);
         } else if self.read_only {
             // Nothing to select blocks for.
             self.core.sel = Selection::caret(self.core.sel.head);
