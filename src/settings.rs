@@ -481,7 +481,7 @@ pub(crate) fn watch_themes(cx: &mut Context<Workspace>) {
 // ---- the view
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Page { #[default] General, Appearance, Shortcuts, Library, About }
+pub enum Page { #[default] General, Appearance, Shortcuts, Library, Notion, About }
 
 impl Page {
     fn title(self) -> &'static str {
@@ -490,6 +490,7 @@ impl Page {
             Page::Appearance => tr("外观", "Appearance"),
             Page::Shortcuts => tr("快捷键", "Shortcuts"),
             Page::Library => tr("文档库", "Documents"),
+            Page::Notion => "Notion",
             Page::About => tr("关于", "About"),
         }
     }
@@ -499,6 +500,7 @@ impl Page {
             Page::Appearance => "palette",
             Page::Shortcuts => "keyboard",
             Page::Library => "folder",
+            Page::Notion => "globe",
             Page::About => "info",
         }
     }
@@ -506,7 +508,7 @@ impl Page {
 
 /// The sidebar list, one evenly spaced run (six rows need no unlabelled
 /// groups); `None` is 回收站 (its own view, shown with this sidebar).
-const NAV: [Option<Page>; 6] = [Some(Page::General), Some(Page::Appearance), Some(Page::Shortcuts), Some(Page::Library), None, Some(Page::About)];
+const NAV: [Option<Page>; 7] = [Some(Page::General), Some(Page::Appearance), Some(Page::Shortcuts), Some(Page::Library), Some(Page::Notion), None, Some(Page::About)];
 
 // ---- controls (switch on the accent, 30pt buttons, grouped rows)
 
@@ -1503,6 +1505,7 @@ impl Workspace {
             Page::Appearance => self.appearance_page(cx),
             Page::Shortcuts => self.shortcut_settings(cx),
             Page::Library => self.library_page(cx),
+            Page::Notion => self.notion_page(cx),
             Page::About => self.about_page(cx),
         };
         div().flex_1().min_w_0().h_full().flex().flex_col().bg(Theme::bg_body()).text_color(Theme::text()).font_family(theme::ui_family())
@@ -1784,6 +1787,56 @@ impl Workspace {
                         .child(button("history-plus", "+").on_click(cx.listener(|w, _, window, cx| w.change_history_limit(1, window, cx))))).into_any_element(),
             ]))
             .into_any_element()
+    }
+
+    fn notion_page(&self, cx: &mut Context<Self>) -> AnyElement {
+        let field = |f: &Entity<crate::input::TextField>| div().w(px(300.)).child(f.clone());
+        let mut rows = vec![
+            row(tr("集成令牌", "Integration token"), Some(tr("Notion 内部集成的 secret token（在 notion.so/my-integrations 创建）。", "The Notion integration's secret token (create one at notion.so/my-integrations).").into()), field(&self.notion_token)),
+            row(tr("父页面", "Parent page"), Some(tr("同步目标：一个 Notion 页面的 id 或完整链接，笔记以它为父页面创建和读取。", "Where notes sync: a Notion page's id or full link, the parent the notes are created under and read from.").into()), field(&self.notion_parent)),
+            row(tr("代理", "Proxy"), Some(tr("直连 api.notion.com 被拦时的出口，如 socks5://127.0.0.1:10810；留空直连。", "An outlet for when api.notion.com is blocked, e.g. socks5://127.0.0.1:10810; empty connects directly.").into()), field(&self.notion_proxy)),
+            row(tr("立即同步", "Sync now"), desc(tr("库里的 Markdown 笔记推到 Notion（新建或更新页面），再把父页面下本地没有的页面拉回库里。", "The library's Markdown notes are pushed to Notion (pages created or updated), then pages under the parent the library lacks are pulled in.")),
+                if self.notion_syncing { button("notion-sync", tr("同步中…", "Syncing…")) } else { button("notion-sync", tr("立即同步", "Sync now")).on_click(cx.listener(|w, _, _, cx| w.notion_sync_now(cx))) }),
+        ];
+        if let Some((ok, msg)) = &self.notion_status {
+            rows.push(row(tr("上次同步", "Last sync"), None, div().max_w(px(360.)).truncate()
+                .text_size(px(theme::ui_font_small())).line_height(px(theme::ui_font_small() + 6.))
+                .text_color(if *ok { Theme::text_caption() } else { Theme::danger() }).child(msg.clone())));
+        }
+        div().w_full().flex().flex_col().gap(px(crate::design::geo().section_gap))
+            .child(group("group-notion", Some(tr("Notion 同步", "Notion sync")), rows.into_iter().map(|r| r.into_any_element()).collect()))
+            .into_any_element()
+    }
+
+    /// 立即同步: the fields are saved with the preferences, then the sync runs
+    /// off the main thread (one blocking curl per request) and reports back.
+    fn notion_sync_now(&mut self, cx: &mut Context<Self>) {
+        if self.notion_syncing { return }
+        let token = self.notion_token.read(cx).text.trim().to_string();
+        let parent = self.notion_parent.read(cx).text.trim().to_string();
+        let proxy = self.notion_proxy.read(cx).text.trim().to_string();
+        if token.is_empty() || parent.is_empty() {
+            self.notion_status = Some((false, tr("令牌和父页面都要填", "Both the token and the parent page are needed").to_string()));
+            cx.notify();
+            return;
+        }
+        let mut p = prefs();
+        (p.notion_token, p.notion_parent, p.notion_proxy) = (token.clone(), parent.clone(), proxy.clone());
+        if save(&p).is_err() { return }
+        self.notion_syncing = true;
+        self.notion_status = None;
+        cx.notify();
+        let root = crate::store::Store::active_dir();
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_executor().spawn(async move {
+                fdl_core::notion::sync_dir_with(&root, &token, &parent, (!proxy.is_empty()).then(|| (proxy, String::new())))
+            }).await;
+            let _ = this.update(cx, |w, cx| {
+                w.notion_syncing = false;
+                w.notion_status = Some(match result { Ok(s) => (true, s), Err(e) => (false, format!("{e}")) });
+                cx.notify();
+            });
+        }).detach();
     }
 
     fn about_page(&self, cx: &mut Context<Self>) -> AnyElement {

@@ -457,6 +457,12 @@ pub struct Workspace {
     pub confirm_return: Option<Option<WeakFocusHandle>>,
     /// The keyboard while 导出 Markdown or 文档信息 dialog (the confirmation has its own, `confirm_focus`) is open.
     pub dialog_focus: crate::design::DialogFocus,
+    /// Notion 同步 (crates/core/src/notion): the settings page's fields and the last run.
+    pub notion_token: Entity<crate::input::TextField>,
+    pub notion_parent: Entity<crate::input::TextField>,
+    pub notion_proxy: Entity<crate::input::TextField>,
+    pub notion_syncing: bool,
+    pub notion_status: Option<(bool, String)>,
     /// The first-launch pages laid over the window again (⌘⌥⇧O, Settings › About).
     pub onboarding: Option<Entity<crate::onboarding::Onboarding>>,
     pub view: View,
@@ -692,6 +698,11 @@ impl Workspace {
             shortcut_error: None,
             settings_page: Default::default(),
             settings_from: View::Default,
+            notion_token: cx.new(|cx| { let mut f = crate::input::TextField::new("Notion integration token", cx); f.text = crate::settings::prefs().notion_token; f }),
+            notion_parent: cx.new(|cx| { let mut f = crate::input::TextField::new(crate::settings::tr("页面 id 或链接", "Page id or URL"), cx); f.text = crate::settings::prefs().notion_parent; f }),
+            notion_proxy: cx.new(|cx| { let mut f = crate::input::TextField::new(crate::settings::tr("可选，如 socks5://127.0.0.1:10810", "Optional, e.g. socks5://127.0.0.1:10810"), cx); f.text = crate::settings::prefs().notion_proxy; f }),
+            notion_syncing: false,
+            notion_status: None,
             history_limit,
             theme_menu: None,
             theme_anchor: Default::default(),
