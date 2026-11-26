@@ -241,7 +241,6 @@ pub fn blocks_to_markdown(blocks: &[Value]) -> String {
 /// (`buildNoteChildren`): one block per Markdown paragraph or list item.
 pub fn markdown_to_blocks(md: &str) -> Vec<Value> {
     let mut blocks = vec![];
-    let mut lines = md.lines().peekable();
     let mut para = String::new();
     let mut fence: Option<(String, String)> = None;
 
@@ -252,7 +251,7 @@ pub fn markdown_to_blocks(md: &str) -> Vec<Value> {
         para.clear();
     };
 
-    while let Some(line) = lines.next() {
+    for line in md.lines() {
         if let Some((lang, mut code)) = fence.take() {
             if line.trim_end().ends_with("```") {
                 blocks.push(json!({"object": "block", "type": "code", "code": {
@@ -266,9 +265,9 @@ pub fn markdown_to_blocks(md: &str) -> Vec<Value> {
             continue;
         }
         let trimmed = line.trim_end();
-        if trimmed.starts_with("```") {
+        if let Some(lang) = trimmed.strip_prefix("```") {
             flush(&mut para, &mut blocks);
-            fence = Some((trimmed[3..].trim().to_string(), String::new()));
+            fence = Some((lang.trim().to_string(), String::new()));
             continue;
         }
         if trimmed.is_empty() {
@@ -385,13 +384,11 @@ pub fn push<H: Http>(root: &Path, client: &Client<H>, parent: &str) -> Result<(u
         let bytes = match std::fs::read(root.join(&rel)) { Ok(b) => b, Err(_) => { failed.push(rel); continue } };
         let title = rel.trim_end_matches(".md").to_string();
         let hash = fnv(&bytes);
-        let m = state.0.get(&rel).cloned();
-        if let Some(m) = &m {
-            if m.pushed == hash && !m.page_id.is_empty() { continue; }
-        }
+        let known = state.0.get(&rel).cloned();
+        if let Some(m) = &known && m.pushed == hash && !m.page_id.is_empty() { continue; }
         let md = String::from_utf8_lossy(&bytes).to_string();
         let blocks = markdown_to_blocks(&md);
-        let result = match &m {
+        let result = match &known {
             Some(m) if !m.page_id.is_empty() => {
                 client.rename_page(&m.page_id, &title)?;
                 client.update_page_content(&m.page_id, blocks).map(|_| m.page_id.clone())
@@ -401,7 +398,7 @@ pub fn push<H: Http>(root: &Path, client: &Client<H>, parent: &str) -> Result<(u
         match result {
             Ok(id) => {
                 state.0.insert(rel.clone(), Mapping { page_id: id, title, pushed: hash, last_edited: String::new() });
-                if m.is_some() { updated += 1; } else { created += 1; }
+                if known.is_some() { updated += 1; } else { created += 1; }
             }
             Err(e) => failed.push(format!("{rel}: {e}")),
         }
@@ -425,10 +422,7 @@ pub fn pull<H: Http>(root: &Path, client: &Client<H>, parent: &str) -> Result<(u
         let id = match page["id"].as_str() { Some(i) => i.to_string(), None => continue };
         let title = client.page_title(&page);
         let edited = page["last_edited_time"].as_str().unwrap_or("").to_string();
-        let known = state.0.values().find(|m| m.page_id == id);
-        if let Some(m) = known {
-            if m.last_edited == edited { continue; }
-        }
+        if let Some(m) = state.0.values().find(|m| m.page_id == id) && m.last_edited == edited { continue; }
         let blocks = match client.block_children(&id) {
             Ok(b) => b,
             Err(e) => { failed.push(format!("{title}: {e}")); continue }

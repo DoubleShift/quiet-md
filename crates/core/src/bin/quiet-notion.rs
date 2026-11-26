@@ -27,7 +27,7 @@ fn main() {
     let result = match action {
         "push" => notion::push(&root, &client, &parent).map(|(c, u, f)| format!("推送 新建{c} 更新{u} 失败{}", f.len())),
         "pull" => notion::pull(&root, &client, &parent).map(|(i, r, f)| format!("拉取 导入{i} 刷新{r} 失败{}", f.len())),
-        "sync" => notion::sync_dir_with(&root, &token, &parent, proxy).map(|s| s),
+        "sync" => notion::sync_dir_with(&root, &token, &parent, proxy),
         other => { eprintln!("未知操作 {other}：push | pull | sync"); std::process::exit(2); }
     };
     match result {
