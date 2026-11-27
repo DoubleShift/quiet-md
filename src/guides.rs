@@ -22,7 +22,7 @@ pub(crate) fn seeded(root: &Path) -> std::io::Result<bool> {
     if root.join(".guides-pending").fs_exists() { return Ok(false); }
     let quiet = root.join(crate::store::INTERNAL);
     let internal = quiet.fs_is_dir() && fs::read_dir(&quiet)?.any(|e| e.map_or(true, |e| e.file_name() != ".lock"));
-    Ok(internal || fs::read_dir(root)?.any(|e| e.map_or(true, |e| { let n = e.file_name().to_string_lossy().into_owned(); !n.starts_with('.') || n == crate::store::ASSETS })))
+    Ok(internal || fs::read_dir(root)?.any(|e| e.map_or(true, |e| { let n = e.file_name().to_string_lossy().into_owned(); (n != crate::store::INTERNAL && !n.starts_with('.')) || n == crate::store::ASSETS })))
 }
 
 /// A guide document (not an asset or the index).
