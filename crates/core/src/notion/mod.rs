@@ -483,7 +483,8 @@ pub fn push<H: Http>(root: &Path, client: &Client<H>, parent: Option<&str>) -> R
             Err(e) => failed.push(format!("{rel}: {e}")),
         }
     }
-    if failed.is_empty() { state.save(root)?; }
+    // 有失败也要存：已创建页面的映射先落盘，下次 pull 才不会把它们当新页面重复导入。
+    let _ = state.save(root);
     Ok((created, updated, failed))
 }
 
@@ -512,7 +513,6 @@ pub fn pull<H: Http>(root: &Path, client: &Client<H>) -> Result<(usize, usize, V
     }
     for (id, (title, parent, edited)) in &info {
         if folder_title(title) { continue }
-        if let Some(m) = state.0.values().find(|m| m.page_id == *id) && m.last_edited == *edited { continue; }
         // The ancestors top-down are the folders, each a page's title itself.
         let mut parts: Vec<String> = vec![];
         let mut cur = parent.clone();
@@ -528,6 +528,30 @@ pub fn pull<H: Http>(root: &Path, client: &Client<H>) -> Result<(usize, usize, V
             let dir = notes.join(parts.iter().collect::<PathBuf>());
             (dir.clone(), format!("{}/{}", parts.join("/"), file_name_for(title)))
         };
+        // 该页面已有的映射可能在任何旧路径下（标题改了、层级调了都会换键）。
+        let known_key: Option<String> = state.0.iter().find(|(_, m)| m.page_id == *id).map(|(k, _)| k.clone());
+        let known_map = known_key.as_ref().and_then(|k| state.0.get(k)).cloned();
+        let unchanged = known_map.as_ref().is_some_and(|m| m.last_edited == *edited);
+        // 内容和位置都没变：无事可做。
+        if unchanged && known_key.as_deref() == Some(rel.as_str()) { continue; }
+        // 同一个页面只留一个键：先清掉其他路径的旧文件和旧映射。
+        let mut drop_keys: Vec<String> = state.0.iter()
+            .filter(|(_, m)| m.page_id == *id)
+            .map(|(k, _)| k.clone())
+            .filter(|k| known_key.as_ref() != Some(k) || k != &rel)
+            .collect();
+        drop_keys.retain(|k| known_key.as_ref() != Some(k) || k != &rel);
+        // 内容没变、只是层级变了：把文件挪到新位置即可，不用重新拉。
+        if unchanged {
+            let old_key = known_key.clone().unwrap_or_default();
+            let new_path = notes.join(&rel);
+            if let Some(d) = new_path.parent() { let _ = std::fs::create_dir_all(d); }
+            let _ = std::fs::rename(notes.join(&old_key), &new_path);
+            state.0.remove(&old_key);
+            state.0.insert(rel.clone(), Mapping { page_id: id.clone(), title: title.clone(), pushed: 0, last_edited: edited.clone() });
+            refreshed += 1;
+            continue;
+        }
         let blocks = match client.block_children(id) {
             Ok(b) => b,
             Err(e) => { failed.push(format!("{title}: {e}")); continue }
@@ -543,14 +567,24 @@ pub fn pull<H: Http>(root: &Path, client: &Client<H>) -> Result<(usize, usize, V
         };
         let md = blocks_to_markdown_with(&blocks, &mut resolve);
         if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(dir.join(file_name_for(title)), md.as_bytes()).is_ok() {
-            let old = state.0.get(&rel).cloned();
+            let refreshed_before = refreshed;
+            for k in &drop_keys {
+                let _ = std::fs::remove_file(notes.join(k));
+                state.0.remove(k);
+            }
+            if let Some(k) = &known_key && k != &rel {
+                let _ = std::fs::remove_file(notes.join(k));
+                state.0.remove(k);
+                refreshed += 1;
+            }
             state.0.insert(rel.clone(), Mapping { page_id: id.clone(), title: title.clone(), pushed: 0, last_edited: edited.clone() });
-            if old.is_some() { refreshed += 1; } else { imported += 1; }
+            if refreshed == refreshed_before { imported += 1; }
         } else {
             failed.push(title.clone());
         }
     }
-    if failed.is_empty() { state.save(root)?; }
+    // 有失败也要存：已完成的映射先落盘，下次不会重复导入。
+    let _ = state.save(root);
     Ok((imported, refreshed, failed))
 }
 
