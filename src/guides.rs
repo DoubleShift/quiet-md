@@ -96,7 +96,12 @@ fn seed(root: &Path, chinese: bool) -> anyhow::Result<()> {
     // Stage complete files before publishing. The pending directory lets a
     // failed first launch resume without mistaking it for an existing library.
     for (name, bytes) in files(chinese) {
-        let path = pending.join(name);
+        // The generated FILES still name the old `.quiet/`: stage them under conf/.
+        let rel = match name.strip_prefix(".quiet/") {
+            Some(r) => std::path::PathBuf::from(crate::store::INTERNAL).join(r.replace('\\', "/")),
+            None => std::path::PathBuf::from(name),
+        };
+        let path = pending.join(rel);
         fs::create_dir_all(path.parent().unwrap())?;
         let windows = cfg!(target_os = "windows") && is_doc(name);
         match std::str::from_utf8(bytes) {
@@ -213,7 +218,7 @@ mod tests {
     #[test]
     fn chinese_guides_match_the_english_ones() {
         let index = |files: &[(&str, &[u8])]| -> Vec<serde_json::Value> {
-            let (_, json) = files.iter().find(|(n, _)| *n == "conf/index.json").unwrap();
+            let (_, json) = files.iter().find(|(n, _)| *n == ".quiet/index.json").unwrap();
             let map: serde_json::Map<String, serde_json::Value> = serde_json::from_slice(json).unwrap();
             let mut v: Vec<_> = map.into_values().map(|mut m| { m.as_object_mut().unwrap().retain(|k, _| !matches!(k.as_str(), "created" | "modified")); m }).collect();
             v.sort_by_key(|m| m["id"].as_str().unwrap().to_string());
