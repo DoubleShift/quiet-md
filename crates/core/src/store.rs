@@ -925,11 +925,14 @@ impl Store {
     }
 
     /// The one library of builds before top-level folders: `QUIET_MD_HOME`, else the
-    /// folder picked at first launch (`library.json`), else a folder of its
+    /// folder picked at first launch (`library.json`; 相对 exe 目录的路径也认), else a folder of its
     /// own in the user's Documents, where they can see and back it up.
     pub fn legacy_dir() -> PathBuf {
         std::env::var_os("QUIET_MD_HOME").map(PathBuf::from)
-            .or_else(|| crate::vfs::read(Self::location_file()).ok().and_then(|b| serde_json::from_slice::<Location>(&b).ok()).map(|l| l.path).filter(|p| p.fs_is_absolute()))
+            .or_else(|| crate::vfs::read(Self::location_file()).ok().and_then(|b| serde_json::from_slice::<Location>(&b).ok()).map(|l| l.path).map(|p| if p.fs_is_absolute() { p } else {
+                // 相对路径相对 exe 所在目录解析（可移植布局）。
+                std::env::current_exe().ok().and_then(|exe| exe.parent().map(|d| d.join(&p))).unwrap_or_else(|| p.clone())
+            }).filter(|p| p.fs_is_dir()))
             .unwrap_or_else(Self::default_dir)
     }
 
@@ -1223,6 +1226,8 @@ impl Store {
 
     /// Use `root` for the rest of this run, and from now on unless
     /// `QUIET_MD_HOME` says otherwise. The default location needs no pointer.
+    /// A library beside the exe is written as a relative path, so the
+    /// program folder moves and the pointer moves with it.
     pub fn remember_dir(root: PathBuf) -> Result<()> {
         let file = Self::location_file();
         // Test runs (`QUIET_MD_HOME`) never move the real library.
@@ -1230,7 +1235,11 @@ impl Store {
         else if root == Self::default_dir() { let _ = crate::vfs::remove_file(&file); }
         else {
             crate::vfs::create_dir_all(file.parent().unwrap())?;
-            write_atomic(&file, &serde_json::to_vec_pretty(&Location { path: root.clone() })?)?;
+            // 库在 exe 目录之下时写相对路径；其余（文档目录等）保持绝对路径。
+            let path = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|d| d.to_path_buf()))
+                .and_then(|exe| root.strip_prefix(&exe).ok().map(|r| r.to_path_buf()))
+                .unwrap_or_else(|| root.clone());
+            write_atomic(&file, &serde_json::to_vec_pretty(&Location { path })?)?;
         }
         *ROOT.write().unwrap() = Some(root);
         Ok(())
