@@ -487,7 +487,7 @@ pub fn push<H: Http>(root: &Path, client: &Client<H>, parent: Option<&str>) -> R
         let md = String::from_utf8_lossy(&bytes).to_string();
         // 本地图片上传 Notion：file id 每次推送都会变，直接重传（Notion
         // Lite 的 `uploadFileToNotion` 同样如此）。远端 URL 原样保留。
-        let assets = root.join("assets");
+        let assets = root.parent().unwrap_or(root).join("assets");
         let mut uploads: BTreeMap<String, String> = BTreeMap::new();
         let md = image_ref.replace_all(&md, |caps: &regex::Captures| {
             let url = caps[1].to_string();
@@ -557,7 +557,8 @@ fn folder_chain<H: Http>(parts: &[String], base: Option<&str>, client: &Client<H
 /// Returns (imported, refreshed, failed).
 pub fn pull<H: Http>(root: &Path, client: &Client<H>) -> Result<(usize, usize, Vec<String>)> {
     let notes = root.join("md");
-    let assets = root.join("assets");
+    // 图片在库根上一级的 `assets/`（md/ 是库根）。
+    let assets = root.parent().unwrap_or(root).join("assets");
     let mut state = State::load(root);
     let (mut imported, mut refreshed) = (0, 0);
     let mut failed = vec![];
