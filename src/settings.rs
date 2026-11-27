@@ -1737,8 +1737,16 @@ impl Workspace {
 
     fn library_page(&self, cx: &mut Context<Self>) -> AnyElement {
         let reveal = crate::local_folders::show_in_files();
-        let short = |root: &std::path::Path| if cfg!(target_os = "windows") { root.display().to_string() } else {
-            dirs::home_dir().and_then(|h| root.strip_prefix(h).ok().map(|r| format!("~/{}", r.display()))).unwrap_or_else(|| root.display().to_string())
+        let short = |root: &std::path::Path| {
+            // 库在程序目录下时显示相对路径（与默认布局一致），否则退回绝对路径。
+            let exe_dir = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf()));
+            if let Some(dir) = exe_dir && let Ok(rel) = root.strip_prefix(&dir) {
+                let text = rel.display().to_string();
+                return if text.is_empty() { ".\\".to_string() } else { format!(".\\{text}") };
+            }
+            if cfg!(target_os = "windows") { root.display().to_string() } else {
+                dirs::home_dir().and_then(|h| root.strip_prefix(h).ok().map(|r| format!("~/{}", r.display()))).unwrap_or_else(|| root.display().to_string())
+            }
         };
         // Every top-level folder alike, each with its own 回收站 and history.
         let mut folders: Vec<AnyElement> = self.store.top_folders().into_iter().map(|(key, name, path, error)| {
