@@ -179,6 +179,33 @@ impl<H: Http> Client<H> {
         if resp.status == 200 { Ok(resp.body) } else { anyhow::bail!("{}: GET {url}", resp.status) }
     }
 
+    /// Upload one file (Notion Lite's `uploadFileToNotion`): the file upload
+    /// is created, the bytes sent as multipart, and the `file_upload` id
+    /// returned for an image or file block. The id is fresh every time —
+    /// Notion's file ids do not survive a re-push, so each push re-uploads.
+    pub fn upload_file(&self, filename: &str, bytes: &[u8]) -> Result<String> {
+        let mime = mime_of(bytes, filename);
+        let created = self.request("POST", "/file_uploads", Some(json!({"mode": "single", "filename": filename, "content_type": mime})))?;
+        let id = created["id"].as_str().unwrap_or_default().to_string();
+        let boundary = format!("quiet-{}", uuid::Uuid::new_v4());
+        let mut body = Vec::new();
+        body.extend(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: {mime}\r\n\r\n").into_bytes());
+        body.extend_from_slice(bytes);
+        body.extend(format!("\r\n--{boundary}--\r\n").into_bytes());
+        let resp = self.http.send(Request {
+            method: "POST".into(),
+            url: format!("{API}/file_uploads/{id}/send"),
+            headers: vec![
+                ("Authorization".into(), format!("Bearer {}", self.token)),
+                ("Notion-Version".into(), VERSION.into()),
+                ("Content-Type".into(), format!("multipart/form-data; boundary={boundary}")),
+            ],
+            body: Some(body),
+        })?;
+        if resp.status != 200 { anyhow::bail!("{}: uploading {filename}", resp.status); }
+        Ok(id)
+    }
+
     /// The page's title (its `title` property) as plain text.
     pub fn page_title(&self, page: &Value) -> String {
         page["properties"].as_object()
@@ -255,6 +282,12 @@ pub fn blocks_to_markdown_with(blocks: &[Value], resolve: &mut dyn FnMut(&str) -
 /// Notion children blocks for a Markdown note, in the shape Notion Lite writes
 /// (`buildNoteChildren`): one block per Markdown paragraph or list item.
 pub fn markdown_to_blocks(md: &str) -> Vec<Value> {
+    markdown_to_blocks_with(md, &mut |_| None)
+}
+
+/// `markdown_to_blocks`, letting the caller take an image's URL or local path
+/// and return a Notion `file_upload` id — the local pictures a push uploads.
+pub fn markdown_to_blocks_with(md: &str, resolve: &mut dyn FnMut(&str) -> Option<String>) -> Vec<Value> {
     let mut blocks = vec![];
     let mut para = String::new();
     let mut fence: Option<(String, String)> = None;
@@ -287,6 +320,16 @@ pub fn markdown_to_blocks(md: &str) -> Vec<Value> {
         }
         if trimmed.is_empty() {
             flush(&mut para, &mut blocks);
+            continue;
+        }
+        if trimmed.starts_with("![") && trimmed.ends_with(')') && let Some(sep) = trimmed.find("](") {
+            let url = trimmed[sep + 2..trimmed.len() - 1].to_string();
+            flush(&mut para, &mut blocks);
+            let block = match resolve(&url) {
+                Some(id) => json!({"object": "block", "type": "image", "image": {"type": "file_upload", "file_upload": {"id": id}}}),
+                None => json!({"object": "block", "type": "image", "image": {"type": "external", "external": {"url": url}}}),
+            };
+            blocks.push(block);
             continue;
         }
         if trimmed.starts_with('#') {
@@ -349,8 +392,8 @@ fn to_do(text: &str, checked: bool) -> Value {
 
 // ---- the sync itself
 
-/// The library's Markdown notes, relative paths: `.md` files anywhere but
-/// `.quiet/`, `.assets/` and a name starting with `.`.
+/// The library's Markdown notes, relative paths under `md/`: `.md` files
+/// anywhere but a name starting with `.`.
 pub fn list_markdown(root: &Path) -> Vec<String> {
     fn walk(dir: &Path, rel: &Path, out: &mut Vec<String>) {
         let entries = match std::fs::read_dir(dir) { Ok(e) => e, Err(_) => return };
@@ -366,8 +409,9 @@ pub fn list_markdown(root: &Path) -> Vec<String> {
             }
         }
     }
+    let notes = root.join("md");
     let mut out = vec![];
-    walk(root, Path::new(""), &mut out);
+    walk(&notes, Path::new(""), &mut out);
     out.sort();
     out
 }
@@ -389,17 +433,37 @@ fn file_name_for(title: &str) -> String {
 /// Returns (created, updated, failed).
 pub fn push<H: Http>(root: &Path, client: &Client<H>, parent: Option<&str>) -> Result<(usize, usize, Vec<String>)> {
     let parent = parent.map(page_id).filter(|p| !p.is_empty());
+    let image_ref = regex::Regex::new(r"!\[[^\]]*\]\(([^)]+)\)").unwrap();
     let mut state = State::load(root);
     let (mut created, mut updated) = (0, 0);
     let mut failed = vec![];
     for rel in list_markdown(root) {
-        let bytes = match std::fs::read(root.join(&rel)) { Ok(b) => b, Err(_) => { failed.push(rel); continue } };
-        let title = rel.trim_end_matches(".md").to_string();
+        let bytes = match std::fs::read(root.join("md").join(&rel)) { Ok(b) => b, Err(_) => { failed.push(rel); continue } };
+        let title = rel.rsplit('/').next().unwrap_or(&rel).trim_end_matches(".md").to_string();
         let hash = fnv(&bytes);
         let known = state.0.get(&rel).cloned();
         if let Some(m) = &known && m.pushed == hash && !m.page_id.is_empty() { continue; }
         let md = String::from_utf8_lossy(&bytes).to_string();
-        let blocks = markdown_to_blocks(&md);
+        // 本地图片上传 Notion：file id 每次推送都会变，直接重传（Notion
+        // Lite 的 `uploadFileToNotion` 同样如此）。远端 URL 原样保留。
+        let assets = root.join("assets");
+        let mut uploads: BTreeMap<String, String> = BTreeMap::new();
+        let md = image_ref.replace_all(&md, |caps: &regex::Captures| {
+            let url = caps[1].to_string();
+            if !url.contains("assets/") { return format!("![图片]({url})"); }
+            let name = url.rsplit('/').next().unwrap_or("").to_string();
+            if name.is_empty() { return format!("![图片]({url})"); }
+            if let Some(id) = uploads.get(&name) { return format!("![图片](notion-file://{id})"); }
+            match std::fs::read(assets.join(&name)) {
+                Ok(bytes) => match client.upload_file(&name, &bytes) {
+                    Ok(id) => { uploads.insert(name.clone(), id.clone()); format!("![图片](notion-file://{id})") }
+                    Err(e) => { failed.push(format!("{rel}: {name}: {e}")); format!("![图片]({url})") }
+                },
+                Err(_) => format!("![图片]({url})"),
+            }
+        }).to_string();
+        let mut resolve = |url: &str| -> Option<String> { url.strip_prefix("notion-file://").map(str::to_string) };
+        let blocks = markdown_to_blocks_with(&md, &mut resolve);
         let result = match &known {
             Some(m) if !m.page_id.is_empty() => {
                 client.rename_page(&m.page_id, &title)?;
@@ -424,13 +488,15 @@ pub fn push<H: Http>(root: &Path, client: &Client<H>, parent: Option<&str>) -> R
 }
 
 /// Pull: every page the integration can reach (Notion Lite's `syncFromNotion`
-/// walks the whole search result) becomes `.md` in the library, nested in the
-/// folders of its ancestor pages — a 📁/📂 page is a folder, not a note (Notion
-/// Lite's `isFolderPage`) — and its images are downloaded into `.assets/`, so
-/// notes read offline. Pages already mapped are refetched only when
-/// Notion's `last_edited_time` moved since the last pull.
+/// walks the whole search result) becomes `.md` under the library's `md/`
+/// folder, nested in the folders of its ancestor pages — a 📁/📂 page is a
+/// folder, not a note (Notion Lite's `isFolderPage`) — and every image is
+/// downloaded into `assets/`, so notes read offline. Pages already mapped are
+/// refetched only when Notion's `last_edited_time` moved since the last pull.
 /// Returns (imported, refreshed, failed).
 pub fn pull<H: Http>(root: &Path, client: &Client<H>) -> Result<(usize, usize, Vec<String>)> {
+    let notes = root.join("md");
+    let assets = root.join("assets");
     let mut state = State::load(root);
     let (mut imported, mut refreshed) = (0, 0);
     let mut failed = vec![];
@@ -455,25 +521,25 @@ pub fn pull<H: Http>(root: &Path, client: &Client<H>) -> Result<(usize, usize, V
             guard += 1;
             match info.get(&p) { Some((t, pp, _)) => { parts.push(clean_name(t)); cur = pp.clone(); }, None => break }
         }
+        // Notes live one level down (`md/`), so every asset reference needs
+        // one `../` more than the folder depth.
         let depth = parts.len();
-        let (dir, rel) = if depth == 0 { (root.to_path_buf(), file_name_for(title)) } else {
-            let dir = root.join(parts.iter().collect::<PathBuf>());
+        let (dir, rel) = if depth == 0 { (notes.clone(), file_name_for(title)) } else {
+            let dir = notes.join(parts.iter().collect::<PathBuf>());
             (dir.clone(), format!("{}/{}", parts.join("/"), file_name_for(title)))
         };
         let blocks = match client.block_children(id) {
             Ok(b) => b,
             Err(e) => { failed.push(format!("{title}: {e}")); continue }
         };
-        // Images and files land in the library's `.assets/`, referenced
-        // relative to the note (one `../` per folder level).
-        let assets = root.join(".assets");
+        // Images and files land in the library's `assets/`, referenced
+        // relative to the note (one `../` per folder level, plus `md/`).
         let mut resolve = |url: &str| -> Option<String> {
             let bytes = client.fetch(url).ok()?;
             let name = format!("{}{}", fnv(url.as_bytes()), ext_of(&bytes, url));
             std::fs::create_dir_all(&assets).ok()?;
             std::fs::write(assets.join(&name), &bytes).ok()?;
-            let up = "../".repeat(depth);
-            Some(format!("![图片]({up}.assets/{name})"))
+            Some(format!("![图片]({}assets/{name})", "../".repeat(depth + 1)))
         };
         let md = blocks_to_markdown_with(&blocks, &mut resolve);
         if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(dir.join(file_name_for(title)), md.as_bytes()).is_ok() {
@@ -513,6 +579,19 @@ fn ext_of(bytes: &[u8], url: &str) -> String {
         else if bytes.starts_with(b"%PDF") { "pdf" }
         else { return url.rsplit('.').next().unwrap_or("bin").split('?').next().unwrap_or("bin").chars().take(8).collect() };
     from_magic.into()
+}
+
+/// A MIME type by the bytes' magic, else `application/octet-stream`.
+fn mime_of(bytes: &[u8], filename: &str) -> String {
+    let ext = ext_of(bytes, filename);
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "pdf" => "application/pdf",
+        _ => "application/octet-stream",
+    }.into()
 }
 
 /// The bare page id out of a full `https://www.notion.so/…-<id>` URL or an id
