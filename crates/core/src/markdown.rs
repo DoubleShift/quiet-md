@@ -604,7 +604,7 @@ fn hidden_names(vault: &Path) -> std::sync::Arc<Names> {
 
 /// Folders that hold an app's own files, never a vault's attachments: the
 /// editor's configuration and local trash, a repository's, this app's library.
-const INTERNAL_FOLDERS: [&str; 5] = [".obsidian", ".trash", ".git", ".quiet", ".assets"];
+const INTERNAL_FOLDERS: [&str; 6] = [".obsidian", ".trash", ".git", ".quiet", ".assets", "conf"];
 
 /// `vault` by name. `hidden`: go into the dot-folders the first pass skips,
 /// an app's own ones aside. A file whose own name starts with `.` is not a

@@ -180,7 +180,7 @@ pub(super) fn restore(root: &Path) -> Result<RestoreReport> {
     // Set aside: the notes and folders, then the new layout's own files.
     for e in crate::vfs::read_dir(root)?.flatten() {
         let n = e.file_name().to_string_lossy().into_owned();
-        if n.starts_with('.') { continue; }
+        if n.starts_with('.') || n == INTERNAL { continue; }
         crate::vfs::rename(e.path(), kept.join(&n))?;
     }
     let inner = kept.join(INTERNAL);

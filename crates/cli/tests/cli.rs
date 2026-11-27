@@ -179,7 +179,7 @@ fn not_a_library() {
     std::fs::create_dir_all(&dir).unwrap();
     let o = quiet(&dir, &["ls"]);
     assert!(String::from_utf8_lossy(&o.stderr).starts_with("error[no_library]"));
-    assert!(!dir.join(".quiet").exists(), "the CLI must not turn a folder into a library");
+    assert!(!dir.join("conf").exists(), "the CLI must not turn a folder into a library");
 }
 
 #[test]
@@ -488,7 +488,7 @@ fn usage_is_counted_by_command_name_only() {
     assert!(v.get("days").is_none() && v.get("id").is_none(), "{v}");
     // The app's 自动检查更新 off: nothing is written at all.
     let other = lib.with_extension("usage2.json");
-    std::fs::write(lib.join(".quiet/preferences.json"), r#"{"auto_update": false}"#).unwrap();
+    std::fs::write(lib.join("conf/preferences.json"), r#"{"auto_update": false}"#).unwrap();
     counted(&lib, &other, &["ls"], None);
     assert!(!other.exists());
 }

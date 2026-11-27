@@ -271,7 +271,7 @@ fn snapshot(lib: &Path, report: &Report) -> String {
     fn files(dir: &Path, out: &mut Vec<PathBuf>) {
         for e in crate::vfs::read_dir(dir).into_iter().flatten().flatten() {
             let p = e.path();
-            if p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) { continue }
+            if p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.') || n.to_string_lossy() == *crate::store::INTERNAL) { continue }
             if p.fs_is_dir() { files(&p, out) } else if p.extension().is_some_and(|x| x == "xml") { out.push(p) }
         }
     }

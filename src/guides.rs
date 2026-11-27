@@ -153,7 +153,7 @@ mod tests {
         // Every note and folder deleted: `.quiet/` still says it is a library.
         for e in fdl_core::vfs::read_dir(&root).unwrap() {
             let p = e.unwrap().path();
-            if p.file_name().unwrap().to_string_lossy().starts_with('.') { continue; }
+            if p.file_name().unwrap().to_string_lossy().starts_with('.') || p.file_name().unwrap().to_string_lossy() == *crate::store::INTERNAL { continue; }
             if p.fs_is_dir() { fdl_core::vfs::remove_dir_all(p).unwrap(); } else { fdl_core::vfs::remove_file(p).unwrap(); }
         }
         super::initialize(&root).unwrap();
@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn chinese_guides_match_the_english_ones() {
         let index = |files: &[(&str, &[u8])]| -> Vec<serde_json::Value> {
-            let (_, json) = files.iter().find(|(n, _)| *n == ".quiet/index.json").unwrap();
+            let (_, json) = files.iter().find(|(n, _)| *n == "conf/index.json").unwrap();
             let map: serde_json::Map<String, serde_json::Value> = serde_json::from_slice(json).unwrap();
             let mut v: Vec<_> = map.into_values().map(|mut m| { m.as_object_mut().unwrap().retain(|k, _| !matches!(k.as_str(), "created" | "modified")); m }).collect();
             v.sort_by_key(|m| m["id"].as_str().unwrap().to_string());

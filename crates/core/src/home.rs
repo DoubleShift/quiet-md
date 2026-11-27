@@ -377,7 +377,7 @@ mod tests {
         let mut ws = Home { fixed: true, ..Default::default() };
         let ka = ws.add(&a).unwrap();
         let kb = ws.add(&b).unwrap();
-        assert!(a.join(".quiet/format.json").fs_is_file() && b.join(".quiet/format.json").fs_is_file(), "every top-level folder has its .quiet/");
+        assert!(a.join("conf/format.json").fs_is_file() && b.join("conf/format.json").fs_is_file(), "every top-level folder has its .quiet/");
         let made = ws.store(&ka).unwrap().create_from(&doc("in a")).unwrap();
         let list = ws.list();
         assert_eq!(list.iter().find(|e| e.id == made).unwrap().top, ka);
@@ -431,9 +431,9 @@ mod tests {
         let b = dir("copy");
         crate::vfs::copy(a.join("one.xml"), b.join("one.xml")).unwrap();
         let own = format!("meta/{}", crate::store::device().id);
-        crate::vfs::create_dir_all(b.join(".quiet").join(&own)).unwrap();
-        crate::vfs::copy(a.join(".quiet/format.json"), b.join(".quiet/format.json")).unwrap();
-        for e in crate::vfs::read_dir(a.join(".quiet").join(&own)).unwrap().flatten() { crate::vfs::copy(e.path(), b.join(".quiet").join(&own).join(e.file_name())).unwrap(); }
+        crate::vfs::create_dir_all(b.join("conf").join(&own)).unwrap();
+        crate::vfs::copy(a.join("conf/format.json"), b.join("conf/format.json")).unwrap();
+        for e in crate::vfs::read_dir(a.join("conf").join(&own)).unwrap().flatten() { crate::vfs::copy(e.path(), b.join("conf").join(&own).join(e.file_name())).unwrap(); }
         let mut ws = Home { fixed: true, ..Default::default() };
         ws.add(&a).unwrap();
         ws.add(&b).unwrap();
@@ -480,7 +480,7 @@ mod tests {
         let to = ws.rename(&ka, " renamed/root ").unwrap();
         assert_eq!(to.file_name().unwrap().to_str(), Some(crate::store::file_name_for("renamed/root").as_str()), "the same name rules as a document's file");
         assert_ne!(to.file_name().unwrap(), "renamed/root");
-        assert!(!a.fs_exists() && to.join(".quiet/format.json").fs_is_file(), "the folder itself moved");
+        assert!(!a.fs_exists() && to.join("conf/format.json").fs_is_file(), "the folder itself moved");
         assert_eq!(ws.folder(&ka).unwrap().path, to);
         assert_eq!(ws.store(&ka).unwrap().top_dir(), to.as_path());
         let list = ws.list();

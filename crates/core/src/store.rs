@@ -3984,7 +3984,7 @@ mod tests {
         assert_eq!(s.versions(&id).len(), 1);
         // Snapshots stay in `.quiet/`: never a folder in the sidebar or the Finder,
         // and still found after the retitle renamed the file.
-        assert!(lib.0.join(".quiet").join("history").join(&id).fs_is_dir());
+        assert!(internal_at(&lib.0).join("history").join(&id).fs_is_dir());
         assert_eq!(s.list().iter().map(|e| e.id.clone()).collect::<Vec<_>>(), std::slice::from_ref(&id));
         let name = s.versions(&id)[0].name.clone();
         assert_eq!(s.version_text(&id, &name).unwrap(), docxml::serialize(&doc_with("first", "alpha")));
@@ -4016,7 +4016,7 @@ mod tests {
         assert!(s.versions(&id).len() >= 2);
         s.delete(&id, None).unwrap();
         assert!(s.versions(&id).is_empty());
-        assert!(lib.0.join(".quiet").join("history-trash").join(&id).fs_is_dir());
+        assert!(internal_at(&lib.0).join("history-trash").join(&id).fs_is_dir());
         s.restore(&id).unwrap();
         assert!(!s.versions(&id).is_empty());
         s.delete(&id, None).unwrap();
@@ -4153,7 +4153,7 @@ mod tests {
         assert_eq!(crate::whiteboard::write_file(&again), crate::vfs::read_to_string(&file).unwrap());
         // Through the 回收站 and back as a 画板.
         s.delete(&id, None).unwrap();
-        assert!(lib.0.join(".quiet/trash").join(format!("{id}.excalidraw")).fs_is_file());
+        assert!(internal_at(&lib.0).join("trash").join(format!("{id}.excalidraw")).fs_is_file());
         assert_eq!(s.list_trash()[0].title, "流程图");
         s.restore(&id).unwrap();
         assert!(file.fs_is_file());
@@ -4190,7 +4190,7 @@ mod tests {
         let b = crate::whiteboard::Board::from_file(include_str!("../tests/fixtures/board/all-elements.excalidraw")).unwrap();
         let id = s.create_board_in("流程", &b, None).unwrap();
         let mut d = s.load_for_edit(&id, false).unwrap();
-        let index = lib.0.join(".quiet/index.json");
+        let index = internal_at(&lib.0).join("index.json");
         let rewrite = |f: &dyn Fn(&mut DiskIndex)| {
             let mut disk: DiskIndex = serde_json::from_slice(&crate::vfs::read(&index).unwrap()).unwrap();
             f(&mut disk);
@@ -4235,7 +4235,7 @@ mod tests {
         assert!(!crate::vfs::read_to_string(&file).unwrap().contains("Renamed"));
         // Through the 回收站 and back as Markdown.
         s.delete(&id, None).unwrap();
-        assert!(lib.0.join(".quiet/trash").join(format!("{id}.md")).fs_is_file());
+        assert!(internal_at(&lib.0).join("trash").join(format!("{id}.md")).fs_is_file());
         assert_eq!(s.list_trash()[0].title, "Renamed");
         s.restore(&id).unwrap();
         assert!(file.fs_is_file());
@@ -4665,10 +4665,10 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].title, "一");
         assert!(list[0].meta.pinned);
-        assert!(lib.0.join(".quiet/format.json").fs_is_file());
+        assert!(internal_at(&lib.0).join("format.json").fs_is_file());
         // The library holds the note and its own hidden folder, nothing else.
         let names: Vec<String> = crate::vfs::read_dir(&lib.0).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
-        assert_eq!({ let mut n = names; n.sort(); n }, [".quiet", "一.xml"]);
+        assert_eq!({ let mut n = names; n.sort(); n }, ["conf", "一.xml"]);
     }
 
     #[test]
@@ -4744,7 +4744,7 @@ mod tests {
         let key = library_key(&lib.0);
         a.create_from(&doc("甲")).unwrap();
         // FORMAT 5 makes no lock in the top-level folder: it would only travel to other devices.
-        assert!(a.lock_path().fs_is_file() && !lib.0.join(".quiet/.lock").fs_exists());
+        assert!(a.lock_path().fs_is_file() && !internal_at(&lib.0).join(".lock").fs_exists());
         // A second copy on this computer (another window, the CLI) waits for the first.
         a.begin_batch().unwrap();
         let wrote = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -5088,7 +5088,7 @@ mod tests {
         let mut s = lib.open();
         // 4 → 5 → 6 in one go.
         assert!(s.v6 && Store::format_at(&lib.0) == 6, "{:?}", s.warnings);
-        assert!(meta::dir(&lib.0).join(device().id).fs_is_dir() && lib.0.join(".quiet/index.json.v4").fs_is_file() && !lib.0.join(".quiet/index.json").fs_exists());
+        assert!(meta::dir(&lib.0).join(device().id).fs_is_dir() && internal_at(&lib.0).join("index.json.v4").fs_is_file() && !internal_at(&lib.0).join("index.json").fs_exists());
         let list = s.list();
         let by = |id: &str| list.iter().find(|e| e.id == id).unwrap().meta.clone();
         assert!(by(&a).pinned && by(&b).starred > 0 && by(&b).parent.as_deref() == Some(f.as_str()));
@@ -5137,12 +5137,12 @@ mod tests {
         };
         let first = state(&lib);
         assert_eq!(first, (order.clone(), vec![(gone.clone(), Some(f.clone()))], true));
-        let trash = lib.0.join(".quiet/trash");
+        let trash = internal_at(&lib.0).join("trash");
         assert!(trash.join("index.json.v5").fs_is_file() && !trash.join("index.json").fs_exists());
         let file = lib.meta_text();
         assert!(file.contains("\"trashed\"") && file.contains("\"order\": [\n"), "{file}");
         // A crash after this device's file, before the marker: done again, the same.
-        let marker = lib.0.join(".quiet/format.json");
+        let marker = internal_at(&lib.0).join("format.json");
         let m: FormatMarker = reread(&marker).unwrap();
         write_atomic(&marker, &serde_json::to_vec(&FormatMarker { format: 5, id: m.id }).unwrap()).unwrap();
         crate::vfs::rename(trash.join("index.json.v5"), trash.join("index.json")).unwrap();
@@ -5165,7 +5165,7 @@ mod tests {
         assert!(new.v6 && new.list().iter().any(|e| e.id == x));
         assert!(old.set_pinned(&x, true).unwrap_err().to_string().contains("新格式"));
         // … and one opening it refuses it (`format > FORMAT`, as 5 would see it).
-        let marker = lib5.0.join(".quiet/format.json");
+        let marker = internal_at(&lib5.0).join("format.json");
         let m: FormatMarker = reread(&marker).unwrap();
         write_atomic(&marker, &serde_json::to_vec(&FormatMarker { format: FORMAT + 1, id: m.id }).unwrap()).unwrap();
         assert!(Store::open_as(lib5.0.clone(), &library_key(&lib5.0), device()).is_err());
@@ -5767,7 +5767,7 @@ mod tests {
         // opening it here could misread and then rewrite it, so it is refused.
         let lib = Lib::new("format");
         drop(lib.open());
-        crate::vfs::write(lib.0.join(".quiet/format.json"), format!("{{\"format\": {}}}", FORMAT + 1)).unwrap();
+        crate::vfs::write(internal_at(&lib.0).join("format.json"), format!("{{\"format\": {}}}", FORMAT + 1)).unwrap();
         let err = Store::open_at(lib.0.clone()).err().expect("a newer library must not open");
         assert!(err.to_string().contains("更新版本"));
     }
@@ -5944,9 +5944,9 @@ mod tests {
         let a = s.create_from(&doc("一")).unwrap();
         s.delete(&a, None).unwrap();
         // Swap the folder for a file: read_dir fails.
-        let trash = lib.0.join(".quiet/trash");
+        let trash = internal_at(&lib.0).join("trash");
         let index = crate::vfs::read(trash.join("index.json")).unwrap();
-        crate::vfs::rename(&trash, lib.0.join(".quiet/trash-away")).unwrap();
+        crate::vfs::rename(&trash, internal_at(&lib.0).join("trash-away")).unwrap();
         crate::vfs::write(&trash, b"").unwrap();
         let mut s = Store { file_changes: vec![], top_dir: lib.0.clone(), index: HashMap::new(), foreign: DiskIndex::new(), flat: false, migrated: None, trash: serde_json::from_slice(&index).unwrap(), warnings: vec![], loaded: Default::default(), copied: Default::default(), parsed: HashMap::new(), checked: HashMap::new(), writes: Default::default(), batch: Default::default(), view: Default::default(), v5: false, me: device(), clock: Default::default(), seen: Default::default(), merged: Default::default(), key: library_key(&lib.0), place_by_hand: true, v6: false, seen_trash: Default::default(), purging: Default::default(), synced: Default::default(), name_later: Default::default() , here: Default::default() , clean_due: None };
         assert_eq!(s.list_trash().len(), 1);
@@ -6129,7 +6129,7 @@ mod tests {
         assert_eq!(Store::migration_state(&lib.0), MigrationState::Silent);
         let report = Store::migrate(&lib.0).unwrap();
         assert_eq!((report.docs, report.folders), (before.len(), 7));
-        assert_eq!(report.backup, lib.0.join(".quiet").join(migrate::BACKUP));
+        assert_eq!(report.backup, internal_at(&lib.0).join(migrate::BACKUP));
         assert_eq!(Store::migration_state(&lib.0), MigrationState::NotNeeded);
         let mut s = lib.open();
         let list = s.list();
@@ -6181,13 +6181,13 @@ mod tests {
         assert!(local_file.fs_is_file());
         assert_eq!(s.settings().window_size, Some([800., 600.]));
         assert_eq!(s.settings().sidebar_width, Some(250.));
-        assert!(lib.0.join(".quiet/preferences.json").fs_is_file() && lib.0.join(".quiet/themes/mine.json").fs_is_file());
+        assert!(internal_at(&lib.0).join("preferences.json").fs_is_file() && internal_at(&lib.0).join("themes/mine.json").fs_is_file());
         // What the user sees: their folders and notes only.
         let mut top_names: Vec<String> = crate::vfs::read_dir(&lib.0).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         top_names.sort();
-        assert_eq!(top_names, [".assets", ".quiet", "CON_.xml", "a／b", "同名", "同名 (2)", "周报.xml", "孤儿", "工作", "索引.xml"]);
+        assert_eq!(top_names, [".assets", "CON_.xml", "a／b", "conf", "同名", "同名 (2)", "周报.xml", "孤儿", "工作", "索引.xml"]);
         // The old layout, whole, as a backup.
-        let backup = lib.0.join(".quiet").join(migrate::BACKUP);
+        let backup = internal_at(&lib.0).join(migrate::BACKUP);
         for id in before.keys() { assert!(backup.join("docs").join(format!("{id}.xml")).fs_is_file() || backup.join("docs").join(format!("{id}.md")).fs_is_file()); }
         assert!(backup.join("index.json").fs_is_file() && backup.join("format.json").fs_is_file() && backup.join("trash/index.json").fs_is_file());
         // The 回收站 came along.
@@ -6227,12 +6227,12 @@ mod tests {
         old.write();
         crate::vfs::create_dir_all(lib.0.join("assets")).unwrap();
         let snapshot = |root: &Path| { let mut v = vec![]; fn walk(d: &Path, v: &mut Vec<(PathBuf, Vec<u8>)>) { for e in crate::vfs::read_dir(d).unwrap().flatten() { let p = e.path(); if p.fs_is_dir() { v.push((p.clone(), vec![])); walk(&p, v); } else { v.push((p.clone(), crate::vfs::read(&p).unwrap())); } } } walk(root, &mut v); v.sort(); v };
-        let before: Vec<_> = snapshot(&lib.0).into_iter().filter(|(p, _)| !p.starts_with(lib.0.join(".quiet")) && !p.ends_with(".lock")).collect();
+        let before: Vec<_> = snapshot(&lib.0).into_iter().filter(|(p, _)| !p.starts_with(internal_at(&lib.0)) && !p.ends_with(".lock")).collect();
         let err = Store::migrate(&lib.0).expect_err("the injected failure");
         assert!(err.to_string().contains("已保持原样"), "{err}");
-        let after: Vec<_> = snapshot(&lib.0).into_iter().filter(|(p, _)| !p.starts_with(lib.0.join(".quiet")) && !p.ends_with(".lock")).collect();
+        let after: Vec<_> = snapshot(&lib.0).into_iter().filter(|(p, _)| !p.starts_with(internal_at(&lib.0)) && !p.ends_with(".lock")).collect();
         assert_eq!(after, before);
-        assert!(!lib.0.join(".quiet/format.json").fs_exists() && !lib.0.join(".quiet/index.json").fs_exists());
+        assert!(!internal_at(&lib.0).join("format.json").fs_exists() && !internal_at(&lib.0).join("index.json").fs_exists());
         // It still opens and works, in the old layout.
         let mut s = lib.open();
         assert_eq!(s.list().len(), 5);
@@ -6244,10 +6244,10 @@ mod tests {
         let mut old = Old::new(&crashed, 3);
         let a = old.doc("甲", Meta::default());
         old.write();
-        crate::vfs::create_dir_all(crashed.0.join(".quiet")).unwrap();
+        crate::vfs::create_dir_all(internal_at(&crashed.0)).unwrap();
         crate::vfs::create_dir_all(crashed.0.join("半路")).unwrap();
         crate::vfs::write(crashed.0.join("甲.xml"), b"half").unwrap();
-        crate::vfs::write(crashed.0.join(".quiet/migration.json"), b"{\"files\":[\"\xe7\x94\xb2.xml\"],\"dirs\":[\"\xe5\x8d\x8a\xe8\xb7\xaf\"],\"internal\":[],\"assets\":false}").unwrap();
+        crate::vfs::write(internal_at(&crashed.0).join("migration.json"), b"{\"files\":[\"\xe7\x94\xb2.xml\"],\"dirs\":[\"\xe5\x8d\x8a\xe8\xb7\xaf\"],\"internal\":[],\"assets\":false}").unwrap();
         let mut s = crashed.migrated();
         assert!(!crashed.0.join("半路").fs_exists());
         assert_eq!(s.load(&a).unwrap().title.text, "甲");
@@ -6259,7 +6259,7 @@ mod tests {
         drop(s);
         let mut s = crashed.open();
         assert!(!crashed.0.join("format.json").fs_exists() && !crashed.0.join("docs").fs_exists());
-        assert!(crashed.0.join(".quiet").join(migrate::BACKUP).join("format.json.2").fs_is_file());
+        assert!(internal_at(&crashed.0).join(migrate::BACKUP).join("format.json.2").fs_is_file());
         assert_eq!(s.list().len(), 1);
     }
 
@@ -6369,7 +6369,7 @@ mod tests {
         w.list();
         s.adopt(w);
         assert_eq!(s.index[&a].rel, "归档/甲.xml");
-        let d = lib.0.join(".quiet/meta");
+        let d = internal_at(&lib.0).join("meta");
         let me = s.me.id.clone();
         assert!(d.join(&me).fs_is_dir() && !d.join(format!("{me}.json")).fs_exists());
         let mut warnings = vec![];
@@ -6677,7 +6677,7 @@ mod tests {
         let mut s = lib.open();
         // The exact names in the folder, whatever the disk does with case.
         let names = |s: &Store| -> Vec<String> {
-            let mut v: Vec<String> = crate::vfs::read_dir(&s.top_dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| !n.starts_with('.')).collect();
+            let mut v: Vec<String> = crate::vfs::read_dir(&s.top_dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| !n.starts_with('.') && n != INTERNAL).collect();
             v.sort();
             v
         };
@@ -7092,7 +7092,7 @@ mod tests {
         crate::vfs::remove_dir_all(lib.0.join("外部")).unwrap();
         assert_eq!(s.list().len(), 3);
         drop(s);
-        crate::vfs::remove_dir_all(lib.0.join(".quiet")).unwrap();
+        crate::vfs::remove_dir_all(internal_at(&lib.0)).unwrap();
         let mut s = lib.open();
         let list = s.list();
         assert_eq!(list.len(), 3);
@@ -7190,7 +7190,7 @@ mod tests {
         let list = s.list();
         assert_eq!(list.len(), 5);
         assert_eq!(folders_of(&list, &b), ["改名夹"]);
-        assert!(!lib.0.join(".quiet").fs_exists() && !lib.0.join("改名夹").fs_exists(), "nothing of the new layout yet");
+        assert!(!internal_at(&lib.0).fs_exists() && !lib.0.join("改名夹").fs_exists(), "nothing of the new layout yet");
         let index: HashMap<String, Meta> = serde_json::from_slice(&crate::vfs::read(lib.0.join("index.json")).unwrap()).unwrap();
         assert!(index[&a].pinned && index[&a].opened > 0 && index[&md].markdown);
         assert_eq!(serde_json::from_slice::<FormatMarker>(&crate::vfs::read(lib.0.join("format.json")).unwrap()).unwrap().format, 3);
@@ -7266,10 +7266,10 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(50));
         s.save(&a, &doc("甲改")).unwrap();
         s.create_from(&doc("新的")).unwrap();
-        crate::vfs::write(lib.0.join(".quiet/preferences.json"), b"{\"new\":1}").unwrap();
+        crate::vfs::write(internal_at(&lib.0).join("preferences.json"), b"{\"new\":1}").unwrap();
         drop(s);
         // Pruning: not before both 30 days and three launches.
-        let info = lib.0.join(".quiet").join(migrate::BACKUP).with_extension("json");
+        let info = internal_at(&lib.0).join(migrate::BACKUP).with_extension("json");
         for _ in 0..5 { Store::prune_backups(&lib.0); }
         assert!(Store::backup_dir(&lib.0).is_some());
         let report = Store::restore_backup(&lib.0).unwrap();
@@ -7278,7 +7278,7 @@ mod tests {
         assert_eq!(crate::vfs::read(lib.0.join("docs").join(format!("{a}.xml"))).unwrap(), original);
         assert!(lib.0.join("assets/p.png").fs_is_file() && !lib.0.join(".assets").fs_exists());
         assert_eq!(crate::vfs::read(lib.0.join("preferences.json")).unwrap(), b"{\"new\":1}");
-        assert!(!lib.0.join("夹").fs_exists() && !lib.0.join(".quiet/format.json").fs_exists());
+        assert!(!lib.0.join("夹").fs_exists() && !internal_at(&lib.0).join("format.json").fs_exists());
         assert_eq!(Store::migration_state(&lib.0), MigrationState::NeedsConsent(ConsentReason::Restored));
         let mut s = lib.open();
         assert!(s.flat);
@@ -7508,8 +7508,8 @@ mod tests {
         let lib = Lib::new("sweep-keep");
         for name in ["trashed.png", "old.png", "backup.png"] { asset(&lib, name); }
         // Restoring a page, or a version of one, must not bring back a missing picture.
-        page_at(&lib, ".quiet/trash/9f2.xml", "<image src=\"/x/.assets/trashed.png\"/>");
-        page_at(&lib, ".quiet/history/9f2/1.xml", "<image src=\"/x/.assets/old.png\"/>");
+        page_at(&lib, "conf/trash/9f2.xml", "<image src=\"/x/.assets/trashed.png\"/>");
+        page_at(&lib, "conf/history/9f2/1.xml", "<image src=\"/x/.assets/old.png\"/>");
         // The `.bak` of a page that is still there, with the picture its
         // current text no longer has.
         page_at(&lib, "note.md", "no pictures now");
@@ -7536,7 +7536,7 @@ mod tests {
         assert_eq!(Store::remove_unused_assets(&lib.0, &names), 1);
         let from = Store::assets_in(&lib.0);
         assert!(!from.join("spare.png").fs_is_file());
-        let day = removed(&lib.0.join(".quiet").join("removed-assets"));
+        let day = removed(&internal_at(&lib.0).join("removed-assets"));
         assert!(day.join("spare.png").fs_is_file());
         // A second sweep of the same name adds a number rather than overwriting.
         asset(&lib, "spare.png");
@@ -7563,8 +7563,8 @@ mod tests {
         crate::table::sqlite::create(&lib.0.join("表.sqlite"), &base("in-file.png")).unwrap();
         crate::table::sqlite::create(&Store::assets_in(&lib.0).join("t.sqlite"), &base("in-embedded.png")).unwrap();
         page_at(&lib, "page.xml", "<title>P</title>\n<table src=\".assets/t.sqlite\"/>");
-        crate::vfs::create_dir_all(lib.0.join(".quiet/history/x")).unwrap();
-        crate::table::sqlite::create(&lib.0.join(".quiet/history/x/1700000000000-0000abcd.sqlite"), &base("in-version.png")).unwrap();
+        crate::vfs::create_dir_all(internal_at(&lib.0).join("history/x")).unwrap();
+        crate::table::sqlite::create(&internal_at(&lib.0).join("history/x/1700000000000-0000abcd.sqlite"), &base("in-version.png")).unwrap();
         assert_eq!(spare_assets(&lib, vec![]), ["spare.png"]);
     }
 
@@ -7575,8 +7575,8 @@ mod tests {
         let lib = Lib::new("sweep-blind");
         asset(&lib, "a.png");
         page_at(&lib, "note.md", "nothing");
-        crate::vfs::create_dir_all(lib.0.join(".quiet/trash")).unwrap();
-        crate::vfs::write(lib.0.join(".quiet/trash/.DS_Store"), [0u8, 159, 146, 150, 0xff]).unwrap();
+        crate::vfs::create_dir_all(internal_at(&lib.0).join("trash")).unwrap();
+        crate::vfs::write(internal_at(&lib.0).join("trash/.DS_Store"), [0u8, 159, 146, 150, 0xff]).unwrap();
         assert_eq!(spare_assets(&lib, vec![]), ["a.png"]);
         page_at(&lib, "sub/.cloud.md.icloud", "bplist00");
         assert!(Store::unused_assets_at(lib.0.clone(), vec![], vec![]).is_err());
@@ -7602,9 +7602,9 @@ mod tests {
     #[test]
     fn removed_assets_are_cleared_by_the_day_they_were_removed() {
         let lib = Lib::new("sweep-days");
-        let gone = lib.0.join(".quiet/removed-assets");
-        page_at(&lib, ".quiet/removed-assets/2001-02-03/old.png", "png");
-        page_at(&lib, ".quiet/removed-assets/notes.txt", "kept");
+        let gone = internal_at(&lib.0).join("removed-assets");
+        page_at(&lib, "conf/removed-assets/2001-02-03/old.png", "png");
+        page_at(&lib, "conf/removed-assets/notes.txt", "kept");
         asset(&lib, "spare.png");
         assert_eq!(Store::remove_unused_assets(&lib.0, &["spare.png".to_string()]), 1);
         assert!(!gone.join("2001-02-03").fs_exists() && gone.join("notes.txt").fs_is_file());

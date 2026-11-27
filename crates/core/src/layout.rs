@@ -190,7 +190,7 @@ pub(super) fn scan(root: &Path, ours: &mut dyn FnMut(&str, &Path, DocKind, bool)
                 if crate::store::DocKind::of_name(real).is_some() && !crate::shown::ignored(rules, &child, false) { out.pending.push(child); shows = true; }
                 continue;
             }
-            if name.starts_with('.') { continue; }
+            if name.starts_with('.') || name == crate::store::INTERNAL { continue; }
             // Symbolic links are not followed: a link to a parent would never end.
             let child = join_rel(rel, &name);
             if kind.fs_is_dir() {
