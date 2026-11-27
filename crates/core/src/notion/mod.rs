@@ -643,6 +643,23 @@ pub fn pull<H: Http>(root: &Path, client: &Client<H>) -> Result<(usize, usize, V
             failed.push(title.clone());
         }
     }
+    // 图片垃圾回收：没有任何笔记再引用的 asset 文件删除（页面在 Notion
+    // 那头删了图，或笔记改版换图后，旧的本地副本不再有用）。
+    let refs_in_notes = regex::Regex::new(r"(?:\.\./)*assets/([^)\s]+)").unwrap();
+    let mut referenced: BTreeMap<String, ()> = BTreeMap::new();
+    for rel in list_markdown(root) {
+        if let Ok(text) = std::fs::read_to_string(notes.join(&rel)) {
+            for cap in refs_in_notes.captures_iter(&text) {
+                if let Some(name) = cap[1].rsplit('/').next() { referenced.insert(name.to_string(), ()); }
+            }
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(&assets) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !referenced.contains_key(&name) { let _ = std::fs::remove_file(e.path()); }
+        }
+    }
     // 有失败也要存：已完成的映射先落盘，下次不会重复导入。
     let _ = state.save(root);
     Ok((imported, refreshed, failed))
