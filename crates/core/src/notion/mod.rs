@@ -173,6 +173,14 @@ impl<H: Http> Client<H> {
         Ok(())
     }
 
+    /// Move a page under a new parent: the local hierarchy's half of the
+    /// two-way sync (the API's every page carries its parent's id, so a
+    /// mismatch says the page should move).
+    pub fn move_page(&self, page_id: &str, new_parent: &str) -> Result<()> {
+        self.request("PATCH", &format!("/pages/{page_id}"), Some(json!({"parent": {"page_id": new_parent}})))?;
+        Ok(())
+    }
+
     /// One raw GET, for a pre-signed S3 file URL (no auth header wanted).
     pub fn fetch(&self, url: &str) -> Result<Vec<u8>> {
         let resp = self.http.send(Request { method: "GET".into(), url: url.into(), headers: vec![], body: None })?;
@@ -437,11 +445,44 @@ pub fn push<H: Http>(root: &Path, client: &Client<H>, parent: Option<&str>) -> R
     let mut state = State::load(root);
     let (mut created, mut updated) = (0, 0);
     let mut failed = vec![];
+    // 双向层级：本地文件夹 = 同名 Notion 页面。API 的每个 page 都带
+    // parent.page_id，父子关系本地说了算：文件挪了，页面也 PATCH 过去。
+    let mut by_title: BTreeMap<String, String> = BTreeMap::new();
+    let mut page_parent: BTreeMap<String, String> = BTreeMap::new();
+    for page in client.search_pages()? {
+        if page["archived"].as_bool() == Some(true) || page["in_trash"].as_bool() == Some(true) { continue }
+        if let Some(pid) = page["id"].as_str() {
+            by_title.entry(client.page_title(&page)).or_insert_with(|| pid.to_string());
+            if let Some(pp) = page["parent"]["page_id"].as_str() { page_parent.insert(pid.to_string(), pp.to_string()); }
+        }
+    }
     for rel in list_markdown(root) {
         let bytes = match std::fs::read(root.join("md").join(&rel)) { Ok(b) => b, Err(_) => { failed.push(rel); continue } };
         let title = rel.rsplit('/').next().unwrap_or(&rel).trim_end_matches(".md").to_string();
         let hash = fnv(&bytes);
-        let known = state.0.get(&rel).cloned();
+        // 文件按路径认领，认领不到再按标题认领（本地挪动过的笔记）。
+        let mut known = state.0.get(&rel).cloned();
+        let mut known_key: Option<String> = known.as_ref().map(|_| rel.clone());
+        if known.is_none() && let Some((k, m)) = state.0.iter().find(|(_, m)| m.title == title) {
+            known = Some(m.clone());
+            known_key = Some(k.clone());
+        }
+        let moved_local = known_key.as_deref() != Some(rel.as_str());
+        if moved_local {
+            // 本地层级 → Notion：文件所在的文件夹链就是它应有的父页面。
+            let parts: Vec<String> = rel.rsplit_once('/').map(|(d, _)| d.split('/').map(str::to_string).collect()).unwrap_or_default();
+            if let Some(target) = folder_chain(&parts, parent.as_deref(), client, &by_title) {
+                if let Some(pid) = known.as_ref().map(|m| m.page_id.clone()) && page_parent.get(&pid) != Some(&target) {
+                    let _ = client.move_page(&pid, &target);
+                }
+                if let Some(k) = &known_key { state.0.remove(k); }
+                if let Some(m) = &known { state.0.insert(rel.clone(), m.clone()); }
+            } else if known_key.is_some() {
+                // 文件夹链解析不了（父页面没填）：状态跟着本地路径走，页面留原地。
+                if let Some(k) = &known_key { state.0.remove(k); }
+                if let Some(m) = &known { state.0.insert(rel.clone(), m.clone()); }
+            }
+        }
         if let Some(m) = &known && m.pushed == hash && !m.page_id.is_empty() { continue; }
         let md = String::from_utf8_lossy(&bytes).to_string();
         // 本地图片上传 Notion：file id 每次推送都会变，直接重传（Notion
@@ -477,6 +518,8 @@ pub fn push<H: Http>(root: &Path, client: &Client<H>, parent: Option<&str>) -> R
         };
         match result {
             Ok(id) => {
+                // 标题认领的旧键（改名/挪动前的路径）清掉，映射跟着新路径走。
+                if let Some(k) = &known_key && k != &rel { state.0.remove(k); }
                 state.0.insert(rel.clone(), Mapping { page_id: id, title, pushed: hash, last_edited: String::new() });
                 if known.is_some() { updated += 1; } else { created += 1; }
             }
@@ -486,6 +529,23 @@ pub fn push<H: Http>(root: &Path, client: &Client<H>, parent: Option<&str>) -> R
     // 有失败也要存：已创建页面的映射先落盘，下次 pull 才不会把它们当新页面重复导入。
     let _ = state.save(root);
     Ok((created, updated, failed))
+}
+
+/// 本地文件夹链 → Notion 父页面：每一级按标题找页面，找不到的（本地新建的
+/// 文件夹）在上一级下补建。链头没有落点时返回 None。
+fn folder_chain<H: Http>(parts: &[String], base: Option<&str>, client: &Client<H>, by_title: &BTreeMap<String, String>) -> Option<String> {
+    let mut cur = base.map(str::to_string);
+    for part in parts {
+        let id = match by_title.get(part) {
+            Some(id) => id.clone(),
+            None => {
+                let p = cur.clone()?;
+                client.create_page(&p, part, vec![]).ok()?
+            }
+        };
+        cur = Some(id);
+    }
+    cur
 }
 
 /// Pull: every page the integration can reach (Notion Lite's `syncFromNotion`
