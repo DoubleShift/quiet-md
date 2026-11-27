@@ -2033,7 +2033,12 @@ impl Workspace {
                     .child(
                         // Straight to a new document: no 新建 menu, as 导入 is rare.
                         seg("doc-new", "plus").tip(crate::settings::tr("新建文档", "New document"), None).on_click(cx.listener(|w, _, window, cx| w.new_doc(window, cx))),
-                    ).into_any_element()
+                    )
+                    .child(if self.notion_syncing {
+                        seg("notion-sync", "spinner").tip(crate::settings::tr("Notion 同步中…", "Notion sync running…"), None).into_any_element()
+                    } else {
+                        seg("notion-sync", "rotate-ccw-square").tip(crate::settings::tr("同步 Notion", "Sync Notion"), None).on_click(cx.listener(|w, _, _, cx| w.notion_sync_now(cx))).into_any_element()
+                    }).into_any_element()
             )
     }
 }

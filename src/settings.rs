@@ -1817,12 +1817,14 @@ impl Workspace {
 
     /// 立即同步: the fields are saved with the preferences, then the sync runs
     /// off the main thread (one blocking curl per request) and reports back.
-    fn notion_sync_now(&mut self, cx: &mut Context<Self>) {
+    /// Both the settings page (Notion › 上次同步) and the top-bar button call this.
+    pub(crate) fn notion_sync_now(&mut self, cx: &mut Context<Self>) {
         if self.notion_syncing { return }
         let token = self.notion_token.read(cx).text.trim().to_string();
         let proxy = self.notion_proxy.read(cx).text.trim().to_string();
         if token.is_empty() {
             self.notion_status = Some((false, tr("先填写集成令牌", "Fill in the integration token first").to_string()));
+            self.show_toast_kind(ui::ToastKind::Error, tr("先在设置 › Notion 填写集成令牌", "Fill in the integration token first in Settings › Notion"), cx);
             cx.notify();
             return;
         }
@@ -1839,7 +1841,11 @@ impl Workspace {
             }).await;
             let _ = this.update(cx, |w, cx| {
                 w.notion_syncing = false;
-                w.notion_status = Some(match result { Ok(s) => (true, s), Err(e) => (false, format!("{e}")) });
+                w.notion_status = Some(match &result { Ok(s) => (true, s.clone()), Err(e) => (false, format!("{e}")) });
+                match &result {
+                    Ok(s) => w.show_toast(s, cx),
+                    Err(e) => w.show_toast_kind(ui::ToastKind::Error, &format!("{e}"), cx),
+                }
                 cx.notify();
             });
         }).detach();
