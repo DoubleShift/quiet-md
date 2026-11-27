@@ -515,7 +515,7 @@ fn lock_file(path: &Path) -> Result<crate::vfs::File> {
 /// (before one is added, the old layout) it is `library_key`, and those
 /// formats take `.quiet/.lock` as well.
 fn lock_path_at(root: &Path) -> PathBuf {
-    let id = reread::<FormatMarker>(&root.join(INTERNAL).join("format.json")).map(|m| m.id).unwrap_or_default();
+    let id = reread::<FormatMarker>(&internal_at(root).join("format.json")).map(|m| m.id).unwrap_or_default();
     let name = if !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') { id } else { library_key(root) };
     local_base(root).join("locks").join(format!("{name}.lock"))
 }
@@ -533,8 +533,9 @@ pub const FORMAT: u32 = 6;
 
 /// `load` of a document still in iCloud.
 pub const NOT_DOWNLOADED: &str = "这篇文档还在从 iCloud 下载，请稍后再打开";
-/// The hidden folder holding the library's own data.
-pub const INTERNAL: &str = ".quiet";
+/// The hidden folder holding the library's own data. For the default library
+/// (exe 同级的 `md/`) it lives one level up, beside `md/` itself.
+pub const INTERNAL: &str = "conf";
 /// The hidden folder holding pasted and inserted images and attachments.
 pub const ASSETS: &str = ".assets";
 
@@ -951,7 +952,7 @@ impl Store {
     /// them beside their library, as before. The first run after top-level folders copies
     /// them from the library that held them; that copy stays for older builds.
     pub fn settings_dir() -> PathBuf {
-        let legacy = || { let root = Self::legacy_dir(); if Self::flat_at(&root) { root } else { root.join(INTERNAL) } };
+        let legacy = || { let root = Self::legacy_dir(); if Self::flat_at(&root) { root } else { internal_at(root) } };
         if std::env::var_os("QUIET_MD_HOME").is_some() || cfg!(target_family = "wasm") {
             let d = legacy();
             let _ = crate::vfs::create_dir_all(&d);
@@ -982,7 +983,7 @@ impl Store {
     /// `.quiet/preferences.json` (where builds before top-level folders kept it) says.
     /// FORMAT 5: the `look.` fields of `_root` in the devices' files.
     pub fn look_at(root: &Path) -> FolderLook {
-        let internal = if Self::flat_at(root) { root.to_path_buf() } else { root.join(INTERNAL) };
+        let internal = if Self::flat_at(root) { root.to_path_buf() } else { internal_at(root) };
         if Self::format_at(root) >= 5 {
             let o = meta::load(root, &device().id, &mut vec![]).root_object("look.");
             if o.as_object().is_some_and(|o| !o.is_empty()) { return serde_json::from_value(o).unwrap_or_default(); }
@@ -997,7 +998,7 @@ impl Store {
     }
 
     pub fn save_look_at(root: &Path, look: &FolderLook) -> Result<()> {
-        let internal = if Self::flat_at(root) { root.to_path_buf() } else { root.join(INTERNAL) };
+        let internal = if Self::flat_at(root) { root.to_path_buf() } else { internal_at(root) };
         if Self::format_at(root) >= 5 {
             // Each field on its own: a theme picked here and a font picked there both stay.
             // Compared with what the devices' files hold, not with `look_at`'s fallbacks: the
@@ -1022,7 +1023,7 @@ impl Store {
     }
 
     /// Top-level folder `root`'s themes folder.
-    pub fn themes_dir_of(root: &Path) -> PathBuf { if Self::flat_at(root) { root.join("themes") } else { root.join(INTERNAL).join("themes") } }
+    pub fn themes_dir_of(root: &Path) -> PathBuf { if Self::flat_at(root) { root.join("themes") } else { internal_at(root).join("themes") } }
 
     /// The 应用级 part of `Settings` (sidebar width, home view, windows),
     /// from `settings_dir`.
@@ -1031,7 +1032,7 @@ impl Store {
     pub fn save_app_settings(s: &Settings) -> Result<()> { save_json(&Self::settings_dir().join("settings.json"), s) }
 
     /// Whether `root` is (still) in the old layout.
-    pub fn flat_at(root: &Path) -> bool { !root.join(INTERNAL).join("format.json").fs_is_file() && migrate::legacy(root) }
+    pub fn flat_at(root: &Path) -> bool { !internal_at(root).join("format.json").fs_is_file() && migrate::legacy(root) }
 
     /// Where images and attachments are in library `root`.
     pub fn assets_in(root: &Path) -> PathBuf { root.join(if Self::flat_at(root) { "assets" } else { ASSETS }) }
@@ -1096,7 +1097,7 @@ impl Store {
             anyhow::bail!("{} is a 数据表, not readable here", path.display())
         }
         let flat = Self::flat_at(&root);
-        let internal = if flat { root.clone() } else { root.join(INTERNAL) };
+        let internal = if flat { root.clone() } else { internal_at(root) };
         let docs = if flat { root.join("docs") } else { root.clone() };
         let mut pages: Vec<PathBuf> = vec![];
         scan(&docs, &mut pages)?;
@@ -1182,7 +1183,7 @@ impl Store {
     pub fn remove_unused_assets(root: &Path, names: &[String]) -> usize {
         use crate::time::{civil, days_from_civil};
         let from = Self::assets_in(root);
-        let internal = if Self::flat_at(root) { root.to_path_buf() } else { root.join(INTERNAL) };
+        let internal = if Self::flat_at(root) { root.to_path_buf() } else { internal_at(root) };
         let gone = internal.join("removed-assets");
         let (y, m, d, ..) = civil(now());
         let today = days_from_civil(y, m, d);
@@ -1216,12 +1217,48 @@ impl Store {
 
     /// Whether `dir` holds a library, of this layout or an older one.
     pub fn is_library(dir: &Path) -> bool {
-        dir.join(INTERNAL).join("format.json").fs_is_file() || migrate::legacy(dir)
+        internal_at(dir).join("format.json").fs_is_file() || migrate::legacy(dir)
     }
 
     /// The pointer to a library outside Documents; per user, never synced.
     pub fn location_file() -> PathBuf {
         dirs::data_local_dir().unwrap_or_else(crate::vfs::temp_dir).join("quiet-md").join("library.json")
+    }
+
+    /// 默认库（exe 同级 `md/`）的内部数据目录在 exe 同级 `conf/`（与 md/ 同层）；
+    /// 其他库在自己的文件夹里。旧的 `.quiet/` 自动迁移。
+    pub fn internal_at(root: &Path) -> PathBuf {
+        let dir = if root == Self::default_dir() {
+            root.parent().map(|d| d.join(INTERNAL)).unwrap_or_else(|| internal_at(root))
+        } else {
+            internal_at(root)
+        };
+        migrate_old_quiet(root, &dir);
+        dir
+    }
+
+    /// 旧 `.quiet/` → `conf/`：库数据挪过去，三个配置文件合并成 conf.json。
+    fn migrate_old_quiet(root: &Path, conf: &Path) {
+        let old = root.join(".quiet");
+        if !old.fs_is_dir() || conf.join("conf.json").fs_is_file() { return; }
+        let _ = crate::vfs::create_dir_all(conf);
+        for name in ["format.json", "index.json.v4", "index.json.bak", ".lock"] {
+            if old.join(name).fs_is_file() { let _ = std::fs::rename(old.join(name), conf.join(name)); }
+        }
+        for name in ["meta", "trash"] {
+            if old.join(name).fs_is_dir() { let _ = std::fs::rename(old.join(name), conf.join(name)); }
+        }
+        let mut merged = serde_json::json!({});
+        for (key, name) in [("preferences", "preferences.json"), ("settings", "settings.json"), ("notion_sync", "notion-sync.json")] {
+            if let Ok(b) = crate::vfs::read(&old.join(name)) {
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&b) { merged[key] = v; }
+            }
+        }
+        if let Ok(b) = crate::vfs::read(&conf.join("format.json")) {
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&b) { merged["format"] = v; }
+        }
+        if let Ok(b) = serde_json::to_vec_pretty(&merged) { let _ = crate::vfs::write(conf.join("conf.json"), &b); }
+        let _ = crate::vfs::remove_dir_all(&old);
     }
 
     /// Use `root` for the rest of this run, and from now on unless
@@ -1296,7 +1333,7 @@ impl Store {
     pub fn prune_backups(root: &Path) { migrate::prune(root) }
 
     /// The backup of the old layout, while there is one.
-    pub fn backup_dir(root: &Path) -> Option<PathBuf> { Some(root.join(INTERNAL).join(migrate::BACKUP)).filter(|p| p.fs_is_dir()) }
+    pub fn backup_dir(root: &Path) -> Option<PathBuf> { Some(internal_at(root).join(migrate::BACKUP)).filter(|p| p.fs_is_dir()) }
 
     /// A top-level folder on 主页, as it is: one that is not there (an
     /// unplugged disk, renamed in the Finder) is an error, never made anew.
@@ -1391,7 +1428,7 @@ impl Store {
         crate::vfs::create_dir_all(&root)?;
         Self::adopt_path_data(&root, key);
         let mut warnings = vec![];
-        let internal = root.join(INTERNAL);
+        let internal = internal_at(root);
         let marker = internal.join("format.json");
         let flat = Self::flat_at(&root);
         if flat {
@@ -1469,7 +1506,7 @@ impl Store {
     /// FORMAT 4 → 5 under the locks a FORMAT 4 write takes: a copy opening
     /// the top-level folder at the same time waits, then finds it done.
     fn upgrade_meta(root: &Path, me: &Device, warnings: &mut Vec<String>) -> Result<()> {
-        let _locks = WriteLock(vec![lock_file(&lock_path_at(root))?, lock_file(&root.join(INTERNAL).join(".lock"))?]);
+        let _locks = WriteLock(vec![lock_file(&lock_path_at(root))?, lock_file(&internal_at(root).join(".lock"))?]);
         if Self::format_at(root) < 5 { meta::upgrade(root, me, warnings)?; }
         if Self::format_at(root) == 5 && Self::newest() >= 6 { meta::upgrade6(root, me, warnings)?; }
         Ok(())
@@ -1507,7 +1544,7 @@ impl Store {
     /// One still only in iCloud: 5 when the per-device index folder is
     /// there, else 4 (the formats with a `.quiet/`).
     fn format_at(root: &Path) -> u32 {
-        let marker = root.join(INTERNAL).join("format.json");
+        let marker = internal_at(root).join("format.json");
         // 5, not 6, when it cannot tell: a write checks the marker again and stops.
         if crate::vfs::is_dataless(&marker) { return if meta::dir(root).fs_is_dir() { 5 } else { 4 } }
         reread::<FormatMarker>(&marker).map_or(0, |m| m.format)
@@ -1682,8 +1719,8 @@ impl Store {
     /// Where the library keeps its own files: `.quiet/`, the top in the old layout.
     /// 版本历史 lives in `.quiet/` in either layout, so a library that has
     /// not moved to folders yet never grows a visible `history/` folder.
-    fn history_base(&self) -> PathBuf { self.top_dir.join(INTERNAL) }
-    fn internal(&self) -> PathBuf { if self.flat { self.top_dir.clone() } else { self.top_dir.join(INTERNAL) } }
+    fn history_base(&self) -> PathBuf { self.top_internal_at(dir) }
+    fn internal(&self) -> PathBuf { if self.flat { self.top_dir.clone() } else { self.top_internal_at(dir) } }
     fn index_file(&self) -> PathBuf { self.internal().join("index.json") }
     fn trash_index_file(&self) -> PathBuf { self.internal().join("trash").join("index.json") }
     fn local_file(&self) -> PathBuf { local_file_for(&self.top_dir, &self.key) }
@@ -2047,7 +2084,7 @@ impl Store {
         crate::vfs::create_dir_all(self.internal())?;
         let lock = WriteLock(self.lock_files(self.v5)?);
         // Another copy moved it to the new layout meanwhile: nothing more is written here.
-        anyhow::ensure!(!self.flat || !self.top_dir.join(INTERNAL).join("format.json").fs_exists(), "文档库已升级到新格式，请重新打开 Quiet.md");
+        anyhow::ensure!(!self.flat || !self.top_internal_at(dir).join("format.json").fs_exists(), "文档库已升级到新格式，请重新打开 Quiet.md");
         let marker: FormatMarker = serde_json::from_slice(&crate::vfs::read(self.internal().join("format.json"))?)?;
         anyhow::ensure!(marker.format <= FORMAT, "这个文档库由更新版本的 Quiet.md 创建，请升级后再打开");
         anyhow::ensure!((self.v5 || marker.format < 5) && (self.v6 || marker.format < 6), "文档库已升级到新格式，请重新打开 Quiet.md");
@@ -5665,9 +5702,9 @@ mod tests {
         let lib = Lib::new("look-first");
         lib.open();
         let look = FolderLook { theme: Some("notion".into()), feishu: Some(false), doc_family: Some("LXGW WenKai".into()), doc_size: Some(String::new()) };
-        crate::vfs::write(lib.0.join(INTERNAL).join("preferences.json"), r#"{"theme":"notion","feishu":false,"doc_family":"LXGW WenKai"}"#).unwrap();
+        crate::vfs::write(internal_at(&lib.0).join("preferences.json"), r#"{"theme":"notion","feishu":false,"doc_family":"LXGW WenKai"}"#).unwrap();
         Store::save_look_at(&lib.0, &look).unwrap();
-        crate::vfs::write(lib.0.join(INTERNAL).join("preferences.json"), "{}").unwrap();
+        crate::vfs::write(internal_at(&lib.0).join("preferences.json"), "{}").unwrap();
         assert_eq!(Store::look_at(&lib.0), look);
     }
 
@@ -7640,13 +7677,13 @@ mod tests {
         s.set_pinned(&id, true).unwrap();
         let other = meta::dir(&lib.0).join("other-device.json");
         crate::vfs::write(&other, b"{}").unwrap();
-        let trash = lib.0.join(INTERNAL).join("trash").join("index.json");
+        let trash = internal_at(&lib.0).join("trash").join("index.json");
         crate::vfs::create_dir_all(trash.parent().unwrap()).unwrap();
         crate::vfs::write(&trash, b"{}").unwrap();
         // Every one of this device's files.
         let own = meta::dir(&lib.0).join(device().id);
         let mine: Vec<PathBuf> = crate::vfs::read_dir(&own).unwrap().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
-        let (before, marker) = (mine.iter().map(|p| crate::vfs::read(p).unwrap()).collect::<Vec<_>>(), lib.0.join(INTERNAL).join("format.json"));
+        let (before, marker) = (mine.iter().map(|p| crate::vfs::read(p).unwrap()).collect::<Vec<_>>(), internal_at(&lib.0).join("format.json"));
         let format = crate::vfs::read(&marker).unwrap();
         for f in mine.iter().chain([&other, &trash, &marker]) { crate::vfs::set_dataless(f, true); }
         let mut s = lib.open();
