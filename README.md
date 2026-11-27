@@ -95,6 +95,14 @@ The `quiet` command line tool lets an AI agent (Claude Code, Codex, or any MCP c
 - **Housekeeping**: Settings › Documents finds images and files no note uses any more and moves them out once you confirm.
 - **Updates**: new versions install from inside the app after their signature is verified. Automatic checks can be turned off.
 
+### Notion sync
+
+Two-way sync between the library and a Notion workspace, after Notion Lite's client (Settings › Notion, or the `quiet-notion` command line tool):
+
+- **Pull** imports every page the integration can reach, keeping the folder structure — a page with the 📁 icon (or title) is a folder, its children land inside — and downloads images into the library's `.assets/`, so notes read offline.
+- **Push** creates a page for each library note and rewrites the page when the file changes. A new note needs a parent page: sync first, then pick where it goes.
+- The mapping between files and pages lives in `.quiet/notion-sync.json`, so a page is not duplicated by accident. Requests go through the system curl with the connection's token, so a proxy can be set when `api.notion.com` is blocked.
+
 ## Download
 
 <p align="center">
@@ -148,6 +156,7 @@ Thanks to everyone who has helped build Quiet.md. Issues and pull requests are w
 
 ## Recent updates
 
+- **Notion sync**: two-way sync between the library and a Notion workspace. Pull imports every reachable page with the folder structure kept (📁 pages are folders) and downloads images into `.assets/`; push creates or updates a page per Markdown note. One click in Settings › Notion, or the `quiet-notion` CLI.
 - **0.1.14** (Nov 22): find and replace with regular expressions. Obsidian `[[wikilinks]]` open the note they point to. A Turkish interface, and Arabic laid out right to left. Choose the interface and document fonts, and clear out images and files no note uses. Search keeps up with large libraries, and deleting many notes is quicker. A setting for whether Backspace returns to the title; on Windows and Linux, Copy as Markdown is now Ctrl+Shift+M.
 - **0.1.13** (Nov 17): boards — a whiteboard ported from Excalidraw, as a block in a note or a standalone `.excalidraw` file, fast with 10,000 shapes. Version history for every note (… › Version history). French and Arabic interfaces. Copy as Markdown, copy a file's path, and switch the library folder in Settings. Pasted web images are saved into the library. Less memory on picture-heavy pages and smoother sidebar scrolling.
 - **0.1.12** (Nov 14): drag files from Finder, or a file from Files on this computer, straight into a sidebar folder or between rows; the whole page lights up as a drop target. Redesigned Home cards with squircle corners, an Open in Finder menu, breadcrumbs that start at My documents, a minimum window width that keeps room for the note, and a solid sidebar in full screen. Fixes a hang when creating a document in a folder.

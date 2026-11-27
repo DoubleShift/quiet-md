@@ -1793,9 +1793,8 @@ impl Workspace {
         let field = |f: &Entity<crate::input::TextField>| div().w(px(300.)).child(f.clone());
         let mut rows = vec![
             row(tr("集成令牌", "Integration token"), Some(tr("Notion 内部集成的 secret token（在 notion.so/my-integrations 创建）。", "The Notion integration's secret token (create one at notion.so/my-integrations).").into()), field(&self.notion_token)),
-            row(tr("父页面", "Parent page"), Some(tr("可选。新建笔记的落点；不填也能同步——拉取会导入集成可见的全部页面，已有落点的笔记照常更新。", "Optional. Where new notes are created. Sync works without it: pulling imports every page the integration can reach, and notes already pushed keep updating where they are.").into()), field(&self.notion_parent)),
             row(tr("代理", "Proxy"), Some(tr("直连 api.notion.com 被拦时的出口，如 socks5://127.0.0.1:10810；留空直连。", "An outlet for when api.notion.com is blocked, e.g. socks5://127.0.0.1:10810; empty connects directly.").into()), field(&self.notion_proxy)),
-            row(tr("立即同步", "Sync now"), desc(tr("库里的 Markdown 笔记推到 Notion（新建或更新页面），再把父页面下本地没有的页面拉回库里。", "The library's Markdown notes are pushed to Notion (pages created or updated), then pages under the parent the library lacks are pulled in.")),
+            row(tr("立即同步", "Sync now"), desc(tr("把库里的 Markdown 笔记推到 Notion，再把能访问到的全部页面（含文件夹结构和图片）拉回库里。", "The library's Markdown notes are pushed to Notion, then every reachable page (folders and images included) is pulled back in.")),
                 if self.notion_syncing { button("notion-sync", tr("同步中…", "Syncing…")) } else { button("notion-sync", tr("立即同步", "Sync now")).on_click(cx.listener(|w, _, _, cx| w.notion_sync_now(cx))) }),
         ];
         if let Some((ok, msg)) = &self.notion_status {
@@ -1813,7 +1812,6 @@ impl Workspace {
     fn notion_sync_now(&mut self, cx: &mut Context<Self>) {
         if self.notion_syncing { return }
         let token = self.notion_token.read(cx).text.trim().to_string();
-        let parent = self.notion_parent.read(cx).text.trim().to_string();
         let proxy = self.notion_proxy.read(cx).text.trim().to_string();
         if token.is_empty() {
             self.notion_status = Some((false, tr("先填写集成令牌", "Fill in the integration token first").to_string()));
@@ -1821,7 +1819,7 @@ impl Workspace {
             return;
         }
         let mut p = prefs();
-        (p.notion_token, p.notion_parent, p.notion_proxy) = (token.clone(), parent.clone(), proxy.clone());
+        (p.notion_token, p.notion_proxy) = (token.clone(), proxy.clone());
         if save(&p).is_err() { return }
         self.notion_syncing = true;
         self.notion_status = None;
@@ -1829,7 +1827,7 @@ impl Workspace {
         let root = crate::store::Store::active_dir();
         cx.spawn(async move |this, cx| {
             let result = cx.background_executor().spawn(async move {
-                fdl_core::notion::sync_dir_with(&root, &token, Some(&parent), (!proxy.is_empty()).then(|| (proxy, String::new())))
+                fdl_core::notion::sync_dir_with(&root, &token, None, (!proxy.is_empty()).then(|| (proxy, String::new())))
             }).await;
             let _ = this.update(cx, |w, cx| {
                 w.notion_syncing = false;

@@ -936,7 +936,10 @@ impl Store {
     pub fn default_dir() -> PathBuf {
         // The web build's library lives in memory (vfs).
         if cfg!(target_family = "wasm") { return PathBuf::from("/Quiet.md") }
-        dirs::document_dir().or_else(|| dirs::home_dir().map(|h| h.join("Documents"))).unwrap_or_else(|| PathBuf::from(".")).join("Quiet.md")
+        // The library sits beside the app: the exe's own folder holds the
+        // notes and the `.quiet/` settings (a portable layout).
+        std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .unwrap_or_else(|| dirs::document_dir().or_else(|| dirs::home_dir().map(|h| h.join("Documents"))).unwrap_or_else(|| PathBuf::from(".")).join("Quiet.md"))
     }
 
     /// 应用级设置: preferences, shortcuts, themes, emoji and the window's

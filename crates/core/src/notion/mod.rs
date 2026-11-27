@@ -173,6 +173,12 @@ impl<H: Http> Client<H> {
         Ok(())
     }
 
+    /// One raw GET, for a pre-signed S3 file URL (no auth header wanted).
+    pub fn fetch(&self, url: &str) -> Result<Vec<u8>> {
+        let resp = self.http.send(Request { method: "GET".into(), url: url.into(), headers: vec![], body: None })?;
+        if resp.status == 200 { Ok(resp.body) } else { anyhow::bail!("{}: GET {url}", resp.status) }
+    }
+
     /// The page's title (its `title` property) as plain text.
     pub fn page_title(&self, page: &Value) -> String {
         page["properties"].as_object()
@@ -211,6 +217,12 @@ impl<H: Http> Client<H> {
 /// (`parsePageBlocks`): headings, lists, to-dos, quotes, callouts and code
 /// fences; images and files keep their URL.
 pub fn blocks_to_markdown(blocks: &[Value]) -> String {
+    blocks_to_markdown_with(blocks, &mut |_| None)
+}
+
+/// `blocks_to_markdown`, letting the caller take an image or file's URL and
+/// return its Markdown in place — the local copy's, for the library's pulls.
+pub fn blocks_to_markdown_with(blocks: &[Value], resolve: &mut dyn FnMut(&str) -> Option<String>) -> String {
     let mut out = String::new();
     for b in blocks {
         let t = b["type"].as_str().unwrap_or("");
@@ -230,7 +242,8 @@ pub fn blocks_to_markdown(blocks: &[Value]) -> String {
             "image" | "file" => {
                 let url = body["file"]["url"].as_str().or(body["external"]["url"].as_str()).unwrap_or("");
                 let alt = if t == "image" { "图片" } else { "附件" };
-                out.push_str(&format!("![{alt}]({url})\n\n"));
+                let line = resolve(url).unwrap_or_else(|| format!("![{alt}]({url})"));
+                out.push_str(&format!("{line}\n\n"));
             }
             _ => if !text.is_empty() { out.push_str(&format!("{text}\n\n")) },
         }
@@ -411,36 +424,95 @@ pub fn push<H: Http>(root: &Path, client: &Client<H>, parent: Option<&str>) -> R
 }
 
 /// Pull: every page the integration can reach (Notion Lite's `syncFromNotion`
-/// walks the whole search result) the library has no file for becomes `.md`
-/// (one per page, named by title). Pages already mapped are refetched only
-/// when Notion's `last_edited_time` moved since the last pull.
+/// walks the whole search result) becomes `.md` in the library, nested in the
+/// folders of its ancestor pages — a 📁/📂 page is a folder, not a note (Notion
+/// Lite's `isFolderPage`) — and its images are downloaded into `.assets/`, so
+/// notes read offline. Pages already mapped are refetched only when
+/// Notion's `last_edited_time` moved since the last pull.
 /// Returns (imported, refreshed, failed).
 pub fn pull<H: Http>(root: &Path, client: &Client<H>) -> Result<(usize, usize, Vec<String>)> {
     let mut state = State::load(root);
     let (mut imported, mut refreshed) = (0, 0);
     let mut failed = vec![];
+    // The whole reachable space first: each page's title, parent and edit
+    // time. The parents are what give the files their folder structure.
+    let mut info: BTreeMap<String, (String, Option<String>, String)> = BTreeMap::new();
     for page in client.search_pages()? {
         if page["archived"].as_bool() == Some(true) || page["in_trash"].as_bool() == Some(true) { continue }
-        let id = match page["id"].as_str() { Some(i) => i.to_string(), None => continue };
-        let title = client.page_title(&page);
-        let edited = page["last_edited_time"].as_str().unwrap_or("").to_string();
-        if let Some(m) = state.0.values().find(|m| m.page_id == id) && m.last_edited == edited { continue; }
-        let blocks = match client.block_children(&id) {
+        if let Some(id) = page["id"].as_str() {
+            let parent = page["parent"]["page_id"].as_str().map(str::to_string);
+            info.insert(id.to_string(), (client.page_title(&page), parent, page["last_edited_time"].as_str().unwrap_or("").to_string()));
+        }
+    }
+    for (id, (title, parent, edited)) in &info {
+        if folder_title(title) { continue }
+        if let Some(m) = state.0.values().find(|m| m.page_id == *id) && m.last_edited == *edited { continue; }
+        // The ancestors top-down are the folders, each a page's title itself.
+        let mut parts: Vec<String> = vec![];
+        let mut cur = parent.clone();
+        let mut guard = 0;
+        while let Some(p) = cur && guard < 20 {
+            guard += 1;
+            match info.get(&p) { Some((t, pp, _)) => { parts.push(clean_name(t)); cur = pp.clone(); }, None => break }
+        }
+        let depth = parts.len();
+        let (dir, rel) = if depth == 0 { (root.to_path_buf(), file_name_for(title)) } else {
+            let dir = root.join(parts.iter().collect::<PathBuf>());
+            (dir.clone(), format!("{}/{}", parts.join("/"), file_name_for(title)))
+        };
+        let blocks = match client.block_children(id) {
             Ok(b) => b,
             Err(e) => { failed.push(format!("{title}: {e}")); continue }
         };
-        let md = blocks_to_markdown(&blocks);
-        let rel = file_name_for(&title);
-        if std::fs::write(root.join(&rel), md.as_bytes()).is_ok() {
+        // Images and files land in the library's `.assets/`, referenced
+        // relative to the note (one `../` per folder level).
+        let assets = root.join(".assets");
+        let mut resolve = |url: &str| -> Option<String> {
+            let bytes = client.fetch(url).ok()?;
+            let name = format!("{}{}", fnv(url.as_bytes()), ext_of(&bytes, url));
+            std::fs::create_dir_all(&assets).ok()?;
+            std::fs::write(assets.join(&name), &bytes).ok()?;
+            let up = "../".repeat(depth);
+            Some(format!("![图片]({up}.assets/{name})"))
+        };
+        let md = blocks_to_markdown_with(&blocks, &mut resolve);
+        if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(dir.join(file_name_for(title)), md.as_bytes()).is_ok() {
             let old = state.0.get(&rel).cloned();
-            state.0.insert(rel.clone(), Mapping { page_id: id, title, pushed: 0, last_edited: edited });
+            state.0.insert(rel.clone(), Mapping { page_id: id.clone(), title: title.clone(), pushed: 0, last_edited: edited.clone() });
             if old.is_some() { refreshed += 1; } else { imported += 1; }
         } else {
-            failed.push(title);
+            failed.push(title.clone());
         }
     }
     if failed.is_empty() { state.save(root)?; }
     Ok((imported, refreshed, failed))
+}
+
+/// A folder page: 📁/📂 in the icon or at the title's start (Notion Lite's
+/// `isFolderPage`). Folder pages hold other pages; they are not notes.
+fn folder_title(title: &str) -> bool {
+    title.starts_with("📁") || title.starts_with("📂")
+}
+
+/// A title as a file or folder name on this disk: Notion Lite's character
+/// sweep, the folder emojis gone.
+fn clean_name(title: &str) -> String {
+    let clean: String = title.trim_start_matches("📁").trim_start_matches("📂").trim().chars()
+        .map(|c| if matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { ' ' } else { c })
+        .collect();
+    let clean = clean.trim().trim_start_matches("📁").trim();
+    if clean.is_empty() { "未命名".into() } else { clean.to_string() }
+}
+
+/// A file extension by the downloaded bytes' magic, else by the URL's tail.
+fn ext_of(bytes: &[u8], url: &str) -> String {
+    let from_magic = if bytes.starts_with(b"\x89PNG") { "png" }
+        else if bytes.starts_with(b"\xff\xd8") { "jpg" }
+        else if bytes.starts_with(b"GIF8") { "gif" }
+        else if bytes.len() > 12 && &bytes[8..12] == b"WEBP" { "webp" }
+        else if bytes.starts_with(b"%PDF") { "pdf" }
+        else { return url.rsplit('.').next().unwrap_or("bin").split('?').next().unwrap_or("bin").chars().take(8).collect() };
+    from_magic.into()
 }
 
 /// The bare page id out of a full `https://www.notion.so/…-<id>` URL or an id
