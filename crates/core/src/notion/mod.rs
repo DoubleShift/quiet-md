@@ -417,9 +417,9 @@ pub fn list_markdown(root: &Path) -> Vec<String> {
             }
         }
     }
-    let notes = root.join("md");
+    let notes = root;
     let mut out = vec![];
-    walk(&notes, Path::new(""), &mut out);
+    walk(notes, Path::new(""), &mut out);
     out.sort();
     out
 }
@@ -457,7 +457,7 @@ pub fn push<H: Http>(root: &Path, client: &Client<H>, parent: Option<&str>) -> R
         }
     }
     for rel in list_markdown(root) {
-        let bytes = match std::fs::read(root.join("md").join(&rel)) { Ok(b) => b, Err(_) => { failed.push(rel); continue } };
+        let bytes = match std::fs::read(root.join(&rel)) { Ok(b) => b, Err(_) => { failed.push(rel); continue } };
         let title = rel.rsplit('/').next().unwrap_or(&rel).trim_end_matches(".md").to_string();
         let hash = fnv(&bytes);
         // 文件按路径认领，认领不到再按标题认领（本地挪动过的笔记）。
@@ -540,7 +540,8 @@ fn folder_chain<H: Http>(parts: &[String], base: Option<&str>, client: &Client<H
             Some(id) => id.clone(),
             None => {
                 let p = cur.clone()?;
-                client.create_page(&p, part, vec![]).ok()?
+                // 带 📁 前缀：下次 pull 认得这是文件夹，不再导成笔记。
+                client.create_page(&p, &format!("📁{part}"), vec![]).ok()?
             }
         };
         cur = Some(id);
@@ -556,7 +557,7 @@ fn folder_chain<H: Http>(parts: &[String], base: Option<&str>, client: &Client<H
 /// refetched only when Notion's `last_edited_time` moved since the last pull.
 /// Returns (imported, refreshed, failed).
 pub fn pull<H: Http>(root: &Path, client: &Client<H>) -> Result<(usize, usize, Vec<String>)> {
-    let notes = root.join("md");
+    let notes = root.to_path_buf();
     // 图片在库根上一级的 `assets/`（md/ 是库根）。
     let assets = root.parent().unwrap_or(root).join("assets");
     let mut state = State::load(root);
@@ -609,7 +610,8 @@ pub fn pull<H: Http>(root: &Path, client: &Client<H>) -> Result<(usize, usize, V
             if let Some(d) = new_path.parent() { let _ = std::fs::create_dir_all(d); }
             let _ = std::fs::rename(notes.join(&old_key), &new_path);
             state.0.remove(&old_key);
-            state.0.insert(rel.clone(), Mapping { page_id: id.clone(), title: title.clone(), pushed: 0, last_edited: edited.clone() });
+            let pushed = known_map.as_ref().map(|m| m.pushed).unwrap_or(0);
+            state.0.insert(rel.clone(), Mapping { page_id: id.clone(), title: title.clone(), pushed, last_edited: edited.clone() });
             refreshed += 1;
             continue;
         }
@@ -628,18 +630,14 @@ pub fn pull<H: Http>(root: &Path, client: &Client<H>) -> Result<(usize, usize, V
         };
         let md = blocks_to_markdown_with(&blocks, &mut resolve);
         if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(dir.join(file_name_for(title)), md.as_bytes()).is_ok() {
-            let refreshed_before = refreshed;
             for k in &drop_keys {
                 let _ = std::fs::remove_file(notes.join(k));
                 state.0.remove(k);
             }
-            if let Some(k) = &known_key && k != &rel {
-                let _ = std::fs::remove_file(notes.join(k));
-                state.0.remove(k);
-                refreshed += 1;
-            }
-            state.0.insert(rel.clone(), Mapping { page_id: id.clone(), title: title.clone(), pushed: 0, last_edited: edited.clone() });
-            if refreshed == refreshed_before { imported += 1; }
+            if known_key.is_some() { refreshed += 1; } else { imported += 1; }
+            // 记下 pull 时的内容哈希：之后 push 对未改动的笔记就是空操作。
+            let pushed = fnv(md.as_bytes());
+            state.0.insert(rel.clone(), Mapping { page_id: id.clone(), title: title.clone(), pushed, last_edited: edited.clone() });
         } else {
             failed.push(title.clone());
         }
@@ -783,6 +781,177 @@ mod tests {
         s.save(&dir).unwrap();
         let back = State::load(&dir);
         assert_eq!(back.0.get("a.md").unwrap().page_id, "p1");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- 端到端：用模拟的 Notion API 跑完整的同步循环
+
+    struct MockPage { title: String, parent: Option<String>, blocks: Vec<Value>, edited: String }
+
+    #[derive(Default)]
+    struct MockState {
+        seq: u32,
+        pages: BTreeMap<String, MockPage>,
+        images: BTreeMap<String, Option<Vec<u8>>>,
+        log: Vec<String>,
+    }
+
+    impl MockState {
+        fn add_page(&mut self, id: &str, title: &str, parent: Option<&str>, edited: &str) {
+            self.pages.insert(id.into(), MockPage { title: title.into(), parent: parent.map(str::to_string), blocks: vec![], edited: edited.into() });
+        }
+        fn page_json(&self, id: &str) -> Value {
+            let p = &self.pages[id];
+            json!({
+                "id": id, "archived": false, "last_edited_time": p.edited,
+                "parent": p.parent.as_ref().map(|x| json!({"page_id": x})).unwrap_or(json!({"workspace": true})),
+                "properties": {"title": {"title": [{"plain_text": p.title}]}}
+            })
+        }
+    }
+
+    struct Mock { s: std::cell::RefCell<MockState> }
+
+    impl Http for Mock {
+        fn send(&self, req: Request) -> crate::remote::Result<crate::remote::Response> {
+            let mut s = self.s.borrow_mut();
+            let path = req.url.strip_prefix("https://api.notion.com/v1").unwrap_or(&req.url).to_string();
+            let body: Value = serde_json::from_slice(&req.body.clone().unwrap_or_default()).unwrap_or(json!({}));
+            let ok = |v: Value| Some(crate::remote::Response { status: 200, headers: vec![], body: serde_json::to_vec(&v).unwrap() });
+            let resp = match (req.method.as_str(), path.as_str()) {
+                ("GET", "/users/me") => ok(json!({"name": "测试集成"})),
+                ("POST", "/search") => {
+                    let results: Vec<Value> = s.pages.keys().map(|id| s.page_json(id)).collect();
+                    ok(json!({"results": results, "has_more": false}))
+                }
+                ("GET", p) if p.starts_with("/blocks/") && p.contains("/children") => {
+                    let id = p.trim_start_matches("/blocks/").split('/').next().unwrap().to_string();
+                    let blocks: Vec<Value> = s.pages.get(&id).map(|pg| pg.blocks.iter().enumerate().map(|(i, b)| {
+                        let mut c = b.clone();
+                        c["id"] = json!(format!("blk-{id}-{i}"));
+                        c
+                    }).collect()).unwrap_or_default();
+                    ok(json!({"results": blocks, "has_more": false}))
+                }
+                ("PATCH", p) if p.starts_with("/blocks/") && p.ends_with("/children") => {
+                    let id = p.trim_start_matches("/blocks/").trim_end_matches("/children").trim_end_matches('?').to_string();
+                    let n = body["children"].as_array().map(|a| a.len()).unwrap_or(0);
+                    s.log.push(format!("append:{id}:{n}"));
+                    if let Some(pg) = s.pages.get_mut(&id) { pg.blocks.extend(body["children"].as_array().cloned().unwrap_or_default()); }
+                    ok(json!({}))
+                }
+                ("POST", "/file_uploads") => {
+                    s.log.push("file-upload-created".into());
+                    ok(json!({"id": "fu-001"}))
+                }
+                ("POST", p) if p.starts_with("/file_uploads/") && p.ends_with("/send") => {
+                    s.log.push(format!("file-upload-sent:{p}"));
+                    ok(json!({}))
+                }
+                ("DELETE", p) if p.starts_with("/blocks/") => {
+                    let id = p.trim_start_matches("/blocks/").to_string();
+                    for pg in s.pages.values_mut() { pg.blocks.retain(|b| b["id"].as_str() != Some(id.as_str())); }
+                    ok(json!({}))
+                }
+                ("POST", "/pages") => {
+                    s.seq += 1;
+                    let id = format!("p{:04}", s.seq);
+                    let parent = body["parent"]["page_id"].as_str().map(str::to_string);
+                    let title = body["properties"]["title"][0]["text"]["content"].as_str().unwrap_or("").to_string();
+                    s.log.push(format!("create:{parent:?}|{title}"));
+                    s.pages.insert(id.clone(), MockPage { title, parent, blocks: body["children"].as_array().cloned().unwrap_or_default(), edited: "2026-02-01T00:00:00Z".into() });
+                    ok(json!({"id": id}))
+                }
+                ("PATCH", p) if p.starts_with("/pages/") => {
+                    let id = p.trim_start_matches("/pages/").to_string();
+                    if let Some(par) = body["parent"]["page_id"].as_str() {
+                        s.log.push(format!("move:{id}|{par}"));
+                        if let Some(pg) = s.pages.get_mut(&id) { pg.parent = Some(par.to_string()); }
+                    }
+                    ok(json!({}))
+                }
+                ("GET", u) if u.starts_with("https://mock.test/img/") => {
+                    match s.images.get(&path).and_then(|o| o.clone()) {
+                        Some(bytes) => Some(crate::remote::Response { status: 200, headers: vec![], body: bytes }),
+                        None => Some(crate::remote::Response { status: 404, headers: vec![], body: vec![] }),
+                    }
+                }
+                _ => None,
+            };
+            Ok(resp.unwrap_or_else(|| crate::remote::Response { status: 404, headers: vec![], body: b"{}".to_vec() }))
+        }
+    }
+
+    #[test]
+    fn end_to_end_sync_cycle() {
+        let dir = std::env::temp_dir().join(format!("quiet-e2e-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let lib = dir.join("md");
+        std::fs::create_dir_all(&lib).unwrap();
+        let png: Vec<u8> = b"\x89PNG\r\n\x1a\npretend".to_vec();
+
+        let mut st = MockState::default();
+        st.add_page("w", "📁工作", None, "2026-01-01T00:00:00Z");
+        st.add_page("b", "周报", Some("w"), "2026-01-02T00:00:00Z");
+        st.add_page("s", "随笔", Some("w"), "2026-01-03T00:00:00Z");
+        st.pages.get_mut("b").unwrap().blocks = vec![
+            json!({"type": "heading_1", "heading_1": {"rich_text": [{"plain_text": "周报"}]}}),
+            json!({"type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "内容"}]}}),
+            json!({"type": "image", "image": {"type": "external", "external": {"url": "https://mock.test/img/pic.png"}}}),
+        ];
+        st.images.insert("https://mock.test/img/pic.png".into(), Some(png.clone()));
+        let client = Client { http: Mock { s: std::cell::RefCell::new(st) }, token: "secret".into() };
+
+        // 第一次 pull：📁 页面变文件夹、子页面落到对应层级、图片本地化。
+        let (i, r, f) = pull(&lib, &client).unwrap();
+        assert_eq!((i, r, f.len()), (2, 0, 0), "f: {f:?}");
+        let weekly_path = lib.join("工作/周报.md");
+        let weekly = std::fs::read_to_string(&weekly_path).unwrap();
+        assert!(weekly.contains("# 周报"), "{weekly}");
+        assert!(weekly.contains("../../assets/"), "图片应相对引用：{weekly}");
+        assert!(lib.join("工作/随笔.md").exists());
+        let asset_name = weekly.split("assets/").nth(1).unwrap().split(')').next().unwrap().to_string();
+        let asset = dir.join("assets").join(&asset_name);
+        assert!(asset.exists(), "图片应下载到 assets/");
+
+        // 第二次 pull：无变化 → 不重复导入。
+        let (i2, r2, _) = pull(&lib, &client).unwrap();
+        assert_eq!((i2, r2), (0, 0));
+
+        // 本地改动 → push 更新对应页面；新文件 → 在其文件夹对应的页面下新建。
+        std::fs::write(&weekly_path, format!("{weekly}\n本地新增\n")).unwrap();
+        std::fs::write(lib.join("新笔记.md"), "# 新笔记\n").unwrap();
+        let (c, u, f) = push(&lib, &client, Some("w")).unwrap();
+        assert_eq!((c, u, f.len()), (1, 1, 0), "f: {f:?}");
+        {
+            let s = client.http.s.borrow();
+            let blocks = &s.pages["b"].blocks;
+            assert!(blocks.iter().any(|b| serde_json::to_string(b).unwrap().contains("本地新增")), "push 后页面应包含新内容");
+        }
+
+        // 本地挪动：新笔记.md → 归档/ → 页面跟着挪（PATCH parent），📁文件夹自动补建。
+        std::fs::create_dir_all(lib.join("归档")).unwrap();
+        std::fs::rename(lib.join("新笔记.md"), lib.join("归档/新笔记.md")).unwrap();
+        let (c2, _, f2) = push(&lib, &client, Some("w")).unwrap();
+        assert_eq!((c2, f2.len()), (0, 0), "f2: {f2:?}");
+        {
+            let s = client.http.s.borrow();
+            assert!(s.log.iter().any(|l| l.starts_with("move:p0001|")), "应有挪动记录：{:?}", s.log);
+            assert_eq!(s.pages["p0001"].parent.as_deref(), Some("p0002"), "新笔记的页面应挪到 📁归档 下");
+        }
+
+        // Notion 删掉图片 → pull 重写笔记 → GC 清掉无引用的 asset。
+        {
+            let mut s = client.http.s.borrow_mut();
+            s.pages.get_mut("b").unwrap().blocks.retain(|b| b["type"] != "image");
+            s.pages.get_mut("b").unwrap().edited = "2026-02-02T00:00:00Z".into();
+        }
+        let (i3, _, _) = pull(&lib, &client).unwrap();
+        assert_eq!(i3, 0);
+        let weekly2 = std::fs::read_to_string(&weekly_path).unwrap();
+        assert!(!weekly2.contains("assets/"), "图片引用应被清掉：{weekly2}");
+        assert!(!asset.exists(), "无引用的图片应被 GC");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
