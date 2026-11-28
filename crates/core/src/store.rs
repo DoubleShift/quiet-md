@@ -561,7 +561,7 @@ fn heal_split_internal(root: &Path, conf: &Path) {
         for e in rd.flatten() {
             let p = e.path();
             if p.fs_is_dir() { pending.push(p); continue; }
-            let Some(rel) = p.strip_prefix(&stray) else { continue };
+            let Ok(rel) = p.strip_prefix(&stray) else { continue };
             let dst = conf.join(rel);
             if let Some(parent) = dst.parent() { let _ = crate::vfs::create_dir_all(parent); }
             let _ = crate::vfs::copy(&p, &dst);
