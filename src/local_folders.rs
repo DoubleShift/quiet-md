@@ -48,7 +48,7 @@ impl Workspace {
     pub(crate) fn add_folders(&mut self, dirs: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
         let dirs = dirs.to_vec();
         let task = cx.background_executor().spawn(async move {
-            dirs.into_iter().map(|d| { let s = if crate::store::internal_at(&d).fs_exists() { Survey::Plain } else { fdl_core::shown::survey(&d) }; (d, s) }).collect::<Vec<_>>()
+            dirs.into_iter().map(|d| { let s = if crate::store::internal_at(&d).exists() { Survey::Plain } else { fdl_core::shown::survey(&d) }; (d, s) }).collect::<Vec<_>>()
         });
         cx.spawn_in(window, async move |this, cx| {
             let looked = task.await;
