@@ -523,6 +523,7 @@ pub fn internal_at(root: &Path) -> PathBuf {
         root.join(INTERNAL)
     };
     migrate_old_quiet(root, &dir);
+    heal_split_internal(root, &dir);
     dir
 }
 
@@ -544,6 +545,29 @@ fn migrate_old_quiet(root: &Path, conf: &Path) {
     if let Some(v) = crate::vfs::read(conf.join("format.json")).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) { merged["format"] = v; }
     if let Ok(b) = serde_json::to_vec_pretty(&merged) { let _ = crate::vfs::write(conf.join("conf.json"), &b); }
     let _ = crate::vfs::remove_dir_all(&old);
+}
+
+/// 0.1.15 and earlier wrote the default library's metadata into `root/conf/`
+/// (inside the library) while its index stayed in the `conf/` beside the
+/// exe: merge what the old place still holds into `conf` and remove it, so
+/// one copy is authoritative again. What is there is this device's newer
+/// state, so it wins where names meet.
+fn heal_split_internal(root: &Path, conf: &Path) {
+    let stray = root.join(INTERNAL);
+    if stray == *conf || !stray.fs_is_dir() { return; }
+    let mut pending = vec![stray.clone()];
+    while let Some(dir) = pending.pop() {
+        let Ok(rd) = crate::vfs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.fs_is_dir() { pending.push(p); continue; }
+            let Some(rel) = p.strip_prefix(&stray) else { continue };
+            let dst = conf.join(rel);
+            if let Some(parent) = dst.parent() { let _ = crate::vfs::create_dir_all(parent); }
+            let _ = crate::vfs::copy(&p, &dst);
+        }
+    }
+    let _ = crate::vfs::remove_dir_all(&stray);
 }
 
 fn lock_path_at(root: &Path) -> PathBuf {

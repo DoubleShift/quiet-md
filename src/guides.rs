@@ -20,7 +20,7 @@ fn files(chinese: bool) -> Vec<(&'static str, &'static [u8])> {
 /// a first launch to finish. Other hidden files (`.DS_Store`) are not a library.
 pub(crate) fn seeded(root: &Path) -> std::io::Result<bool> {
     if root.join(".guides-pending").fs_exists() { return Ok(false); }
-    let quiet = root.join(crate::store::INTERNAL);
+    let quiet = crate::store::internal_at(root);
     let internal = quiet.fs_is_dir() && fs::read_dir(&quiet)?.any(|e| e.map_or(true, |e| e.file_name() != ".lock"));
     Ok(internal || fs::read_dir(root)?.any(|e| e.map_or(true, |e| { let n = e.file_name().to_string_lossy().into_owned(); (n != crate::store::INTERNAL && !n.starts_with('.')) || n == crate::store::ASSETS })))
 }
@@ -86,7 +86,7 @@ fn seed(root: &Path, chinese: bool) -> anyhow::Result<()> {
     if seeded(root)? { return Ok(()); }
     // Copies of the app may share a library: two started together on a new
     // one seed it in turn. Released when `lock` drops.
-    let quiet = root.join(crate::store::INTERNAL);
+    let quiet = crate::store::internal_at(root);
     fs::create_dir_all(&quiet)?;
     let lock = fs::OpenOptions::new().create(true).truncate(false).write(true).open(quiet.join(".lock"))?;
     lock.lock()?;

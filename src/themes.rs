@@ -414,7 +414,7 @@ pub fn errors() -> Vec<String> { ERRORS.read().unwrap().clone() }
 /// The themes folder: the top-level folder in front's (W21), else this computer's.
 pub fn dir() -> PathBuf {
     let root = crate::store::Store::active_dir();
-    if root.join(crate::store::INTERNAL).exists() { crate::store::Store::themes_dir_of(&root) } else { crate::store::Store::settings_dir().join("themes") }
+    if crate::store::internal_at(&root).fs_exists() { crate::store::Store::themes_dir_of(&root) } else { crate::store::Store::settings_dir().join("themes") }
 }
 
 // ---- CSS

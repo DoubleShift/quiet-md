@@ -549,7 +549,7 @@ pub(super) fn diff(before: &HashMap<String, BTreeMap<String, Value>>, after: &Ha
     out
 }
 
-pub(super) fn dir(root: &Path) -> PathBuf { root.join(INTERNAL).join(META) }
+pub(super) fn dir(root: &Path) -> PathBuf { crate::store::internal_at(root).join(META) }
 
 /// Every device's files under `root` merged. A file that does not parse is
 /// passed over (a sync's torn copy); this device's own falls back to its
@@ -1020,7 +1020,7 @@ pub(super) fn path_id(key: &str) -> String {
 /// file, every field stamped now; `index.json` is kept as `index.json.v4`.
 /// The marker is written last, so a crash midway redoes it.
 pub(super) fn upgrade(root: &Path, me: &Device, warnings: &mut Vec<String>) -> Result<()> {
-    let internal = root.join(INTERNAL);
+    let internal = crate::store::internal_at(root);
     let disk: DiskIndex = load_json(&internal.join("index.json"), "文档索引", warnings);
     let mut changes = vec![];
     let mut ids = HashSet::new();
@@ -1083,7 +1083,7 @@ pub(super) fn trashed_of(v: &Value) -> Option<Trashed> {
 /// first, the marker next and `trash/index.json` is kept as
 /// `index.json.v5` last, so a crash midway redoes it to the same result.
 pub(super) fn upgrade6(root: &Path, me: &Device, warnings: &mut Vec<String>) -> Result<()> {
-    let internal = root.join(INTERNAL);
+    let internal = crate::store::internal_at(root);
     let merged = load(root, &me.id, warnings);
     let read = by_id(&merged.disk_index());
     // Keys a crash left behind are kept: the same order comes out again.

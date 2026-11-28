@@ -264,7 +264,7 @@ pub fn load() {
 /// The top-level folder whose look is in use: the one in front, when a top-level folder is open.
 fn look_dir() -> Option<std::path::PathBuf> {
     let root = crate::store::Store::active_dir();
-    (has_folders() && root.join(crate::store::INTERNAL).exists()).then_some(root)
+    (has_folders() && crate::store::internal_at(&root).fs_exists()).then_some(root)
 }
 
 /// Whether any top-level folder is open (none before first launch picks one).

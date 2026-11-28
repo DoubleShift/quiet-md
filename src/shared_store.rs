@@ -86,12 +86,12 @@ impl SharedStore {
     pub fn retry_folder(&self, key: &str) { self.0.borrow_mut().ws.retry(key) }
     /// The top-level folders the window shows: those open (one gone from the disk is not shown).
     pub fn shown_tops(&self) -> Vec<(String, String, PathBuf, Option<String>)> { self.top_folders().into_iter().filter(|r| r.3.is_none()).collect() }
-    /// Each top-level folder against the disk: one whose folder is gone (no `.quiet/format.json`
+    /// Each top-level folder against the disk: one whose folder is gone (no `conf/format.json`
     /// any more) closes and leaves the window; one gone before that is back opens again.
     /// The keys lost and found.
     pub fn check_presence(&self) -> (Vec<String>, Vec<String>) {
         let mut sh = self.0.borrow_mut();
-        let here = |p: &Path| p.join(crate::store::INTERNAL).join("format.json").fs_exists();
+        let here = |p: &Path| crate::store::internal_at(p).join("format.json").fs_exists();
         let lost: Vec<String> = sh.ws.folders.iter().filter(|r| r.store.is_some() && !here(&r.path)).map(|r| r.key.clone()).collect();
         let back: Vec<String> = sh.ws.folders.iter().filter(|r| r.store.is_none() && here(&r.path)).map(|r| r.key.clone()).collect();
         for k in &lost { sh.ws.lose(k, crate::settings::tr("文件夹不在原来的位置了", "The folder is no longer where it was").to_string()); sh.entries.retain(|(e, _)| e != k); }
